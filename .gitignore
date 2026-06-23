@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Research workspaces / generated state
+workspaces/
+ResearchTask.md
+Nomenclature.yml
+ResearchState.json
+ClaimLedger.jsonl
+ProposalLedger.jsonl
+LiteratureDB/
+LeanProject/
+ExperimentRuns/
+Reports/
+ModelCallLedger.jsonl
+GraphCheckpoints.sqlite*
+
+# OS/editor
+.DS_Store
+*.swp

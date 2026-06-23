@@ -1,0 +1,31 @@
+services:
+  deep-reasoner:
+    image: vllm/vllm-openai:latest
+    ipc: host
+    ports:
+      - "8000:8000"
+    volumes:
+      - ~/.cache/huggingface:/root/.cache/huggingface
+    environment:
+      - HUGGING_FACE_HUB_TOKEN=${HUGGING_FACE_HUB_TOKEN:-}
+    command: >
+      --model ${DEEP_MODEL:-Qwen/Qwen3-32B}
+      --served-model-name deep-reasoner
+      --host 0.0.0.0
+      --port 8000
+      --max-model-len ${DEEP_MAX_MODEL_LEN:-32768}
+  routine-extractor:
+    image: vllm/vllm-openai:latest
+    ipc: host
+    ports:
+      - "8001:8000"
+    volumes:
+      - ~/.cache/huggingface:/root/.cache/huggingface
+    environment:
+      - HUGGING_FACE_HUB_TOKEN=${HUGGING_FACE_HUB_TOKEN:-}
+    command: >
+      --model ${ROUTINE_MODEL:-Qwen/Qwen3-8B}
+      --served-model-name routine-extractor
+      --host 0.0.0.0
+      --port 8000
+      --max-model-len ${ROUTINE_MAX_MODEL_LEN:-16384}
