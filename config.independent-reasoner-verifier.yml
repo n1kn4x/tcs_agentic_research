@@ -1,0 +1,59 @@
+# Router config for 6x NVIDIA RTX PRO 4500 Blackwell 32GB.
+# Intended serving layout:
+#   GPUs 0,1 -> deep-reasoner       (primary 32B-class reasoner)
+#   GPUs 2,3 -> verifier-reasoner   (independent 32B-class critic/verifier)
+#   GPU  4   -> routine-extractor   (7B/8B extraction + formatting)
+#   GPU  5   -> lean-prover         (Lean/code/math specialist)
+#
+# `max_tokens` is the per-request generation budget. It must fit together with
+# prompt tokens inside the vLLM server's `--max-model-len`.
+router:
+  default_task: routine
+  timeout_seconds: 600
+  max_retries: 2
+  profiles:
+    deep:
+      model: deep-reasoner
+      base_url: http://localhost:8000/v1
+      api_key: EMPTY
+      temperature: 0.2
+      max_tokens: 24576
+      task_types:
+        - initialization
+        - proposal_generation
+        - research_execution
+        - obstruction_search
+
+    verifier:
+      model: verifier-reasoner
+      base_url: http://localhost:8002/v1
+      api_key: EMPTY
+      temperature: 0.0
+      max_tokens: 16384
+      task_types:
+        - proposal_critique
+        - research_critique
+        - solved_check
+        - independent_replication
+
+    proof:
+      model: lean-prover
+      base_url: http://localhost:8003/v1
+      api_key: EMPTY
+      temperature: 0.0
+      max_tokens: 8192
+      task_types:
+        - theorem_proving
+
+    routine:
+      model: routine-extractor
+      base_url: http://localhost:8001/v1
+      api_key: EMPTY
+      temperature: 0.0
+      max_tokens: 4096
+      task_types:
+        - formatting
+        - extraction
+        - summarization
+        - classification
+        - literature_extraction
