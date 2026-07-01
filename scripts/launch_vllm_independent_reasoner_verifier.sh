@@ -26,7 +26,7 @@ TRUST_REMOTE_CODE="${TRUST_REMOTE_CODE:-0}"
 # Model defaults are intentionally easy to override. For the 32B endpoints,
 # prefer FP8/AWQ/GPTQ checkpoints when available; BF16 32B models are tight on
 # 2x32GB once KV cache and vLLM overhead are included.
-DEEP_MODEL="${DEEP_MODEL:-Qwen/Qwen3-32B}"
+DEEP_MODEL="${DEEP_MODEL:-Qwen/Qwen3-32B-FP8}"
 VERIFIER_MODEL="${VERIFIER_MODEL:-deepseek-ai/DeepSeek-R1-Distill-Qwen-32B}"
 ROUTINE_MODEL="${ROUTINE_MODEL:-Qwen/Qwen3-8B}"
 PROOF_MODEL="${PROOF_MODEL:-Qwen/Qwen2.5-Coder-7B-Instruct}"
@@ -46,7 +46,7 @@ VERIFIER_TP="${VERIFIER_TP:-2}"
 ROUTINE_TP="${ROUTINE_TP:-1}"
 PROOF_TP="${PROOF_TP:-1}"
 
-DEEP_MAX_MODEL_LEN="${DEEP_MAX_MODEL_LEN:-65536}"
+DEEP_MAX_MODEL_LEN="${DEEP_MAX_MODEL_LEN:-40960}"
 VERIFIER_MAX_MODEL_LEN="${VERIFIER_MAX_MODEL_LEN:-65536}"
 ROUTINE_MAX_MODEL_LEN="${ROUTINE_MAX_MODEL_LEN:-32768}"
 PROOF_MAX_MODEL_LEN="${PROOF_MAX_MODEL_LEN:-32768}"
