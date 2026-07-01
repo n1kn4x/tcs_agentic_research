@@ -20,6 +20,7 @@ router:
       max_tokens: 24576
       task_types:
         - initialization
+        - initialization_interview
         - proposal_generation
         - research_execution
         - obstruction_search
