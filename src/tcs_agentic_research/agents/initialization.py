@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from ..artifact_store import ArtifactStore
-from ..llm import LLMRouter
+from ..llm import LLMRouter, StructuredLLMError
 from ..prompt_loader import render_prompt
 from ..schemas import (
     ArtifactKind,
@@ -146,12 +146,24 @@ class InitializationAgent:
                 ),
             },
         ]
-        bundle = self.router.complete_structured(
-            task_type="initialization",
-            messages=messages,
-            schema=InitializationBundle,
-            fallback=fallback,
-        )
+        try:
+            bundle = self.router.complete_structured(
+                task_type="initialization",
+                messages=messages,
+                schema=InitializationBundle,
+                # A generic task fallback is acceptable for dry-run demos, but it is
+                # too destructive for real initialization: it can erase useful
+                # interview content into a vague ResearchTask.md. In real runs, fail
+                # loudly and leave the transcript for rerun/debugging.
+                fallback=fallback if self.router.dry_run else None,
+            )
+        except StructuredLLMError as exc:
+            raise RuntimeError(
+                "Initialization synthesis failed, so no generic ResearchTask.md was committed. "
+                "Inspect ModelCallLedger.jsonl for the validation/API error and rerun `tcs-research init` "
+                "after fixing the model, prompt, or config. Use --dry-run only if you intentionally want "
+                "a conservative placeholder task."
+            ) from exc
         return self.commit_bundle(bundle, extra_refs=extra_artifact_refs or [])
 
     def commit_bundle(
