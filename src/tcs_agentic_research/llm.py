@@ -136,15 +136,19 @@ class LLMRouter:
                 return result
             except (ValidationError, json.JSONDecodeError, KeyError) as exc:
                 failures.append(f"attempt_{attempt}: structured_output_invalid: {exc}")
-                # Ask the same endpoint to repair only after the first invalid response.
+                # Ask the same endpoint to repair, but include the invalid response,
+                # the concrete validation error, and the schema. Without this context
+                # the next call cannot actually know what to fix if guided decoding is
+                # unsupported or ignored by the backend.
                 messages = messages + [
                     {
+                        "role": "assistant",
+                        "content": _extract_assistant_content(response_payload),
+                    },
+                    {
                         "role": "user",
-                        "content": (
-                            "The previous response did not validate as JSON for schema "
-                            f"{schema.__name__}. Return only valid JSON matching the schema."
-                        ),
-                    }
+                        "content": _structured_repair_prompt(schema, exc),
+                    },
                 ]
             except Exception as exc:  # noqa: BLE001 - exact failure recorded for auditability
                 failures.append(f"attempt_{attempt}: {type(exc).__name__}: {exc}")
@@ -229,6 +233,38 @@ class LLMRouter:
         )
         if self.store is not None:
             self.store.append_model_call(record)
+
+
+def _extract_assistant_content(response_payload: dict[str, Any] | None, *, limit: int = 8000) -> str:
+    if response_payload is None:
+        return "[No response payload was available from the previous attempt.]"
+    try:
+        content = response_payload["choices"][0]["message"].get("content", "")
+    except Exception:  # noqa: BLE001 - best-effort diagnostic context for repair prompts
+        content = json.dumps(response_payload, sort_keys=True)
+    text = str(content).strip() or "[The previous attempt returned empty assistant content.]"
+    return _truncate(text, limit)
+
+
+def _structured_repair_prompt(schema: type[BaseModel], exc: Exception) -> str:
+    schema_json = json.dumps(schema.model_json_schema(), indent=2, sort_keys=True)
+    return (
+        f"The previous response did not validate for schema `{schema.__name__}`.\n\n"
+        "Validation error:\n"
+        f"{_truncate(str(exc), 6000)}\n\n"
+        "Return ONLY corrected JSON. Do not include Markdown, prose, or an `error` object. "
+        "Use exactly the field names, required fields, and enum values in this JSON Schema. "
+        "Do not add extra fields.\n\n"
+        "JSON Schema:\n"
+        f"{_truncate(schema_json, 12000)}"
+    )
+
+
+def _truncate(text: str, limit: int) -> str:
+    if len(text) <= limit:
+        return text
+    omitted = len(text) - limit
+    return f"{text[:limit]}\n...[truncated {omitted} characters]"
 
 
 def _extract_json(content: str) -> Any:
