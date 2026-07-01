@@ -18,6 +18,7 @@ A research workspace contains:
 
 ```text
 ResearchTask.md                 human-readable task, assumptions, criteria
+InitializationInterview.md      transcript of the adaptive initialization conversation
 Nomenclature.yml                canonical symbols and aliases
 ResearchState.json              compact machine state summary
 ClaimLedger.jsonl               mathematical/algorithmic/literature/resource claims
@@ -67,20 +68,20 @@ The router logs model choice, latency, token usage, structured-output validity, 
 
 ## Quick start
 
-Dry-run mode uses conservative fallbacks and does not call vLLM:
+Initialize a workspace with an adaptive interview. Dry-run mode uses conservative fallbacks and does not call vLLM:
 
 ```bash
-tcs-research init --workspace workspaces/demo --dry-run --interactive \
-  --task "Find improved algorithms or obstructions for a structured SAT family."
+tcs-research init --workspace workspaces/demo --dry-run
 
 tcs-research run --workspace workspaces/demo --dry-run --max-iterations 1
 
 tcs-research status --workspace workspaces/demo
 ```
 
-With local vLLM:
+With local vLLM, the `init` command is an LLM-guided conversation that asks only relevant follow-up questions before writing artifacts:
 
 ```bash
+tcs-research init --workspace workspaces/demo --config config.yml
 tcs-research run --workspace workspaces/demo --config config.yml --max-iterations 3
 ```
 
@@ -98,7 +99,7 @@ Install Lean via `elan` for actual verification. The generated project is under 
 The LangGraph implements:
 
 ```python
-state = InitializeTask()
+state = LoadInitializedTask()  # run `tcs-research init` first
 while not state.solved:
     proposal = GenerateResearchProposal(state)
     report = RunTCSResearchSubagent(proposal, state)
@@ -117,7 +118,7 @@ Nodes durably write artifacts before returning. The graph is resumable through `
 
 ## Agents
 
-- `InitializationAgent`: interactive/refinement synthesis of `ResearchTask.md`, `Nomenclature.yml`, initial state, and ledgers.
+- `InitializationAgent`: LLM-guided adaptive interview and synthesis of `ResearchTask.md`, `Nomenclature.yml`, initial state, and ledgers.
 - `ProposalAgent`: proposal generator plus proposal critic with revision/rejection logic.
 - `ResearchAgent`: executes a selected proposal and writes a structured `ResearchReport`.
 - `ResearchCriticAgent`: distinguishes proofs, citations, experiments, informal arguments, conjectures, refutations, and forced verification obligations.
