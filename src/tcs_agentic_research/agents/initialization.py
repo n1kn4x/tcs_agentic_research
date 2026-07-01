@@ -1,33 +1,29 @@
-"""Initialization interview and artifact synthesis."""
+"""LLM-guided initialization interview and artifact synthesis."""
 
 from __future__ import annotations
 
-from typing import Any
+from collections.abc import Callable
 
 from ..artifact_store import ArtifactStore
 from ..llm import LLMRouter
 from ..prompt_loader import render_prompt
 from ..schemas import (
     ArtifactKind,
+    ArtifactRef,
     ClaimRecord,
     ClaimStatus,
     ClaimType,
     EvidenceRecord,
     EvidenceType,
     InitializationBundle,
+    InitializationInterviewTurn,
     ProposalLedgerEntry,
     ResearchState,
 )
 
 
-INTERVIEW_QUESTIONS = [
-    "What is the exact TCS research problem, including the computational model?",
-    "What assumptions, oracle access, promises, distributions, or cryptographic hardness assumptions are allowed?",
-    "What would count as a solution, and what partial outcomes would be publishable?",
-    "Which papers, barriers, lower bounds, or known algorithms should be treated as essential context?",
-    "What notation, definitions, theorem statements, or Lean snippets should be canonical?",
-    "Which tools are desired (Lean/mathlib, SAT/SMT, Python numerics, quantum simulators, etc.)?",
-]
+INTERVIEW_TRANSCRIPT = "InitializationInterview.md"
+_INITIAL_CONTEXT_PREFIX = "Initial context supplied before the interview:"
 
 
 class InitializationAgent:
@@ -36,16 +32,117 @@ class InitializationAgent:
         self.router = router
         self.prompt_dir = prompt_dir
 
-    def initialize(self, *, user_seed: str, interview_answers: dict[str, Any] | None = None) -> ResearchState:
+    def initialize_interactively(
+        self,
+        *,
+        initial_context: str = "",
+        input_func: Callable[[str], str] = input,
+        output_func: Callable[[str], None] = print,
+        max_turns: int = 12,
+    ) -> ResearchState:
+        """Run an adaptive LLM interview, then synthesize canonical init artifacts."""
         self.store.initialize_layout()
-        fallback = self._fallback_bundle(user_seed, interview_answers or {})
+        transcript: list[dict[str, str]] = []
+        if initial_context.strip():
+            transcript.append(
+                {
+                    "role": "user",
+                    "content": f"{_INITIAL_CONTEXT_PREFIX}\n{initial_context.strip()}",
+                }
+            )
+
+        output_func(
+            "Starting LLM-guided initialization interview. "
+            "Answer the questions; type /done to synthesize with the current information."
+        )
+        for _turn_idx in range(max_turns):
+            turn = self.next_interview_turn(transcript)
+            if turn.ready_to_initialize and not _has_user_answer(transcript):
+                turn = self._first_question_turn(has_initial_context=bool(initial_context.strip()))
+
+            output_func(turn.assistant_message)
+            transcript.append({"role": "assistant", "content": turn.assistant_message})
+            if turn.ready_to_initialize:
+                break
+
+            answer = input_func("> ").strip()
+            lowered = answer.lower()
+            if lowered in {"/quit", "/exit"}:
+                raise KeyboardInterrupt("initialization interview aborted by user")
+            if lowered == "/done":
+                transcript.append(
+                    {
+                        "role": "user",
+                        "content": "[User requested initialization with the current information.]",
+                    }
+                )
+                output_func("Synthesizing initialization artifacts from the current conversation.")
+                break
+            transcript.append({"role": "user", "content": answer})
+        else:
+            output_func("Reached the interview turn limit; synthesizing initialization artifacts.")
+
+        transcript_ref = self.store.write_text(
+            INTERVIEW_TRANSCRIPT, _render_interview_markdown(transcript)
+        )
+        return self.initialize(
+            initial_context=initial_context,
+            conversation_transcript=transcript,
+            extra_artifact_refs=[transcript_ref],
+        )
+
+    def next_interview_turn(self, transcript: list[dict[str, str]]) -> InitializationInterviewTurn:
+        """Ask the LLM whether to request more information or finalize initialization."""
+        fallback = self._fallback_interview_turn(transcript)
         messages = [
-            {"role": "system", "content": render_prompt("initialization_interviewer", override_dir=self.prompt_dir)},
+            {
+                "role": "system",
+                "content": render_prompt(
+                    "initialization_interviewer", override_dir=self.prompt_dir
+                ),
+            },
             {
                 "role": "user",
                 "content": (
-                    "Synthesize the initialization artifacts from this seed and interview answers.\n\n"
-                    f"Seed:\n{user_seed}\n\nAnswers:\n{interview_answers or {}}"
+                    "Decide the next initialization-interview turn from this transcript.\n\n"
+                    f"Transcript:\n{_format_transcript(transcript)}"
+                ),
+            },
+        ]
+        turn = self.router.complete_structured(
+            task_type="initialization_interview",
+            messages=messages,
+            schema=InitializationInterviewTurn,
+            fallback=fallback,
+            max_tokens=1200,
+        )
+        if not turn.assistant_message.strip():
+            return fallback
+        return turn
+
+    def initialize(
+        self,
+        *,
+        initial_context: str = "",
+        conversation_transcript: list[dict[str, str]] | None = None,
+        extra_artifact_refs: list[ArtifactRef] | None = None,
+    ) -> ResearchState:
+        self.store.initialize_layout()
+        transcript_text = _format_transcript(conversation_transcript or [])
+        fallback = self._fallback_bundle(initial_context, transcript_text)
+        messages = [
+            {
+                "role": "system",
+                "content": render_prompt(
+                    "initialization_synthesizer", override_dir=self.prompt_dir
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    "Synthesize the initialization artifacts from this LLM-guided interview.\n\n"
+                    f"Initial context:\n{initial_context}\n\n"
+                    f"Conversation transcript:\n{transcript_text}"
                 ),
             },
         ]
@@ -55,9 +152,11 @@ class InitializationAgent:
             schema=InitializationBundle,
             fallback=fallback,
         )
-        return self.commit_bundle(bundle)
+        return self.commit_bundle(bundle, extra_refs=extra_artifact_refs or [])
 
-    def commit_bundle(self, bundle: InitializationBundle) -> ResearchState:
+    def commit_bundle(
+        self, bundle: InitializationBundle, *, extra_refs: list[ArtifactRef] | None = None
+    ) -> ResearchState:
         task_ref = self.store.write_text(ArtifactStore.RESEARCH_TASK, bundle.research_task_markdown)
         nomenclature_payload = {
             "version": 1,
@@ -69,7 +168,9 @@ class InitializationAgent:
         claims = bundle.initial_claims or [
             ClaimRecord(
                 claim_type=ClaimType.definition,
-                statement="Research task initialized; substantive scientific claims remain unverified.",
+                statement=(
+                    "Research task initialized; substantive scientific claims remain unverified."
+                ),
                 status=ClaimStatus.proposed,
                 evidence=[
                     EvidenceRecord(
@@ -81,12 +182,14 @@ class InitializationAgent:
             )
         ]
         self.store.append_claims(claims)
+        extra_refs = extra_refs or []
         state = ResearchState(
             task_summary=_task_summary(bundle.research_task_markdown),
             active_claim_ids=[claim.claim_id for claim in claims],
             artifact_refs=[
                 task_ref,
                 nomenclature_ref,
+                *extra_refs,
                 self.store.artifact_ref(ArtifactStore.CLAIM_LEDGER, kind=ArtifactKind.jsonl),
                 self.store.artifact_ref(ArtifactStore.PROPOSAL_LEDGER, kind=ArtifactKind.jsonl),
             ],
@@ -98,26 +201,73 @@ class InitializationAgent:
             ProposalLedgerEntry(
                 proposal_id="initialization",
                 event_type="accepted",
-                reason="Initialization created canonical task, nomenclature, and initial ledger entries.",
-                artifact_refs=[task_ref, nomenclature_ref, state_ref],
+                reason=(
+                    "Initialization created canonical task, nomenclature, "
+                    "and initial ledger entries."
+                ),
+                artifact_refs=[task_ref, nomenclature_ref, *extra_refs, state_ref],
             )
         )
         return state
 
-    def _fallback_bundle(self, user_seed: str, answers: dict[str, Any]) -> InitializationBundle:
-        answer_lines = "\n".join(f"- **{k}:** {v}" for k, v in answers.items()) or "- No answers supplied."
+    def _fallback_interview_turn(
+        self, transcript: list[dict[str, str]]
+    ) -> InitializationInterviewTurn:
+        if not _has_user_answer(transcript):
+            return self._first_question_turn(has_initial_context=_has_initial_context(transcript))
+        return InitializationInterviewTurn(
+            ready_to_initialize=True,
+            assistant_message=(
+                "Thanks — I have enough to create a conservative initial research task. "
+                "Open details will be recorded explicitly for later clarification."
+            ),
+            missing_information=[
+                "Any unspecified model details, assumptions, and literature context."
+            ],
+            relevant_information=["User supplied at least one substantive initialization answer."],
+            rationale="Dry-run or fallback path finalizes after a minimal interactive exchange.",
+        )
+
+    def _first_question_turn(self, *, has_initial_context: bool) -> InitializationInterviewTurn:
+        if has_initial_context:
+            message = (
+                "I read the supplied context. What should I treat as the main success criterion, "
+                "and are there any assumptions, barriers, or tools that are especially important?"
+            )
+            missing = ["User priorities beyond the supplied context."]
+        else:
+            message = (
+                "What theoretical computer science problem should the system work on? "
+                "Please include the computational model and what would count as success if you can."
+            )
+            missing = ["Research problem, computational model, and success criterion."]
+        return InitializationInterviewTurn(
+            ready_to_initialize=False,
+            assistant_message=message,
+            missing_information=missing,
+            relevant_information=[],
+            rationale=(
+                "The interview needs at least one substantive user answer before initialization."
+            ),
+        )
+
+    def _fallback_bundle(self, initial_context: str, transcript_text: str) -> InitializationBundle:
+        user_knowledge = transcript_text.strip() or "No interview transcript supplied."
         task_md = f"""# Research Task
 
 ## Problem statement
-{user_seed.strip() or "TBD: specify the exact theoretical computer science research problem."}
+{initial_context.strip() or "TBD: specify the exact theoretical computer science research problem."}
 
 ## Computational model and assumptions
-TBD during the initialization interview. Record oracle access, randomness, quantum resources,
+TBD during follow-up clarification. Record oracle access, randomness, quantum resources,
 promise structure, cryptographic assumptions, and asymptotic conventions here.
 
 ## Success criteria
-- A main-task solution requires proof-quality mathematical evidence, resource accounting, and independent replication.
+- A main-task solution requires proof-quality mathematical evidence, resource accounting,
+  and independent replication.
 - Experimental observations may suggest conjectures but are not proofs.
+- Unspecified user preferences from initialization should be treated as open questions,
+  not assumptions.
 
 ## Fallback publishable outcomes
 - A verified obstruction or lower-bound explanation.
@@ -128,8 +278,8 @@ promise structure, cryptographic assumptions, and asymptotic conventions here.
 ## Known barriers and literature context
 TBD. Literature claims must be entered into `LiteratureDB` with provenance before use.
 
-## User-supplied domain knowledge
-{answer_lines}
+## Initialization interview transcript
+{user_knowledge}
 
 ## Tooling constraints
 - LangGraph orchestrates resumable agent loops.
@@ -154,7 +304,10 @@ See `Nomenclature.yml`.
         )
         return InitializationBundle(
             research_task_markdown=task_md,
-            initial_state_notes=["Initialized from user seed; unresolved details should be clarified."],
+            initial_state_notes=[
+                "Initialized from an LLM-guided user interview; unresolved details "
+                "should be clarified."
+            ],
             initial_claims=[initial_claim],
             fallback_publishable_outcomes=[
                 "verified obstruction",
@@ -165,6 +318,49 @@ See `Nomenclature.yml`.
             assumptions=["TBD"],
             success_criteria=["conservative solved check and independent replication"],
         )
+
+
+def _format_transcript(transcript: list[dict[str, str]]) -> str:
+    if not transcript:
+        return "No conversation yet."
+    blocks = []
+    for message in transcript:
+        role = message.get("role", "unknown").strip().title() or "Unknown"
+        content = message.get("content", "").strip() or "[empty]"
+        blocks.append(f"{role}:\n{content}")
+    return "\n\n".join(blocks)
+
+
+def _render_interview_markdown(transcript: list[dict[str, str]]) -> str:
+    lines = ["# Initialization Interview", ""]
+    for message in transcript:
+        role = message.get("role", "unknown").strip().title() or "Unknown"
+        content = message.get("content", "").strip() or "[empty]"
+        lines.extend([f"## {role}", "", content, ""])
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _has_initial_context(transcript: list[dict[str, str]]) -> bool:
+    return any(
+        message.get("role") == "user"
+        and message.get("content", "").startswith(_INITIAL_CONTEXT_PREFIX)
+        for message in transcript
+    )
+
+
+def _has_user_answer(transcript: list[dict[str, str]]) -> bool:
+    for message in transcript:
+        if message.get("role") != "user":
+            continue
+        content = message.get("content", "").strip()
+        if (
+            not content
+            or content.startswith(_INITIAL_CONTEXT_PREFIX)
+            or content.startswith("[User requested")
+        ):
+            continue
+        return True
+    return False
 
 
 def _task_summary(markdown: str, limit: int = 500) -> str:

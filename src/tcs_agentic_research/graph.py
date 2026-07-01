@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import Any
 
 from .agents.critics import SolvedCheckAgent
-from .agents.initialization import InitializationAgent
 from .agents.proposal import ProposalAgent
 from .agents.replication import IndependentReplicationAgent
 from .agents.research import ResearchAgent
@@ -83,14 +82,12 @@ class ResearchGraph:
     def run(
         self,
         *,
-        user_seed: str = "",
         max_iterations: int = 1,
         thread_id: str = "default",
     ) -> dict[str, Any]:
         graph = self.build()
         initial_state: GraphState = {
             "workspace": str(self.store.root),
-            "user_seed": user_seed,
             "max_iterations": max_iterations,
         }
         config = {
@@ -123,15 +120,7 @@ class ResearchGraph:
                 "solved": existing.solved,
                 "confirmed_solved": existing.confirmed_by_replication,
             }
-        agent = InitializationAgent(self.store, self.router, prompt_dir=self.prompt_dir)
-        state = agent.initialize(user_seed=graph_state.get("user_seed", ""))
-        return {
-            "initialized": True,
-            "task_id": state.task_id,
-            "iteration": state.iteration,
-            "solved": state.solved,
-            "confirmed_solved": state.confirmed_by_replication,
-        }
+        raise RuntimeError("Workspace is uninitialized; run `tcs-research init` first.")
 
     def _node_generate_proposal(self, graph_state: GraphState) -> dict[str, Any]:
         state = self._require_state()

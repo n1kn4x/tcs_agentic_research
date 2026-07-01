@@ -138,6 +138,14 @@ class InitializationBundle(StrictModel):
     success_criteria: list[str] = Field(default_factory=list)
 
 
+class InitializationInterviewTurn(StrictModel):
+    ready_to_initialize: bool = False
+    assistant_message: str
+    missing_information: list[str] = Field(default_factory=list)
+    relevant_information: list[str] = Field(default_factory=list)
+    rationale: str = ""
+
+
 class ResearchState(StrictModel):
     task_id: str = Field(default_factory=lambda: new_id("task"))
     task_summary: str = ""
@@ -460,7 +468,6 @@ class ModelCallRecord(StrictModel):
 class GraphState(TypedDict):
     workspace: str
     task_id: NotRequired[str]
-    user_seed: NotRequired[str]
     initialized: NotRequired[bool]
     iteration: NotRequired[int]
     max_iterations: NotRequired[int]

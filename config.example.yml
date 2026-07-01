@@ -13,6 +13,7 @@ router:
       max_tokens: 8192
       task_types:
         - initialization
+        - initialization_interview
         - proposal_generation
         - proposal_critique
         - research_execution
