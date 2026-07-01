@@ -144,12 +144,15 @@ launch_profile() {
   local logfile="$LOG_DIR/$session.log"
   local quoted_cmd tmux_cmd
   quoted_cmd="$(shell_join "${cmd[@]}")"
-  printf -v tmux_cmd 'set -o pipefail; echo %q; %s 2>&1 | tee -a %q' \
+  printf -v tmux_cmd 'set -o pipefail; echo %q; echo %q; %s 2>&1 | tee -a %q' \
     "[$(date -Is)] Starting $session" \
+    "Command: $quoted_cmd" \
     "$quoted_cmd" \
     "$logfile"
 
   echo "Launching $session on CUDA_VISIBLE_DEVICES=$cuda_devices, port $port, model $model"
+  echo "Command in tmux session $session:"
+  echo "  $quoted_cmd"
   tmux new-session -d -s "$session" "$tmux_cmd"
 }
 
