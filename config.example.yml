@@ -4,6 +4,9 @@ router:
   default_task: routine
   timeout_seconds: 180
   max_retries: 2
+  # Keep false for real research runs: failed model/schema calls should be visible,
+  # not silently converted into placeholder artifacts.
+  allow_fallback_on_error: false
   profiles:
     deep:
       model: deep-reasoner

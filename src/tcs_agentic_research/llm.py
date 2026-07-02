@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from pathlib import Path
 from typing import Any, TypeVar
@@ -99,18 +100,58 @@ class LLMRouter:
         fallback: T | None = None,
         temperature: float | None = None,
         max_tokens: int | None = None,
+        allow_fallback_on_error: bool | None = None,
     ) -> T:
-        if self.dry_run:
-            if fallback is not None:
-                return fallback
-            raise StructuredLLMError(
-                f"dry-run router cannot synthesize {schema.__name__}; provide a fallback"
-            )
+        """Complete a structured call and validate it against ``schema``.
 
+        ``fallback`` is always allowed in dry-run mode. In real runs it is *not*
+        returned after model/API/validation failures unless either the router config
+        or this call explicitly enables ``allow_fallback_on_error``. This prevents
+        silent conversion of failed research/model calls into committed placeholder
+        artifacts.
+        """
         profile_name, profile = self.select_profile(task_type)
         started = time.perf_counter()
         failures: list[str] = []
         response_payload: dict[str, Any] | None = None
+        allow_fallback = (
+            self.settings.allow_fallback_on_error
+            if allow_fallback_on_error is None
+            else allow_fallback_on_error
+        )
+
+        if self.dry_run:
+            if fallback is not None:
+                failures.append("dry_run: returned supplied fallback without calling an LLM")
+                self._log_call(
+                    task_type,
+                    profile_name,
+                    profile,
+                    started,
+                    True,
+                    schema.__name__,
+                    failures,
+                    None,
+                    used_fallback=True,
+                    fallback_reason="dry_run",
+                )
+                return fallback
+            failures.append("dry_run: no fallback supplied")
+            self._log_call(
+                task_type,
+                profile_name,
+                profile,
+                started,
+                False,
+                schema.__name__,
+                failures,
+                None,
+            )
+            raise StructuredLLMError(
+                f"dry-run router cannot synthesize {schema.__name__}; provide a fallback"
+            )
+
+        messages = _with_structured_output_instruction(messages, schema)
         for attempt in range(self.settings.max_retries + 1):
             try:
                 response_payload = self._post_chat_completion(
@@ -153,6 +194,20 @@ class LLMRouter:
             except Exception as exc:  # noqa: BLE001 - exact failure recorded for auditability
                 failures.append(f"attempt_{attempt}: {type(exc).__name__}: {exc}")
                 if attempt >= self.settings.max_retries:
+                    if fallback is not None and allow_fallback:
+                        self._log_call(
+                            task_type,
+                            profile_name,
+                            profile,
+                            started,
+                            False,
+                            schema.__name__,
+                            failures,
+                            response_payload,
+                            used_fallback=True,
+                            fallback_reason="model_or_api_error",
+                        )
+                        return fallback
                     self._log_call(
                         task_type,
                         profile_name,
@@ -163,10 +218,22 @@ class LLMRouter:
                         failures,
                         response_payload,
                     )
-                    if fallback is not None:
-                        return fallback
                     raise StructuredLLMError("; ".join(failures)) from exc
 
+        if fallback is not None and allow_fallback:
+            self._log_call(
+                task_type,
+                profile_name,
+                profile,
+                started,
+                False,
+                schema.__name__,
+                failures,
+                response_payload,
+                used_fallback=True,
+                fallback_reason="structured_validation_failed",
+            )
+            return fallback
         self._log_call(
             task_type,
             profile_name,
@@ -177,8 +244,6 @@ class LLMRouter:
             failures,
             response_payload,
         )
-        if fallback is not None:
-            return fallback
         raise StructuredLLMError("; ".join(failures))
 
     def _post_chat_completion(
@@ -217,6 +282,9 @@ class LLMRouter:
         schema_name: str | None,
         failures: list[str],
         response_payload: dict[str, Any] | None,
+        *,
+        used_fallback: bool = False,
+        fallback_reason: str = "",
     ) -> None:
         usage = (response_payload or {}).get("usage", {})
         record = ModelCallRecord(
@@ -229,6 +297,8 @@ class LLMRouter:
             total_tokens=usage.get("total_tokens"),
             structured_schema=schema_name,
             structured_output_valid=structured_valid,
+            used_fallback=used_fallback,
+            fallback_reason=fallback_reason,
             failure_modes=failures,
         )
         if self.store is not None:
@@ -246,6 +316,31 @@ def _extract_assistant_content(response_payload: dict[str, Any] | None, *, limit
     return _truncate(text, limit)
 
 
+def _with_structured_output_instruction(
+    messages: list[dict[str, str]], schema: type[BaseModel]
+) -> list[dict[str, str]]:
+    """Append a compact but concrete schema instruction for backends that ignore guided_json."""
+    schema_dict = schema.model_json_schema()
+    required = schema_dict.get("required", [])
+    properties = schema_dict.get("properties", {})
+    field_lines = []
+    for name, spec in properties.items():
+        marker = "required" if name in required else "optional"
+        type_hint = spec.get("type") or ("enum" if "enum" in spec else spec.get("$ref", "object"))
+        field_lines.append(f"- {name} ({marker}, {type_hint})")
+    schema_json = json.dumps(schema_dict, indent=2, sort_keys=True)
+    instruction = (
+        f"Structured-output contract for schema `{schema.__name__}`.\n"
+        "Return exactly one JSON object. Do not wrap it in another key, Markdown, prose, "
+        "an error object, or a reasoning transcript. Do not add fields not present in the schema.\n\n"
+        "Top-level fields:\n"
+        f"{chr(10).join(field_lines) if field_lines else '- [schema has no declared fields]'}\n\n"
+        "Full JSON Schema, truncated if necessary:\n"
+        f"{_truncate(schema_json, 16000)}"
+    )
+    return [*messages, {"role": "user", "content": instruction}]
+
+
 def _structured_repair_prompt(schema: type[BaseModel], exc: Exception) -> str:
     schema_json = json.dumps(schema.model_json_schema(), indent=2, sort_keys=True)
     return (
@@ -256,7 +351,7 @@ def _structured_repair_prompt(schema: type[BaseModel], exc: Exception) -> str:
         "Use exactly the field names, required fields, and enum values in this JSON Schema. "
         "Do not add extra fields.\n\n"
         "JSON Schema:\n"
-        f"{_truncate(schema_json, 12000)}"
+        f"{_truncate(schema_json, 16000)}"
     )
 
 
@@ -268,7 +363,7 @@ def _truncate(text: str, limit: int) -> str:
 
 
 def _extract_json(content: str) -> Any:
-    text = content.strip()
+    text = _strip_reasoning_blocks(content).strip()
     if text.startswith("```"):
         # Strip common fenced JSON blocks.
         lines = text.splitlines()
@@ -279,14 +374,21 @@ def _extract_json(content: str) -> Any:
         text = "\n".join(lines).strip()
     try:
         return json.loads(text)
-    except json.JSONDecodeError:
-        start_obj = text.find("{")
-        start_arr = text.find("[")
-        starts = [i for i in [start_obj, start_arr] if i >= 0]
-        if not starts:
-            raise
-        start = min(starts)
-        end = max(text.rfind("}"), text.rfind("]"))
-        if end < start:
-            raise
-        return json.loads(text[start : end + 1])
+    except json.JSONDecodeError as original_error:
+        decoder = json.JSONDecoder()
+        for start, ch in enumerate(text):
+            if ch not in "[{":
+                continue
+            try:
+                payload, _end = decoder.raw_decode(text[start:])
+                return payload
+            except json.JSONDecodeError:
+                continue
+        raise original_error
+
+
+def _strip_reasoning_blocks(content: str) -> str:
+    """Remove common model-internal reasoning wrappers before JSON extraction."""
+    text = re.sub(r"<think>.*?</think>", "", content, flags=re.IGNORECASE | re.DOTALL)
+    text = re.sub(r"<reasoning>.*?</reasoning>", "", text, flags=re.IGNORECASE | re.DOTALL)
+    return text

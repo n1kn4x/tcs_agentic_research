@@ -64,7 +64,7 @@ vllm serve Qwen/Qwen3-32B --served-model-name deep-reasoner --port 8000
 vllm serve Qwen/Qwen3-8B  --served-model-name routine-extractor --port 8001
 ```
 
-The router logs model choice, latency, token usage, structured-output validity, and failure modes to `ModelCallLedger.jsonl`.
+The router logs model choice, latency, token usage, structured-output validity, fallback usage, and failure modes to `ModelCallLedger.jsonl`. In real non-dry runs, structured-output/API failures fail loudly by default instead of silently committing fallback artifacts; dry-run mode still uses conservative fallbacks.
 
 ## Quick start
 
