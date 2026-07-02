@@ -277,14 +277,14 @@ TBD during follow-up clarification. Record oracle access, randomness, quantum re
 promise structure, cryptographic assumptions, and asymptotic conventions here.
 
 ## Success criteria
-- A main-task solution requires proof-quality mathematical evidence, resource accounting,
+- A main-task solution requires proof-quality mathematical evidence, explicit complexity derivations,
   and independent replication.
 - Experimental observations may suggest conjectures but are not proofs.
 - Unspecified user preferences from initialization should be treated as open questions,
   not assumptions.
 
 ## Fallback publishable outcomes
-- A verified obstruction or lower-bound explanation.
+- A verified lower-bound or barrier explanation.
 - A clarified formalization with useful Lean lemmas.
 - A reproducible experimental counterexample search or benchmark.
 - A literature synthesis resolving notation and novelty questions.
@@ -324,7 +324,7 @@ See `Nomenclature.yml`.
             ],
             initial_claims=[initial_claim],
             fallback_publishable_outcomes=[
-                "verified obstruction",
+                "verified lower-bound or barrier explanation",
                 "formalized lemma library",
                 "reproducible experiment/counterexample search",
                 "literature and notation synthesis",

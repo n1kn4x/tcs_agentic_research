@@ -150,8 +150,6 @@ Nodes durably write artifacts before returning. The graph is resumable through `
 - `ResearchAgent`: executes a selected proposal and writes a structured `ResearchReport`.
 - `ResearchCriticAgent`: distinguishes proofs, citations, experiments, informal arguments, conjectures, refutations, and forced verification obligations.
 - `LiteratureResearcher`: modular literature pipeline for OpenAlex search/citation candidate discovery, arXiv/DOI/PDF import, PDF text extraction, theorem/algorithm extraction, nomenclature updates, duplicate detection, and quote-provenance query answers in mapped notation.
-- `ObstructionAgent`: searches for lower bounds, no-go theorems, reductions, hidden assumptions, and duplicate literature risks.
-- `ResourceAccountingAgent`: checks time/space/query/circuit/proof-size and quantum-specific resources.
 - `TheoremProverAgent` / `LEAPHarness`: Lean proof search with local Lean declaration retrieval, direct formalization, revision, blueprint decomposition, AND-OR proof DAGs, and strict `sorry` discipline.
 - `ExperimentAgent`: reproducible command runner for simulations, brute-force searches, and numerical checks.
 - `IndependentReplicationAgent`: verifies possible breakthroughs from minimized context.

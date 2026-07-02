@@ -22,8 +22,6 @@ from ..schemas import (
 )
 from .critics import ResearchCriticAgent
 from .literature import LiteratureResearcher
-from .obstruction import ObstructionAgent
-from .resource_accounting import ResourceAccountingAgent
 
 
 class ResearchAgent:
@@ -32,8 +30,6 @@ class ResearchAgent:
         self.router = router
         self.prompt_dir = prompt_dir
         self.literature = LiteratureResearcher(store, router, prompt_dir=prompt_dir)
-        self.obstructions = ObstructionAgent(store, router, prompt_dir=prompt_dir)
-        self.resources = ResourceAccountingAgent(store, router, prompt_dir=prompt_dir)
         self.critic = ResearchCriticAgent(store, router, prompt_dir=prompt_dir)
 
     def run(self, proposal: ResearchProposal, state: ResearchState) -> tuple[ResearchReport, str]:
@@ -55,15 +51,14 @@ class ResearchAgent:
             },
             indent=2,
         )
-        obstruction_result = self.obstructions.analyze(proposal, context=context)
-        mock_output = self._mock_report(proposal, obstruction_result.summary)
+        mock_output = self._mock_report(proposal)
         messages = [
             {"role": "system", "content": render_prompt("research_agent", override_dir=self.prompt_dir)},
             {
                 "role": "user",
                 "content": (
                     "Execute the selected proposal using only evidence that can be referenced by durable artifacts.\n"
-                    f"Context:\n{context}\n\nObstruction scan:\n{obstruction_result.model_dump_json(indent=2)}"
+                    f"Context:\n{context}"
                 ),
             },
         ]
@@ -75,19 +70,11 @@ class ResearchAgent:
         )
         if report.proposal_id != proposal.proposal_id:
             report.proposal_id = proposal.proposal_id
-        if report.complexity_estimates:
-            resource_result = self.resources.check(report.complexity_estimates, context=context)
-            if resource_result.issues:
-                report.required_verifications.extend(resource_result.issues)
-            report.evidence.append(
-                EvidenceRecord(
-                    evidence_type=EvidenceType.resource_accounting,
-                    summary=resource_result.summary,
-                    artifact_refs=resource_result.artifact_refs,
-                    verifier="ResourceAccountingAgent",
-                    confidence=0.5 if resource_result.issues else 0.8,
+        for estimate in report.complexity_estimates:
+            if estimate.needs_derivation_review:
+                report.required_verifications.append(
+                    f"Complexity estimate for {estimate.resource}={estimate.bound} needs derivation review."
                 )
-            )
         report, critique = self.critic.review(report, context=context)
         for obligation in critique.forced_verifications:
             if obligation.obligation_id not in {o.obligation_id for o in report.proof_obligations}:
@@ -106,7 +93,7 @@ class ResearchAgent:
         report_ref = self.store.write_json(f"{iteration_dir}/research_report_{report.report_id}.json", report)
         return report, report_ref.path
 
-    def _mock_report(self, proposal: ResearchProposal, obstruction_summary: str) -> ResearchReport:
+    def _mock_report(self, proposal: ResearchProposal) -> ResearchReport:
         claim = ClaimRecord(
             claim_type=ClaimType.other,
             statement=(
@@ -128,7 +115,7 @@ class ResearchAgent:
             outcome=ReportOutcome.partially_succeeded,
             executive_summary=(
                 "Dry-run mock execution completed a conservative scoping iteration. It does not claim a "
-                "breakthrough. " + obstruction_summary
+                "breakthrough."
             ),
             claims_generated=[claim],
             proof_obligations=[
@@ -140,13 +127,13 @@ class ResearchAgent:
             ],
             unresolved_issues=[
                 "Literature claims need provenance-bearing extraction.",
-                "Any algorithmic improvement requires explicit resource accounting.",
+                "Any algorithmic improvement requires an explicit complexity derivation.",
             ],
             proposed_next_steps=[
                 "Import and normalize the most relevant papers into LiteratureDB.",
-                "Select a specific lemma, reduction, or algorithmic subgoal for LEAP/resource review.",
+                "Select a specific lemma, reduction, or algorithmic subgoal for proof or literature review.",
             ],
             required_verifications=[
-                "No conjecture or informal argument may be upgraded without Lean, citation, resource, or experimental evidence as appropriate."
+                "No conjecture or informal argument may be upgraded without Lean, citation, derivation, or experimental evidence as appropriate."
             ],
         )

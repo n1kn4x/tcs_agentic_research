@@ -229,7 +229,6 @@ class ResearchGraph:
             if claim.status in {
                 ClaimStatus.proved_by_lean,
                 ClaimStatus.cited,
-                ClaimStatus.resource_checked,
                 ClaimStatus.experimentally_supported,
                 ClaimStatus.proved_informally,
             } and claim.claim_id not in state.accepted_claim_ids:

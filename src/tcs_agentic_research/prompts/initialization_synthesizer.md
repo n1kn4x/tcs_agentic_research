@@ -20,8 +20,8 @@ Nomenclature-entry objects must use exactly these keys:
 Use `source_refs: []` unless you have a durable artifact reference.
 
 Claim-record objects must use `statement`, not `claim`. Keep `initial_claims` short and conservative.
-Valid `claim_type` values are: `mathematical`, `algorithmic`, `complexity`, `resource`, `literature`, `novelty`, `experimental`, `obstruction`, `definition`, `theorem_statement`, `other`.
-Valid `status` values are: `proposed`, `needs_review`, `informal_argument`, `conjecture`, `cited`, `experimentally_supported`, `resource_checked`, `proved_by_lean`, `proved_informally`, `refuted`, `duplicate`, `blocked`, `withdrawn`.
+Valid `claim_type` values are: `mathematical`, `algorithmic`, `complexity`, `resource`, `literature`, `novelty`, `experimental`, `definition`, `theorem_statement`, `other`.
+Valid `status` values are: `proposed`, `needs_review`, `informal_argument`, `conjecture`, `cited`, `experimentally_supported`, `proved_by_lean`, `proved_informally`, `refuted`, `duplicate`, `blocked`, `withdrawn`.
 Do not use `administrative` or combined statuses like `proposed/needs_review`.
 
 Your job is to turn the LLM-guided user interview into durable initialization artifacts:

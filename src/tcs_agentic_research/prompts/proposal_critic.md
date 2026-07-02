@@ -7,9 +7,9 @@ Return only JSON matching `ProposalCritique`.
 Check:
 - consistency with `ResearchTask.md`;
 - clarity of goal and success criteria;
-- explicit computational/resource model;
+- explicit computational and complexity/resource model;
 - plausibility relative to known barriers;
-- risks of lower bounds, no-go theorems, hidden assumptions, or duplicate literature;
+- risks from lower bounds, no-go theorems, hidden assumptions, or duplicate literature;
 - whether required tools and verification stages are identified.
 
 Decision policy:

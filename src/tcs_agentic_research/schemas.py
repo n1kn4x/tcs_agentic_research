@@ -52,11 +52,9 @@ class EvidenceType(str, Enum):
     lean_proof = "lean_proof"
     citation = "citation"
     experiment = "experiment"
-    resource_accounting = "resource_accounting"
     informal_argument = "informal_argument"
     counterexample = "counterexample"
     critic_review = "critic_review"
-    obstruction = "obstruction"
     external_tool = "external_tool"
     none = "none"
 
@@ -80,7 +78,6 @@ class ClaimType(str, Enum):
     literature = "literature"
     novelty = "novelty"
     experimental = "experimental"
-    obstruction = "obstruction"
     definition = "definition"
     theorem_statement = "theorem_statement"
     other = "other"
@@ -93,7 +90,6 @@ class ClaimStatus(str, Enum):
     conjecture = "conjecture"
     cited = "cited"
     experimentally_supported = "experimentally_supported"
-    resource_checked = "resource_checked"
     proved_by_lean = "proved_by_lean"
     proved_informally = "proved_informally"
     refuted = "refuted"
@@ -199,8 +195,8 @@ class ProposalCritique(StrictModel):
     summary: str
     consistency_with_task: str
     plausibility: str
-    obstruction_risks: list[str] = Field(default_factory=list)
-    missing_resource_accounting: list[str] = Field(default_factory=list)
+    barrier_risks: list[str] = Field(default_factory=list)
+    missing_complexity_model: list[str] = Field(default_factory=list)
     unclear_success_criteria: list[str] = Field(default_factory=list)
     required_revisions: list[str] = Field(default_factory=list)
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
@@ -222,7 +218,7 @@ class ReportOutcome(str, Enum):
     succeeded = "succeeded"
     partially_succeeded = "partially_succeeded"
     failed = "failed"
-    useful_obstruction = "useful_obstruction"
+    negative_result = "negative_result"
     counterexample_found = "counterexample_found"
     needs_more_work = "needs_more_work"
 
@@ -234,7 +230,7 @@ class ComplexityEstimate(StrictModel):
     model: str
     assumptions: list[str] = Field(default_factory=list)
     derivation_summary: str = ""
-    needs_accounting_review: bool = True
+    needs_derivation_review: bool = True
 
 
 class LiteratureDependency(StrictModel):
@@ -259,7 +255,7 @@ class ProofObligation(StrictModel):
     obligation_id: str = Field(default_factory=lambda: new_id("obl"))
     statement: str
     claim_ids: list[str] = Field(default_factory=list)
-    suggested_tool: Literal["lean", "informal", "literature", "experiment", "resource_accounting"] = "lean"
+    suggested_tool: Literal["lean", "informal", "literature", "experiment"] = "lean"
     status: Literal["open", "in_progress", "proved", "blocked", "refuted"] = "open"
     artifact_refs: list[ArtifactRef] = Field(default_factory=list)
 
@@ -301,7 +297,7 @@ class SolvedOutcome(str, Enum):
     counterexample_found = "counterexample_found"
     literature_duplicate = "literature_duplicate"
     needs_formalization = "needs_formalization"
-    needs_resource_accounting = "needs_resource_accounting"
+    needs_complexity_review = "needs_complexity_review"
     needs_experiment = "needs_experiment"
     dead_end = "dead_end"
 
@@ -497,28 +493,6 @@ class TheoremProverResult(StrictModel):
     recommended_next_steps: list[str] = Field(default_factory=list)
     created_at: str = Field(default_factory=utc_now)
 
-
-class ResourceCheckResult(StrictModel):
-    result_id: str = Field(default_factory=lambda: new_id("resource_check"))
-    checked_claim_ids: list[str] = Field(default_factory=list)
-    accepted_claim_ids: list[str] = Field(default_factory=list)
-    downgraded_claim_ids: list[str] = Field(default_factory=list)
-    issues: list[str] = Field(default_factory=list)
-    summary: str
-    artifact_refs: list[ArtifactRef] = Field(default_factory=list)
-    created_at: str = Field(default_factory=utc_now)
-
-
-class ObstructionResult(StrictModel):
-    result_id: str = Field(default_factory=lambda: new_id("obstruction"))
-    summary: str
-    obstruction_claims: list[ClaimRecord] = Field(default_factory=list)
-    duplicate_risks: list[str] = Field(default_factory=list)
-    hidden_assumptions: list[str] = Field(default_factory=list)
-    lower_bound_refs: list[str] = Field(default_factory=list)
-    recommended_changes: list[str] = Field(default_factory=list)
-    artifact_refs: list[ArtifactRef] = Field(default_factory=list)
-    created_at: str = Field(default_factory=utc_now)
 
 
 class ReplicationResult(StrictModel):

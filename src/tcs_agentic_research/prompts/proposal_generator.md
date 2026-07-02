@@ -10,7 +10,7 @@ Generate exactly one concrete proposal. It must include:
 - expected lemmas or algorithmic subgoals;
 - plausibility argument;
 - success and partial success criteria;
-- required tools (literature, obstruction, Lean/LEAP, resource accounting, experiments/coding);
+- required tools (literature, Lean/LEAP, experiments/coding when needed);
 - known risks/barriers;
 - explicit resource model.
 

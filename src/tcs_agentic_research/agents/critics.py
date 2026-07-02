@@ -63,11 +63,6 @@ class ResearchCriticAgent:
                     claim.status = ClaimStatus.needs_review
                     if "unaccepted_no_extracted_theorem_or_algorithm" not in claim.tags:
                         claim.tags.append("unaccepted_no_extracted_theorem_or_algorithm")
-            elif EvidenceType.resource_accounting in evidence_types and claim.claim_type in {
-                ClaimType.complexity,
-                ClaimType.resource,
-            }:
-                claim.status = ClaimStatus.resource_checked
             elif EvidenceType.experiment in evidence_types:
                 claim.status = ClaimStatus.experimentally_supported
             elif EvidenceType.informal_argument in evidence_types:
@@ -105,7 +100,6 @@ class ResearchCriticAgent:
             if claim.status in {
                 ClaimStatus.proved_by_lean,
                 ClaimStatus.cited,
-                ClaimStatus.resource_checked,
                 ClaimStatus.experimentally_supported,
             }:
                 accepted.append(claim.claim_id)
@@ -116,7 +110,7 @@ class ResearchCriticAgent:
                         ProofObligation(
                             statement=f"Verify or refute claim `{claim.claim_id}`: {claim.statement}",
                             claim_ids=[claim.claim_id],
-                            suggested_tool="lean" if claim.claim_type == ClaimType.mathematical else "resource_accounting",
+                            suggested_tool="lean" if claim.claim_type == ClaimType.mathematical else "informal",
                         )
                     )
         return ResearchCritique(
@@ -169,7 +163,7 @@ class SolvedCheckAgent:
         blockers: list[str] = []
         if report.outcome == ReportOutcome.counterexample_found:
             outcomes.append(SolvedOutcome.counterexample_found)
-        elif report.outcome == ReportOutcome.useful_obstruction:
+        elif report.outcome == ReportOutcome.negative_result:
             outcomes.append(SolvedOutcome.negative_result)
         elif report.outcome == ReportOutcome.succeeded:
             outcomes.append(SolvedOutcome.solves_main_task)
@@ -180,9 +174,9 @@ class SolvedCheckAgent:
         if report.proof_obligations:
             outcomes.append(SolvedOutcome.needs_formalization)
             blockers.append("Open proof obligations remain.")
-        if any(e.needs_accounting_review for e in report.complexity_estimates):
-            outcomes.append(SolvedOutcome.needs_resource_accounting)
-            blockers.append("Complexity/resource estimates require accounting review.")
+        if any(e.needs_derivation_review for e in report.complexity_estimates):
+            outcomes.append(SolvedOutcome.needs_complexity_review)
+            blockers.append("Complexity/resource estimates require derivation review.")
         if report.experimental_results and not any(
             ev.evidence_type == EvidenceType.lean_proof for ev in report.evidence
         ):
@@ -223,9 +217,9 @@ class SolvedCheckAgent:
             verdict.confirmed_solved = False
             verdict.possible_breakthrough = False
             verdict.next_action = "continue"
-        if report and any(e.needs_accounting_review for e in report.complexity_estimates):
-            if SolvedOutcome.needs_resource_accounting not in verdict.outcomes:
-                verdict.outcomes.append(SolvedOutcome.needs_resource_accounting)
+        if report and any(e.needs_derivation_review for e in report.complexity_estimates):
+            if SolvedOutcome.needs_complexity_review not in verdict.outcomes:
+                verdict.outcomes.append(SolvedOutcome.needs_complexity_review)
             verdict.confirmed_solved = False
             verdict.possible_breakthrough = False
             verdict.next_action = "continue"

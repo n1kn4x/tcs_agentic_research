@@ -162,10 +162,10 @@ class ProposalAgent:
 
     def _mock_proposal(self, state: ResearchState) -> ResearchProposal:
         return ResearchProposal(
-            title="Audit-first scoping pass for literature, barriers, and formalizable subclaims",
+            title="Audit-first scoping pass for literature and formalizable subclaims",
             precise_goal=(
                 "Identify one precise, low-risk path for progress by auditing relevant literature, "
-                "known barriers, resource models, and formalizable definitions before attempting any "
+                "known barriers, complexity models, and formalizable definitions before attempting any "
                 "breakthrough claim."
             ),
             relevant_assumptions_and_model=[
@@ -174,7 +174,7 @@ class ProposalAgent:
             ],
             expected_intermediate_lemmas=[
                 "A normalized statement of the central problem in the project nomenclature.",
-                "A list of lower-bound or no-go results that constrain the attempted improvement.",
+                "A list of lower-bound or no-go results from the literature that constrain the attempted improvement.",
             ],
             algorithmic_subgoals=[
                 "Define baseline algorithms and resource measures for comparison.",
@@ -182,28 +182,27 @@ class ProposalAgent:
             ],
             plausibility_argument=(
                 "Hard TCS tasks often fail because of hidden model changes, duplicate literature, or "
-                "unaccounted resources. An audit-first pass increases correctness and can produce useful "
-                "obstructions or formalization targets."
+                "implicit complexity costs. An audit-first pass increases correctness and can produce useful "
+                "formalization targets."
             ),
             success_criteria=[
                 "A structured report with claims classified as cited, conjectural, informal, or needing proof.",
-                "At least one concrete next research proposal or obstruction with provenance.",
+                "At least one concrete next research proposal or vetted barrier with provenance.",
             ],
             partial_success_criteria=[
                 "Updated nomenclature mappings.",
                 "Open proof obligations for LEAP.",
-                "Resource-accounting checklist for subsequent algorithm claims.",
+                "Complexity-derivation checklist for subsequent algorithm claims.",
             ],
             required_tools=[
                 "literature_search",
-                "obstruction_agent",
-                "resource_accounting",
                 "theorem_prover_if_formalizable",
+                "experiment_runner_if_needed",
             ],
             known_risks_and_barriers=[
                 ProposalRisk(
                     risk="The pass may not produce a new theorem.",
-                    mitigation="Treat obstruction synthesis and formalization targets as valid partial progress.",
+                    mitigation="Treat literature-vetted barriers and formalization targets as valid partial progress.",
                     severity="low",
                 )
             ],
@@ -221,8 +220,8 @@ class ProposalAgent:
             summary="Dry-run mock proposal is conservative, auditable, and suitable for bootstrapping.",
             consistency_with_task="It preserves the task assumptions and asks for provenance before strong claims.",
             plausibility="High as a scoping and verification pass, not as a claimed breakthrough.",
-            obstruction_risks=[],
-            missing_resource_accounting=[] if proposal.resource_model else ["Resource model should be explicit."],
+            barrier_risks=[],
+            missing_complexity_model=[] if proposal.resource_model else ["Complexity/resource model should be explicit."],
             unclear_success_criteria=[] if proposal.success_criteria else ["Success criteria missing."],
             required_revisions=[],
             confidence=0.7,

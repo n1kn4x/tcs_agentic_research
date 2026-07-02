@@ -48,7 +48,7 @@ class IndependentReplicationAgent:
         accepted_statuses = {
             ClaimStatus.proved_by_lean,
             ClaimStatus.cited,
-            ClaimStatus.resource_checked,
+            ClaimStatus.experimentally_supported,
         }
         verified = [c.claim_id for c in report.claims_generated if c.status in accepted_statuses]
         failed = [c.claim_id for c in report.claims_generated if c.status not in accepted_statuses]
