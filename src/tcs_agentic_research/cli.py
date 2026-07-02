@@ -61,7 +61,7 @@ def _add_common(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--workspace", default=".")
     parser.add_argument("--config", help="Router config YAML; see config.example.yml")
     parser.add_argument(
-        "--dry-run", action="store_true", help="Do not call vLLM; use conservative fallbacks"
+        "--dry-run", action="store_true", help="Do not call vLLM; use deterministic mock outputs"
     )
     parser.add_argument("--prompt-dir", help="Override prompt directory")
 

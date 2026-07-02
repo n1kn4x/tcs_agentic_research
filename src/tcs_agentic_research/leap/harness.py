@@ -150,10 +150,10 @@ class LEAPHarness:
         )
 
     def _direct_candidate(self, goal: LeanStatement, context: str) -> FormalProofCandidate:
-        fallback = FormalProofCandidate(
+        mock_output = FormalProofCandidate(
             informal_proof="No LLM proof was available; generated a placeholder theorem for human formalization.",
             lean_code=self._placeholder_theorem(goal),
-            notes=["Fallback contains sorry and will not be accepted as proved."],
+            notes=["Dry-run mock output contains sorry and will not be accepted as proved."],
         )
         messages = [
             {"role": "system", "content": render_prompt("leap_direct_prover", override_dir=self.prompt_dir)},
@@ -163,7 +163,7 @@ class LEAPHarness:
             task_type="theorem_proving",
             messages=messages,
             schema=FormalProofCandidate,
-            fallback=fallback,
+            mock_output=mock_output if self.router.dry_run else None,
         )
 
     def _revise_candidate(
@@ -173,7 +173,7 @@ class LEAPHarness:
         compiler_error: str,
         context: str,
     ) -> FormalProofCandidate:
-        fallback = candidate
+        mock_output = candidate
         messages = [
             {"role": "system", "content": render_prompt("leap_reviser", override_dir=self.prompt_dir)},
             {
@@ -188,15 +188,15 @@ class LEAPHarness:
             task_type="theorem_proving",
             messages=messages,
             schema=FormalProofCandidate,
-            fallback=fallback,
+            mock_output=mock_output if self.router.dry_run else None,
         )
 
     def _blueprint_candidate(self, goal: LeanStatement, context: str) -> BlueprintCandidate:
-        fallback = BlueprintCandidate(
-            informal_blueprint="No decomposition was generated in fallback mode.",
+        mock_output = BlueprintCandidate(
+            informal_blueprint="No decomposition was generated in dry-run mock mode.",
             formal_sketch_code=self._placeholder_theorem(goal),
             proposed_lemmas=[],
-            simplification_rationale="Fallback cannot introduce useful subgoals.",
+            simplification_rationale="Dry-run mock output cannot introduce useful subgoals.",
         )
         messages = [
             {"role": "system", "content": render_prompt("leap_blueprint", override_dir=self.prompt_dir)},
@@ -206,7 +206,7 @@ class LEAPHarness:
             task_type="theorem_proving",
             messages=messages,
             schema=BlueprintCandidate,
-            fallback=fallback,
+            mock_output=mock_output if self.router.dry_run else None,
         )
 
     def _review_decomposition(
@@ -215,9 +215,9 @@ class LEAPHarness:
         blueprint: BlueprintCandidate,
         context: str,
     ) -> DecompositionReview:
-        fallback = DecompositionReview(
+        mock_output = DecompositionReview(
             accepted=False,
-            summary="Fallback reviewer rejects decomposition unless an LLM or human approves it.",
+            summary="Dry-run mock reviewer rejects decomposition unless an LLM or human approves it.",
             non_circular=False,
             parent_simplified=False,
             child_lemmas_plausible=False,
@@ -234,7 +234,7 @@ class LEAPHarness:
             task_type="theorem_proving",
             messages=messages,
             schema=DecompositionReview,
-            fallback=fallback,
+            mock_output=mock_output if self.router.dry_run else None,
         )
 
     def _placeholder_theorem(self, goal: LeanStatement) -> str:

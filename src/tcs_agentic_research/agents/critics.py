@@ -28,7 +28,7 @@ class ResearchCriticAgent:
 
     def review(self, report: ResearchReport, context: str = "") -> tuple[ResearchReport, ResearchCritique]:
         report = self._downgrade_or_accept_claims(report)
-        fallback = self._fallback_critique(report)
+        mock_output = self._mock_critique(report)
         messages = [
             {"role": "system", "content": render_prompt("research_critic", override_dir=self.prompt_dir)},
             {
@@ -40,7 +40,7 @@ class ResearchCriticAgent:
             task_type="research_critique",
             messages=messages,
             schema=ResearchCritique,
-            fallback=fallback,
+            mock_output=mock_output if self.router.dry_run else None,
         )
         return report, critique
 
@@ -68,7 +68,7 @@ class ResearchCriticAgent:
                 claim.status = ClaimStatus.conjecture
         return report
 
-    def _fallback_critique(self, report: ResearchReport) -> ResearchCritique:
+    def _mock_critique(self, report: ResearchReport) -> ResearchCritique:
         accepted: list[str] = []
         downgraded: list[str] = []
         forced: list[ProofObligation] = []
@@ -95,7 +95,7 @@ class ResearchCriticAgent:
             downgraded_claim_ids=downgraded,
             forced_verifications=forced,
             summary=(
-                "Fallback critic classified claims by evidence type. Unproved mathematical, "
+                "Dry-run mock critic classified claims by evidence type. Unproved mathematical, "
                 "algorithmic, and complexity claims are not accepted as established facts."
             ),
             rejects_report=False,
@@ -110,7 +110,7 @@ class SolvedCheckAgent:
         self.prompt_dir = prompt_dir
 
     def check(self, state: ResearchState, report: ResearchReport | None, context: str = "") -> SolvedVerdict:
-        fallback = self._fallback_verdict(state, report)
+        mock_output = self._mock_verdict(state, report)
         messages = [
             {"role": "system", "content": render_prompt("solved_checker", override_dir=self.prompt_dir)},
             {
@@ -125,11 +125,11 @@ class SolvedCheckAgent:
             task_type="solved_check",
             messages=messages,
             schema=SolvedVerdict,
-            fallback=fallback,
+            mock_output=mock_output if self.router.dry_run else None,
         )
         return self._enforce_conservatism(verdict, state, report)
 
-    def _fallback_verdict(self, state: ResearchState, report: ResearchReport | None) -> SolvedVerdict:
+    def _mock_verdict(self, state: ResearchState, report: ResearchReport | None) -> SolvedVerdict:
         if report is None:
             return SolvedVerdict(
                 outcomes=[SolvedOutcome.partial_progress],
@@ -168,7 +168,7 @@ class SolvedCheckAgent:
             possible_breakthrough=possible and not confirmed,
             confirmed_solved=confirmed,
             requires_independent_replication=possible and not confirmed,
-            rationale="Conservative fallback solved check based on report outcome and verification blockers.",
+            rationale="Conservative dry-run/mock solved check based on report outcome and verification blockers.",
             blocking_issues=blockers,
             next_action="stop_confirmed" if confirmed else ("independent_replication" if possible else "continue"),
         )

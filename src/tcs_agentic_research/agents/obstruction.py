@@ -15,8 +15,8 @@ class ObstructionAgent:
         self.prompt_dir = prompt_dir
 
     def analyze(self, proposal: ResearchProposal, context: str = "") -> ObstructionResult:
-        fallback = ObstructionResult(
-            summary="Fallback obstruction scan did not certify absence of barriers.",
+        mock_output = ObstructionResult(
+            summary="Dry-run mock obstruction scan did not certify absence of barriers.",
             obstruction_claims=[
                 ClaimRecord(
                     claim_type=ClaimType.obstruction,
@@ -51,7 +51,7 @@ class ObstructionAgent:
             task_type="obstruction_search",
             messages=messages,
             schema=ObstructionResult,
-            fallback=fallback,
+            mock_output=mock_output if self.router.dry_run else None,
         )
         ref = self.store.write_json(f"Reports/critic_summaries/{result.result_id}.json", result)
         result.artifact_refs.append(ref)

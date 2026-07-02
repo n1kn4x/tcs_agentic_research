@@ -52,7 +52,7 @@ class ResearchAgent:
             indent=2,
         )
         obstruction_result = self.obstructions.analyze(proposal, context=context)
-        fallback = self._fallback_report(proposal, obstruction_result.summary)
+        mock_output = self._mock_report(proposal, obstruction_result.summary)
         messages = [
             {"role": "system", "content": render_prompt("research_agent", override_dir=self.prompt_dir)},
             {
@@ -67,7 +67,7 @@ class ResearchAgent:
             task_type="research_execution",
             messages=messages,
             schema=ResearchReport,
-            fallback=fallback,
+            mock_output=mock_output if self.router.dry_run else None,
         )
         if report.proposal_id != proposal.proposal_id:
             report.proposal_id = proposal.proposal_id
@@ -102,7 +102,7 @@ class ResearchAgent:
         report_ref = self.store.write_json(f"{iteration_dir}/research_report_{report.report_id}.json", report)
         return report, report_ref.path
 
-    def _fallback_report(self, proposal: ResearchProposal, obstruction_summary: str) -> ResearchReport:
+    def _mock_report(self, proposal: ResearchProposal, obstruction_summary: str) -> ResearchReport:
         claim = ClaimRecord(
             claim_type=ClaimType.other,
             statement=(
@@ -114,7 +114,7 @@ class ResearchAgent:
             evidence=[
                 EvidenceRecord(
                     evidence_type=EvidenceType.informal_argument,
-                    summary="Fallback research execution records process progress only.",
+                    summary="Dry-run mock research execution records process progress only.",
                     confidence=0.2,
                 )
             ],
@@ -123,7 +123,7 @@ class ResearchAgent:
             proposal_id=proposal.proposal_id,
             outcome=ReportOutcome.partially_succeeded,
             executive_summary=(
-                "Fallback execution completed a conservative scoping iteration. It does not claim a "
+                "Dry-run mock execution completed a conservative scoping iteration. It does not claim a "
                 "breakthrough. " + obstruction_summary
             ),
             claims_generated=[claim],

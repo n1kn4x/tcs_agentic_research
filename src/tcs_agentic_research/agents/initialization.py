@@ -93,7 +93,7 @@ class InitializationAgent:
 
     def next_interview_turn(self, transcript: list[dict[str, str]]) -> InitializationInterviewTurn:
         """Ask the LLM whether to request more information or finalize initialization."""
-        fallback = self._fallback_interview_turn(transcript)
+        mock_output = self._mock_interview_turn(transcript)
         messages = [
             {
                 "role": "system",
@@ -113,11 +113,13 @@ class InitializationAgent:
             task_type="initialization_interview",
             messages=messages,
             schema=InitializationInterviewTurn,
-            fallback=fallback,
+            mock_output=mock_output if self.router.dry_run else None,
             max_tokens=1200,
         )
         if not turn.assistant_message.strip():
-            return fallback
+            if self.router.dry_run:
+                return mock_output
+            raise StructuredLLMError("Initialization interviewer returned an empty assistant_message")
         return turn
 
     def initialize(
@@ -129,7 +131,7 @@ class InitializationAgent:
     ) -> ResearchState:
         self.store.initialize_layout()
         transcript_text = _format_transcript(conversation_transcript or [])
-        fallback = self._fallback_bundle(initial_context, transcript_text)
+        mock_output = self._mock_bundle(initial_context, transcript_text)
         messages = [
             {
                 "role": "system",
@@ -151,18 +153,18 @@ class InitializationAgent:
                 task_type="initialization",
                 messages=messages,
                 schema=InitializationBundle,
-                # A generic task fallback is acceptable for dry-run demos, but it is
+                # A generic task mock output is acceptable for dry-run demos, but it is
                 # too destructive for real initialization: it can erase useful
                 # interview content into a vague ResearchTask.md. In real runs, fail
                 # loudly and leave the transcript for rerun/debugging.
-                fallback=fallback if self.router.dry_run else None,
+                mock_output=mock_output if self.router.dry_run else None,
             )
         except StructuredLLMError as exc:
             raise RuntimeError(
                 "Initialization synthesis failed, so no generic ResearchTask.md was committed. "
                 "Inspect ModelCallLedger.jsonl for the validation/API error and rerun `tcs-research init` "
                 "after fixing the model, prompt, or config. Use --dry-run only if you intentionally want "
-                "a conservative placeholder task."
+                "a mock placeholder task."
             ) from exc
         return self.commit_bundle(bundle, extra_refs=extra_artifact_refs or [])
 
@@ -222,7 +224,7 @@ class InitializationAgent:
         )
         return state
 
-    def _fallback_interview_turn(
+    def _mock_interview_turn(
         self, transcript: list[dict[str, str]]
     ) -> InitializationInterviewTurn:
         if not _has_user_answer(transcript):
@@ -237,7 +239,7 @@ class InitializationAgent:
                 "Any unspecified model details, assumptions, and literature context."
             ],
             relevant_information=["User supplied at least one substantive initialization answer."],
-            rationale="Dry-run or fallback path finalizes after a minimal interactive exchange.",
+            rationale="Dry-run mock path finalizes after a minimal interactive exchange.",
         )
 
     def _first_question_turn(self, *, has_initial_context: bool) -> InitializationInterviewTurn:
@@ -263,7 +265,7 @@ class InitializationAgent:
             ),
         )
 
-    def _fallback_bundle(self, initial_context: str, transcript_text: str) -> InitializationBundle:
+    def _mock_bundle(self, initial_context: str, transcript_text: str) -> InitializationBundle:
         user_knowledge = transcript_text.strip() or "No interview transcript supplied."
         task_md = f"""# Research Task
 

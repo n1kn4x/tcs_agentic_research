@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import time
 from pathlib import Path
@@ -16,6 +17,8 @@ from .artifact_store import ArtifactStore
 from .schemas import AppConfig, ModelCallRecord, ModelProfile, RouterSettings
 
 T = TypeVar("T", bound=BaseModel)
+
+logger = logging.getLogger(__name__)
 
 
 class StructuredLLMError(RuntimeError):
@@ -71,7 +74,7 @@ class LLMRouter:
         max_tokens: int | None = None,
     ) -> str:
         if self.dry_run:
-            raise StructuredLLMError("LLMRouter is in dry-run mode and no text fallback was supplied")
+            raise StructuredLLMError("LLMRouter is in dry-run mode and no mock output was supplied")
         profile_name, profile = self.select_profile(task_type)
         started = time.perf_counter()
         failures: list[str] = []
@@ -97,32 +100,24 @@ class LLMRouter:
         task_type: str,
         messages: list[dict[str, str]],
         schema: type[T],
-        fallback: T | None = None,
+        mock_output: T | None = None,
         temperature: float | None = None,
         max_tokens: int | None = None,
-        allow_fallback_on_error: bool | None = None,
     ) -> T:
         """Complete a structured call and validate it against ``schema``.
 
-        ``fallback`` is always allowed in dry-run mode. In real runs it is *not*
-        returned after model/API/validation failures unless either the router config
-        or this call explicitly enables ``allow_fallback_on_error``. This prevents
-        silent conversion of failed research/model calls into committed placeholder
-        artifacts.
+        ``mock_output`` is only usable in dry-run mode. In real runs, schema/API
+        failures are logged and raised after retry/repair attempts; mock outputs
+        are never returned as a recovery path.
         """
         profile_name, profile = self.select_profile(task_type)
         started = time.perf_counter()
         failures: list[str] = []
         response_payload: dict[str, Any] | None = None
-        allow_fallback = (
-            self.settings.allow_fallback_on_error
-            if allow_fallback_on_error is None
-            else allow_fallback_on_error
-        )
 
         if self.dry_run:
-            if fallback is not None:
-                failures.append("dry_run: returned supplied fallback without calling an LLM")
+            if mock_output is not None:
+                failures.append("dry_run: returned supplied mock output without calling an LLM")
                 self._log_call(
                     task_type,
                     profile_name,
@@ -132,11 +127,10 @@ class LLMRouter:
                     schema.__name__,
                     failures,
                     None,
-                    used_fallback=True,
-                    fallback_reason="dry_run",
+                    used_mock_output=True,
                 )
-                return fallback
-            failures.append("dry_run: no fallback supplied")
+                return mock_output
+            failures.append("dry_run: no mock output supplied")
             self._log_call(
                 task_type,
                 profile_name,
@@ -148,8 +142,22 @@ class LLMRouter:
                 None,
             )
             raise StructuredLLMError(
-                f"dry-run router cannot synthesize {schema.__name__}; provide a fallback"
+                f"dry-run router cannot synthesize {schema.__name__}; provide a mock_output"
             )
+        if mock_output is not None:
+            failures.append("real_run: mock_output was supplied; refusing to use it")
+            self._log_call(
+                task_type,
+                profile_name,
+                profile,
+                started,
+                False,
+                schema.__name__,
+                failures,
+                None,
+            )
+            _log_structured_failure(task_type, schema.__name__, failures)
+            raise ValueError("mock_output may only be supplied when LLMRouter.dry_run is true")
 
         messages = _with_structured_output_instruction(messages, schema)
         for attempt in range(self.settings.max_retries + 1):
@@ -177,6 +185,15 @@ class LLMRouter:
                 return result
             except (ValidationError, json.JSONDecodeError, KeyError) as exc:
                 failures.append(f"attempt_{attempt}: structured_output_invalid: {exc}")
+                logger.warning(
+                    "Structured output validation failed for task_type=%s schema=%s "
+                    "attempt=%s/%s; retrying with repair prompt. Error: %s",
+                    task_type,
+                    schema.__name__,
+                    attempt + 1,
+                    self.settings.max_retries + 1,
+                    _truncate(str(exc), 1000),
+                )
                 # Ask the same endpoint to repair, but include the invalid response,
                 # the concrete validation error, and the schema. Without this context
                 # the next call cannot actually know what to fix if guided decoding is
@@ -194,20 +211,6 @@ class LLMRouter:
             except Exception as exc:  # noqa: BLE001 - exact failure recorded for auditability
                 failures.append(f"attempt_{attempt}: {type(exc).__name__}: {exc}")
                 if attempt >= self.settings.max_retries:
-                    if fallback is not None and allow_fallback:
-                        self._log_call(
-                            task_type,
-                            profile_name,
-                            profile,
-                            started,
-                            False,
-                            schema.__name__,
-                            failures,
-                            response_payload,
-                            used_fallback=True,
-                            fallback_reason="model_or_api_error",
-                        )
-                        return fallback
                     self._log_call(
                         task_type,
                         profile_name,
@@ -218,22 +221,9 @@ class LLMRouter:
                         failures,
                         response_payload,
                     )
+                    _log_structured_failure(task_type, schema.__name__, failures)
                     raise StructuredLLMError("; ".join(failures)) from exc
 
-        if fallback is not None and allow_fallback:
-            self._log_call(
-                task_type,
-                profile_name,
-                profile,
-                started,
-                False,
-                schema.__name__,
-                failures,
-                response_payload,
-                used_fallback=True,
-                fallback_reason="structured_validation_failed",
-            )
-            return fallback
         self._log_call(
             task_type,
             profile_name,
@@ -244,6 +234,7 @@ class LLMRouter:
             failures,
             response_payload,
         )
+        _log_structured_failure(task_type, schema.__name__, failures)
         raise StructuredLLMError("; ".join(failures))
 
     def _post_chat_completion(
@@ -283,8 +274,7 @@ class LLMRouter:
         failures: list[str],
         response_payload: dict[str, Any] | None,
         *,
-        used_fallback: bool = False,
-        fallback_reason: str = "",
+        used_mock_output: bool = False,
     ) -> None:
         usage = (response_payload or {}).get("usage", {})
         record = ModelCallRecord(
@@ -297,8 +287,8 @@ class LLMRouter:
             total_tokens=usage.get("total_tokens"),
             structured_schema=schema_name,
             structured_output_valid=structured_valid,
-            used_fallback=used_fallback,
-            fallback_reason=fallback_reason,
+            execution_mode="dry_run" if self.dry_run else "real",
+            used_mock_output=used_mock_output,
             failure_modes=failures,
         )
         if self.store is not None:
@@ -360,6 +350,16 @@ def _truncate(text: str, limit: int) -> str:
         return text
     omitted = len(text) - limit
     return f"{text[:limit]}\n...[truncated {omitted} characters]"
+
+
+def _log_structured_failure(task_type: str, schema_name: str, failures: list[str]) -> None:
+    logger.error(
+        "Structured LLM call failed permanently for task_type=%s schema=%s after retries. "
+        "No mock output is allowed in real runs. Failure modes: %s",
+        task_type,
+        schema_name,
+        _truncate("; ".join(failures), 4000),
+    )
 
 
 def _extract_json(content: str) -> Any:

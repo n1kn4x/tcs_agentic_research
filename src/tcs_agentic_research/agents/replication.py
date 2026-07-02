@@ -21,7 +21,7 @@ class IndependentReplicationAgent:
             "proof_obligations": [o.model_dump(mode="json") for o in report.proof_obligations],
             "artifact_refs": [a.model_dump(mode="json") for a in report.artifact_refs],
         }
-        fallback = self._fallback_result(report)
+        mock_output = self._mock_result(report)
         messages = [
             {"role": "system", "content": render_prompt("independent_replication", override_dir=self.prompt_dir)},
             {
@@ -37,14 +37,14 @@ class IndependentReplicationAgent:
             task_type="independent_replication",
             messages=messages,
             schema=ReplicationResult,
-            fallback=fallback,
+            mock_output=mock_output if self.router.dry_run else None,
         )
         ref = self.store.write_json(f"Reports/critic_summaries/{result.result_id}.json", result)
         result.artifact_refs.append(ref)
         self.store.write_json(f"Reports/critic_summaries/{result.result_id}.json", result)
         return result
 
-    def _fallback_result(self, report: ResearchReport) -> ReplicationResult:
+    def _mock_result(self, report: ResearchReport) -> ReplicationResult:
         accepted_statuses = {
             ClaimStatus.proved_by_lean,
             ClaimStatus.cited,
@@ -54,10 +54,10 @@ class IndependentReplicationAgent:
         failed = [c.claim_id for c in report.claims_generated if c.status not in accepted_statuses]
         if failed or report.proof_obligations:
             verdict = "needs_human_review"
-            summary = "Fallback replication refuses to verify claims with open obligations or non-certifying statuses."
+            summary = "Dry-run mock replication refuses to verify claims with open obligations or non-certifying statuses."
         else:
             verdict = "partially_verified" if verified else "needs_human_review"
-            summary = "Fallback replication found only ledger-certified claims; human/LLM independent reconstruction still recommended."
+            summary = "Dry-run mock replication found only ledger-certified claims; human/LLM independent reconstruction still recommended."
         return ReplicationResult(
             verdict=verdict,
             summary=summary,

@@ -15,7 +15,7 @@ class ResourceAccountingAgent:
         self.prompt_dir = prompt_dir
 
     def check(self, estimates: list[ComplexityEstimate], context: str = "") -> ResourceCheckResult:
-        fallback = self._fallback_check(estimates)
+        mock_output = self._mock_check(estimates)
         messages = [
             {"role": "system", "content": render_prompt("resource_accountant", override_dir=self.prompt_dir)},
             {
@@ -31,14 +31,14 @@ class ResourceAccountingAgent:
             task_type="research_critique",
             messages=messages,
             schema=ResourceCheckResult,
-            fallback=fallback,
+            mock_output=mock_output if self.router.dry_run else None,
         )
         ref = self.store.write_json(f"Reports/critic_summaries/{result.result_id}.json", result)
         result.artifact_refs.append(ref)
         self.store.write_json(f"Reports/critic_summaries/{result.result_id}.json", result)
         return result
 
-    def _fallback_check(self, estimates: list[ComplexityEstimate]) -> ResourceCheckResult:
+    def _mock_check(self, estimates: list[ComplexityEstimate]) -> ResourceCheckResult:
         issues: list[str] = []
         downgraded: list[str] = []
         accepted: list[str] = []
@@ -57,7 +57,7 @@ class ResourceAccountingAgent:
             downgraded_claim_ids=downgraded,
             issues=issues,
             summary=(
-                "Fallback resource checker does not certify asymptotic bounds; it marks estimates "
+                "Dry-run mock resource checker does not certify asymptotic bounds; it marks estimates "
                 "needing explicit derivations unless already reviewed."
             ),
         )

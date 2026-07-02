@@ -28,9 +28,9 @@ class LiteratureResearcher:
     def extract_from_text(
         self, *, citation_key: str, paper_text: str, nomenclature_yaml: str | None = None
     ) -> LiteratureExtract:
-        fallback = LiteratureExtract(
+        mock_output = LiteratureExtract(
             citation_key=citation_key,
-            provenance_notes="Fallback extraction recorded no claims; human or LLM extraction required.",
+            provenance_notes="Dry-run mock extraction recorded no claims; human or LLM extraction required.",
         )
         messages = [
             {"role": "system", "content": render_prompt("literature_researcher", override_dir=self.prompt_dir)},
@@ -47,7 +47,7 @@ class LiteratureResearcher:
             task_type="literature_extraction",
             messages=messages,
             schema=LiteratureExtract,
-            fallback=fallback,
+            mock_output=mock_output if self.router.dry_run else None,
         )
         self.store.append_jsonl("LiteratureDB/extracted_claims.jsonl", extract)
         for symbol, canonical in extract.notation_mappings.items():

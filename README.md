@@ -64,11 +64,11 @@ vllm serve Qwen/Qwen3-32B --served-model-name deep-reasoner --port 8000
 vllm serve Qwen/Qwen3-8B  --served-model-name routine-extractor --port 8001
 ```
 
-The router logs model choice, latency, token usage, structured-output validity, fallback usage, and failure modes to `ModelCallLedger.jsonl`. In real non-dry runs, structured-output/API failures fail loudly by default instead of silently committing fallback artifacts; dry-run mode still uses conservative fallbacks.
+The router logs model choice, latency, token usage, structured-output validity, dry-run mock-output usage, and failure modes to `ModelCallLedger.jsonl`. In real non-dry runs, structured-output/API failures fail loudly after retry/repair attempts.
 
 ## Quick start
 
-Initialize a workspace with an adaptive interview. Dry-run mode uses conservative fallbacks and does not call vLLM:
+Initialize a workspace with an adaptive interview. Dry-run mode uses deterministic mock outputs and does not call vLLM:
 
 ```bash
 tcs-research init --workspace workspaces/demo --dry-run

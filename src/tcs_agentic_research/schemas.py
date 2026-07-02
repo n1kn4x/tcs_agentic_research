@@ -442,10 +442,6 @@ class RouterSettings(StrictModel):
     default_task: str = "routine"
     timeout_seconds: float = 120.0
     max_retries: int = 1
-    # In real, non-dry runs, fallbacks should normally be diagnostic objects only,
-    # not silently committed research artifacts. Agents may opt in explicitly for
-    # non-critical best-effort calls, but the default is fail-loudly.
-    allow_fallback_on_error: bool = False
     profiles: dict[str, ModelProfile]
 
 
@@ -464,8 +460,8 @@ class ModelCallRecord(StrictModel):
     total_tokens: int | None = None
     structured_schema: str | None = None
     structured_output_valid: bool = False
-    used_fallback: bool = False
-    fallback_reason: str = ""
+    execution_mode: Literal["real", "dry_run"] = "real"
+    used_mock_output: bool = False
     failure_modes: list[str] = Field(default_factory=list)
     artifact_refs: list[ArtifactRef] = Field(default_factory=list)
     created_at: str = Field(default_factory=utc_now)
