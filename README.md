@@ -175,8 +175,8 @@ Partial LEAP results are still recorded: proved lemmas, open goals, blocked goal
 Prompts live in `src/tcs_agentic_research/prompts/*.md` and are intended to be edited.
 Structured-output prompts must include an explicit schema placeholder named exactly after the
 Pydantic class, such as `{{ResearchProposal}}`. At call time, the router replaces that placeholder
-with the corresponding JSON-schema contract before sending the prompt to the LLM. Missing or
-misnamed schema placeholders are errors; schemas are not appended implicitly.
+with the corresponding JSON-schema contract (found in schemas.py) before sending the prompt to the LLM. Missing or
+misnamed schema placeholders are errors.
 
 All state-changing agent outputs use Pydantic models in `src/tcs_agentic_research/schemas.py` and
 are serialized as JSON/JSONL/YAML artifacts.
