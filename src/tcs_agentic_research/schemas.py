@@ -485,6 +485,7 @@ class TheoremProverResult(StrictModel):
     status: Literal["proved", "partially_proved", "failed", "needs_human_formalization"]
     root_goal: LeanStatement
     proved_artifacts: list[ArtifactRef] = Field(default_factory=list)
+    artifact_refs: list[ArtifactRef] = Field(default_factory=list)
     open_goals: list[ProofGoal] = Field(default_factory=list)
     accepted_claims: list[str] = Field(default_factory=list)
     failed_claims: list[str] = Field(default_factory=list)

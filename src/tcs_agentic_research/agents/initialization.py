@@ -195,6 +195,7 @@ class InitializationAgent:
                 ],
             )
         ]
+        claims = self._sanitize_initial_claims(claims)
         self.store.append_claims(claims)
         extra_refs = extra_refs or []
         state = ResearchState(
@@ -223,6 +224,28 @@ class InitializationAgent:
             )
         )
         return state
+
+    def _sanitize_initial_claims(self, claims: list[ClaimRecord]) -> list[ClaimRecord]:
+        """Initialization records task context; it must not certify science by itself."""
+        for claim in claims:
+            if claim.claim_type == ClaimType.literature:
+                claim.status = ClaimStatus.needs_review
+                if "needs_literature_ingestion" not in claim.tags:
+                    claim.tags.append("needs_literature_ingestion")
+            elif claim.claim_type in {
+                ClaimType.mathematical,
+                ClaimType.algorithmic,
+                ClaimType.complexity,
+                ClaimType.resource,
+                ClaimType.novelty,
+                ClaimType.experimental,
+                ClaimType.theorem_statement,
+            }:
+                claim.status = ClaimStatus.proposed
+            for evidence in claim.evidence:
+                if evidence.evidence_type == EvidenceType.citation and not evidence.citation_keys:
+                    evidence.confidence = min(evidence.confidence, 0.1)
+        return claims
 
     def _mock_interview_turn(
         self, transcript: list[dict[str, str]]

@@ -152,6 +152,29 @@ class ArtifactStore:
         for claim in claims:
             self.append_jsonl(self.CLAIM_LEDGER, claim)
 
+    def read_claims(self) -> list[ClaimRecord]:
+        """Replay the claim ledger as typed records, skipping malformed legacy rows."""
+        claims: list[ClaimRecord] = []
+        for record in self.read_jsonl(self.CLAIM_LEDGER):
+            try:
+                claims.append(ClaimRecord.model_validate(record))
+            except Exception:
+                # Workspaces are long-lived and may contain records from older schemas. Keep the
+                # reducer robust; the original JSONL row remains available for audit/debugging.
+                continue
+        return claims
+
+    def latest_claims_by_id(self) -> dict[str, ClaimRecord]:
+        """Return the latest appended version of each claim id.
+
+        The claim ledger is append-only: updates are represented by appending a newer full
+        ``ClaimRecord`` with the same ``claim_id``. This reducer is the canonical machine view.
+        """
+        latest: dict[str, ClaimRecord] = {}
+        for claim in self.read_claims():
+            latest[claim.claim_id] = claim
+        return latest
+
     def append_proposal_event(self, entry: ProposalLedgerEntry) -> None:
         self.append_jsonl(self.PROPOSAL_LEDGER, entry)
 

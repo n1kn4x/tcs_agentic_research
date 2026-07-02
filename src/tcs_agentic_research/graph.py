@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from .agents.critics import SolvedCheckAgent
+from .agents.critics import SolvedCheckAgent, is_claim_acceptably_supported, is_claim_rejected
 from .agents.proposal import ProposalAgent
 from .agents.replication import IndependentReplicationAgent
 from .agents.research import ResearchAgent
@@ -13,7 +13,6 @@ from .artifact_store import ArtifactStore
 from .llm import LLMRouter
 from .render import render_verdict_markdown
 from .schemas import (
-    ClaimStatus,
     GraphState,
     ReplicationResult,
     ResearchProposal,
@@ -113,6 +112,10 @@ class ResearchGraph:
     def _node_initialize_task(self, graph_state: GraphState) -> dict[str, Any]:
         existing = self.store.load_state()
         if existing is not None and self.store.exists(ArtifactStore.RESEARCH_TASK):
+            self._refresh_state_from_claim_ledger(
+                existing, open_obligations=existing.open_proof_obligations
+            )
+            self.store.save_state(existing)
             return {
                 "initialized": True,
                 "task_id": existing.task_id,
@@ -222,26 +225,45 @@ class ResearchGraph:
     def _apply_report_to_state(self, state: ResearchState, report: ResearchReport, report_path: str) -> None:
         report_ref = self.store.artifact_ref(report_path)
         state.last_report_ref = report_ref
-        state.artifact_refs.append(report_ref)
-        for claim in report.claims_generated:
-            if claim.claim_id not in state.active_claim_ids:
-                state.active_claim_ids.append(claim.claim_id)
-            if claim.status in {
-                ClaimStatus.proved_by_lean,
-                ClaimStatus.cited,
-                ClaimStatus.experimentally_supported,
-                ClaimStatus.proved_informally,
-            } and claim.claim_id not in state.accepted_claim_ids:
-                state.accepted_claim_ids.append(claim.claim_id)
-            if claim.status in {ClaimStatus.refuted, ClaimStatus.withdrawn, ClaimStatus.duplicate}:
-                if claim.claim_id not in state.rejected_claim_ids:
-                    state.rejected_claim_ids.append(claim.claim_id)
-        state.open_proof_obligations = [
+        if report_ref.path not in {ref.path for ref in state.artifact_refs}:
+            state.artifact_refs.append(report_ref)
+        report_open_obligations = [
             obligation.statement
             for obligation in report.proof_obligations
-            if obligation.status in {"open", "in_progress"}
+            if obligation.status in {"open", "in_progress", "blocked"}
         ]
+        proved_or_refuted_obligations = {
+            obligation.statement
+            for obligation in report.proof_obligations
+            if obligation.status in {"proved", "refuted"}
+        }
+        merged_open_obligations = [
+            obligation
+            for obligation in [*state.open_proof_obligations, *report_open_obligations]
+            if obligation not in proved_or_refuted_obligations
+        ]
+        self._refresh_state_from_claim_ledger(state, open_obligations=merged_open_obligations)
         self.store.save_state(state)
+
+    def _refresh_state_from_claim_ledger(
+        self, state: ResearchState, *, open_obligations: list[str] | None = None
+    ) -> None:
+        latest_claims = self.store.latest_claims_by_id()
+        state.active_claim_ids = [
+            claim_id
+            for claim_id, claim in latest_claims.items()
+            if not is_claim_rejected(claim)
+        ]
+        state.accepted_claim_ids = [
+            claim_id
+            for claim_id, claim in latest_claims.items()
+            if is_claim_acceptably_supported(claim, self.store)
+        ]
+        state.rejected_claim_ids = [
+            claim_id for claim_id, claim in latest_claims.items() if is_claim_rejected(claim)
+        ]
+        if open_obligations is not None:
+            state.open_proof_obligations = list(dict.fromkeys(open_obligations))
 
     def _apply_replication_to_state(self, state: ResearchState, result: ReplicationResult) -> None:
         state.artifact_refs.extend(result.artifact_refs)

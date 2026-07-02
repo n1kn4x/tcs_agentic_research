@@ -15,5 +15,14 @@ class TheoremProverAgent:
 
     def prove(self, goal: LeanStatement, *, context: str = "") -> TheoremProverResult:
         result = self.harness.prove(goal, context=context)
+        ref = self.store.write_json(f"Reports/critic_summaries/{result.result_id}.json", result)
+        self_ref = ref.model_copy(
+            update={
+                "sha256": None,
+                "summary": "Theorem prover result JSON; self-reference hash omitted.",
+            }
+        )
+        if self_ref.path not in {existing.path for existing in result.artifact_refs}:
+            result.artifact_refs.append(self_ref)
         self.store.write_json(f"Reports/critic_summaries/{result.result_id}.json", result)
         return result
