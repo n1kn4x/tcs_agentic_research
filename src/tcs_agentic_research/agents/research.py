@@ -38,15 +38,19 @@ class ResearchAgent:
 
     def run(self, proposal: ResearchProposal, state: ResearchState) -> tuple[ResearchReport, str]:
         task = self.store.read_text(ArtifactStore.RESEARCH_TASK)
-        literature_hits = []
+        literature_answers = []
         for query in proposal.literature_queries[:5]:
-            literature_hits.extend(self.literature.query_local(query, limit=3))
+            literature_answers.append(
+                self.literature.answer_query(query, limit=3).model_dump(mode="json")
+            )
         context = json.dumps(
             {
                 "research_task_md": task,
                 "research_state": state.model_dump(mode="json"),
                 "proposal": proposal.model_dump(mode="json"),
-                "local_literature_hits": literature_hits[:10],
+                # Literature context is only supplied through mapped-nomenclature answers,
+                # with quote-level provenance and duplicate-result flags.
+                "local_literature_answers": literature_answers,
                 "recent_claims": self.store.read_jsonl(ArtifactStore.CLAIM_LEDGER, limit=30),
             },
             indent=2,

@@ -53,8 +53,16 @@ class ResearchCriticAgent:
                 claim.status = ClaimStatus.refuted
             elif EvidenceType.lean_proof in evidence_types:
                 claim.status = ClaimStatus.proved_by_lean
-            elif EvidenceType.citation in evidence_types and claim.claim_type == ClaimType.literature:
-                claim.status = ClaimStatus.cited
+            elif (
+                EvidenceType.citation in evidence_types
+                and claim.claim_type == ClaimType.literature
+            ):
+                if self._literature_claim_has_statement_support(claim):
+                    claim.status = ClaimStatus.cited
+                else:
+                    claim.status = ClaimStatus.needs_review
+                    if "unaccepted_no_extracted_theorem_or_algorithm" not in claim.tags:
+                        claim.tags.append("unaccepted_no_extracted_theorem_or_algorithm")
             elif EvidenceType.resource_accounting in evidence_types and claim.claim_type in {
                 ClaimType.complexity,
                 ClaimType.resource,
@@ -67,6 +75,27 @@ class ResearchCriticAgent:
             else:
                 claim.status = ClaimStatus.conjecture
         return report
+
+    def _literature_claim_has_statement_support(self, claim: ClaimRecord) -> bool:
+        """Require statement-level extraction before accepting literature claims as cited."""
+        citation_keys = {
+            key
+            for evidence in claim.evidence
+            if evidence.evidence_type == EvidenceType.citation
+            for key in evidence.citation_keys
+        }
+        if not citation_keys:
+            return False
+        for record in self.store.read_jsonl("LiteratureDB/extracted_claims.jsonl"):
+            if record.get("citation_key") not in citation_keys:
+                continue
+            if (
+                record.get("theorem_statements")
+                or record.get("algorithm_statements")
+                or record.get("lower_bound_statements")
+            ):
+                return True
+        return False
 
     def _mock_critique(self, report: ResearchReport) -> ResearchCritique:
         accepted: list[str] = []

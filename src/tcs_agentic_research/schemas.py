@@ -320,6 +320,27 @@ class SolvedVerdict(StrictModel):
     created_at: str = Field(default_factory=utc_now)
 
 
+class LiteratureCandidate(StrictModel):
+    candidate_id: str = Field(default_factory=lambda: new_id("cand"))
+    title: str
+    authors: list[str] = Field(default_factory=list)
+    year: int | None = None
+    venue: str = ""
+    doi: str = ""
+    arxiv_id: str = ""
+    openalex_id: str = ""
+    abstract: str = ""
+    landing_url: str = ""
+    pdf_url: str = ""
+    source_urls: list[str] = Field(default_factory=list)
+    cited_by_count: int = 0
+    discovery_reason: str = ""
+    score: float = 0.0
+    status: Literal["queued", "imported", "rejected", "duplicate"] = "queued"
+    imported_paper_id: str | None = None
+    created_at: str = Field(default_factory=utc_now)
+
+
 class PaperMetadata(StrictModel):
     paper_id: str = Field(default_factory=lambda: new_id("paper"))
     citation_key: str
@@ -331,17 +352,99 @@ class PaperMetadata(StrictModel):
     arxiv_id: str = ""
     doi: str = ""
     abstract: str = ""
+    source_type: Literal["manual", "url", "arxiv", "doi", "pdf"] = "manual"
+    source_urls: list[str] = Field(default_factory=list)
+    pdf_path: str = ""
+    text_path: str = ""
+    metadata_path: str = ""
     artifact_refs: list[ArtifactRef] = Field(default_factory=list)
     imported_at: str = Field(default_factory=utc_now)
+
+
+class LiteratureQuote(StrictModel):
+    """Exact quote-level provenance for literature-derived statements."""
+
+    quote_id: str = Field(default_factory=lambda: new_id("quote"))
+    citation_key: str = ""
+    paper_id: str = ""
+    locator: str = ""
+    quote: str
+    char_start: int | None = None
+    char_end: int | None = None
+    artifact_refs: list[ArtifactRef] = Field(default_factory=list)
+
+
+class LiteratureStatement(StrictModel):
+    """A theorem/algorithm/lower-bound statement normalized to canonical notation."""
+
+    statement_id: str = Field(default_factory=lambda: new_id("lit_stmt"))
+    citation_key: str = ""
+    paper_id: str = ""
+    kind: Literal[
+        "theorem",
+        "lemma",
+        "corollary",
+        "proposition",
+        "algorithm",
+        "lower_bound",
+        "definition",
+        "claim",
+        "other",
+    ] = "other"
+    label: str = ""
+    title: str = ""
+    original_statement: str
+    mapped_statement: str = ""
+    notation_mappings: dict[str, str] = Field(default_factory=dict)
+    provenance: list[LiteratureQuote] = Field(default_factory=list)
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+
+
+class LiteratureDuplicateGroup(StrictModel):
+    duplicate_id: str = Field(default_factory=lambda: new_id("lit_dup"))
+    result_ids: list[str]
+    canonical_key: str
+    reason: str = ""
+
+
+class LiteratureQueryResult(StrictModel):
+    result_id: str = Field(default_factory=lambda: new_id("lit_result"))
+    citation_key: str
+    paper_id: str = ""
+    title: str = ""
+    year: int | None = None
+    kind: str = ""
+    label: str = ""
+    mapped_statement: str
+    summary: str = ""
+    score: float = 0.0
+    provenance: list[LiteratureQuote] = Field(default_factory=list)
+    notation_mappings: dict[str, str] = Field(default_factory=dict)
+    duplicate_of: str | None = None
+
+
+class LiteratureQueryAnswer(StrictModel):
+    answer_id: str = Field(default_factory=lambda: new_id("lit_answer"))
+    query: str
+    answer: str
+    results: list[LiteratureQueryResult] = Field(default_factory=list)
+    duplicate_results: list[LiteratureDuplicateGroup] = Field(default_factory=list)
+    limitations: list[str] = Field(default_factory=list)
+    used_nomenclature: dict[str, str] = Field(default_factory=dict)
+    created_at: str = Field(default_factory=utc_now)
 
 
 class LiteratureExtract(StrictModel):
     extract_id: str = Field(default_factory=lambda: new_id("lit_extract"))
     citation_key: str
+    paper_id: str = ""
+    text_artifact_ref: ArtifactRef | None = None
     extracted_claims: list[ClaimRecord] = Field(default_factory=list)
-    theorem_statements: list[str] = Field(default_factory=list)
-    algorithm_statements: list[str] = Field(default_factory=list)
+    theorem_statements: list[LiteratureStatement] = Field(default_factory=list)
+    algorithm_statements: list[LiteratureStatement] = Field(default_factory=list)
+    lower_bound_statements: list[LiteratureStatement] = Field(default_factory=list)
     notation_mappings: dict[str, str] = Field(default_factory=dict)
+    new_nomenclature_entries: list[NomenclatureEntry] = Field(default_factory=list)
     provenance_notes: str = ""
     created_at: str = Field(default_factory=utc_now)
 

@@ -24,7 +24,7 @@ ResearchState.json              compact machine state summary
 ClaimLedger.jsonl               mathematical/algorithmic/literature/resource claims
 ProposalLedger.jsonl            proposal events and critic decisions
 ModelCallLedger.jsonl           model routing, latency, token, validation logs
-LiteratureDB/                   paper metadata, extracted claims, notation mappings
+LiteratureDB/                   papers, discovery candidates, extracted statements/claims, query answers
 LeanProject/                    Lean/Lake project and LEAP proof DAGs
 ExperimentRuns/                 reproducible runs with configs/seeds/logs
 Reports/                        structured reports and derived Markdown
@@ -92,6 +92,31 @@ tcs-research prove --workspace workspaces/demo --dry-run \
   --name nat_id --statement "∀ n : Nat, n = n"
 ```
 
+Import and query literature with canonical notation and quote-level provenance:
+
+```bash
+tcs-research literature import-arxiv --workspace workspaces/demo \
+  --arxiv-id 2401.00001 --extract-text
+
+tcs-research literature extract --workspace workspaces/demo --citation-key arxiv_2401.00001
+
+tcs-research literature query --workspace workspaces/demo \
+  --query "lower bound for the main subproblem"
+
+# Scholar-like discovery via OpenAlex queues candidates only:
+tcs-research literature search --workspace workspaces/demo \
+  --query "quantum LPN lower bound" --limit 20
+
+tcs-research literature discover-related --workspace workspaces/demo \
+  --citation-key arxiv_2401.00001 --direction cited_by --limit 20
+
+tcs-research literature import-candidate --workspace workspaces/demo \
+  --candidate-id cand_abc123 --extract-text
+
+# deterministic smoke test (no vLLM call):
+tcs-research literature test --workspace workspaces/demo --dry-run
+```
+
 Install Lean via `elan` for actual verification. The generated project is under `LeanProject/`.
 
 ## Top-level loop
@@ -122,7 +147,7 @@ Nodes durably write artifacts before returning. The graph is resumable through `
 - `ProposalAgent`: proposal generator plus proposal critic with revision/rejection logic.
 - `ResearchAgent`: executes a selected proposal and writes a structured `ResearchReport`.
 - `ResearchCriticAgent`: distinguishes proofs, citations, experiments, informal arguments, conjectures, refutations, and forced verification obligations.
-- `LiteratureResearcher`: maintains `LiteratureDB` with paper metadata, extracted claims, theorem/algorithm statements, and notation mappings.
+- `LiteratureResearcher`: modular literature pipeline for OpenAlex search/citation candidate discovery, arXiv/DOI/PDF import, PDF text extraction, theorem/algorithm extraction, nomenclature updates, duplicate detection, and quote-provenance query answers in mapped notation.
 - `ObstructionAgent`: searches for lower bounds, no-go theorems, reductions, hidden assumptions, and duplicate literature risks.
 - `ResourceAccountingAgent`: checks time/space/query/circuit/proof-size and quantum-specific resources.
 - `TheoremProverAgent` / `LEAPHarness`: Lean proof search with local Lean declaration retrieval, direct formalization, revision, blueprint decomposition, AND-OR proof DAGs, and strict `sorry` discipline.

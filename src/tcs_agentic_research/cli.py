@@ -7,11 +7,12 @@ import json
 import sys
 
 from .agents.initialization import InitializationAgent
+from .agents.literature import LiteratureResearcher
 from .agents.theorem_prover import TheoremProverAgent
 from .artifact_store import ArtifactStore
 from .graph import ResearchGraph
 from .llm import LLMRouter
-from .schemas import LeanStatement
+from .schemas import LeanStatement, PaperMetadata
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -41,6 +42,76 @@ def main(argv: list[str] | None = None) -> int:
     prove_p.add_argument("--import", dest="imports", action="append", default=["TCSResearch.Basic"])
     prove_p.add_argument("--namespace", default="TCSResearch")
 
+    lit_p = sub.add_parser("literature", help="Import, extract, query, and test LiteratureDB")
+    lit_sub = lit_p.add_subparsers(dest="literature_command", required=True)
+
+    lit_url = lit_sub.add_parser("import-url", help="Import a paper from URL/DOI/arXiv/PDF")
+    _add_common(lit_url)
+    lit_url.add_argument("--url", required=True)
+    lit_url.add_argument("--citation-key")
+    lit_url.add_argument("--title")
+    lit_url.add_argument("--doi")
+    lit_url.add_argument("--extract-text", action="store_true")
+
+    lit_arxiv = lit_sub.add_parser("import-arxiv", help="Import an arXiv paper and PDF")
+    _add_common(lit_arxiv)
+    lit_arxiv.add_argument("--arxiv-id", required=True)
+    lit_arxiv.add_argument("--citation-key")
+    lit_arxiv.add_argument("--extract-text", action="store_true")
+
+    lit_doi = lit_sub.add_parser("import-doi", help="Import DOI metadata and any direct PDF")
+    _add_common(lit_doi)
+    lit_doi.add_argument("--doi", required=True)
+    lit_doi.add_argument("--citation-key")
+    lit_doi.add_argument("--extract-text", action="store_true")
+
+    lit_pdf = lit_sub.add_parser(
+        "extract-pdf-text", help="Extract text from an imported or explicit PDF"
+    )
+    _add_common(lit_pdf)
+    lit_pdf.add_argument("--citation-key")
+    lit_pdf.add_argument("--paper-id")
+    lit_pdf.add_argument("--pdf-path")
+
+    lit_extract = lit_sub.add_parser(
+        "extract", help="Extract theorem/algorithm statements from an imported paper"
+    )
+    _add_common(lit_extract)
+    lit_extract.add_argument("--citation-key")
+    lit_extract.add_argument("--paper-id")
+
+    lit_query = lit_sub.add_parser(
+        "query", help="Answer a local literature query with mapped notation"
+    )
+    _add_common(lit_query)
+    lit_query.add_argument("--query", required=True)
+    lit_query.add_argument("--limit", type=int, default=10)
+
+    lit_search = lit_sub.add_parser("search", help="Search OpenAlex and queue candidates")
+    _add_common(lit_search)
+    lit_search.add_argument("--query", required=True)
+    lit_search.add_argument("--limit", type=int, default=10)
+
+    lit_related = lit_sub.add_parser(
+        "discover-related", help="Queue papers cited by or citing an imported paper"
+    )
+    _add_common(lit_related)
+    lit_related.add_argument("--citation-key", required=True)
+    lit_related.add_argument("--direction", choices=["cited", "cited_by", "both"], default="both")
+    lit_related.add_argument("--limit", type=int, default=20)
+
+    lit_import_candidate = lit_sub.add_parser(
+        "import-candidate", help="Import a queued OpenAlex candidate"
+    )
+    _add_common(lit_import_candidate)
+    lit_import_candidate.add_argument("--candidate-id", required=True)
+    lit_import_candidate.add_argument("--extract-text", action="store_true")
+
+    lit_test = lit_sub.add_parser("test", help="Run a LiteratureDB smoke test")
+    _add_common(lit_test)
+    lit_test.add_argument("--query", default="sample theorem equality algorithm")
+    lit_test.add_argument("--citation-key", default="literature_smoke_test")
+
     args = parser.parse_args(argv)
     try:
         if args.command == "init":
@@ -51,6 +122,8 @@ def main(argv: list[str] | None = None) -> int:
             return _cmd_status(args)
         if args.command == "prove":
             return _cmd_prove(args)
+        if args.command == "literature":
+            return _cmd_literature(args)
     except Exception as exc:  # noqa: BLE001 - CLI should surface actionable errors
         print(f"error: {exc}", file=sys.stderr)
         return 2
@@ -135,6 +208,105 @@ def _cmd_prove(args: argparse.Namespace) -> int:
     )
     print(result.model_dump_json(indent=2))
     return 0
+
+
+def _cmd_literature(args: argparse.Namespace) -> int:
+    store = ArtifactStore(args.workspace)
+    store.initialize_layout()
+    router = LLMRouter.from_config_file(args.config, store=store, dry_run=args.dry_run)
+    agent = LiteratureResearcher(store, router, prompt_dir=args.prompt_dir)
+
+    if args.literature_command == "import-url":
+        paper = agent.import_url(
+            args.url,
+            citation_key=args.citation_key,
+            title=args.title,
+            doi=args.doi,
+            extract_text=args.extract_text,
+        )
+        print(paper.model_dump_json(indent=2))
+        return 0
+    if args.literature_command == "import-arxiv":
+        paper = agent.import_arxiv(
+            args.arxiv_id, citation_key=args.citation_key, extract_text=args.extract_text
+        )
+        print(paper.model_dump_json(indent=2))
+        return 0
+    if args.literature_command == "import-doi":
+        paper = agent.import_doi(
+            args.doi, citation_key=args.citation_key, extract_text=args.extract_text
+        )
+        print(paper.model_dump_json(indent=2))
+        return 0
+    if args.literature_command == "extract-pdf-text":
+        text_path = agent.extract_pdf_text(
+            args.pdf_path, citation_key=args.citation_key, paper_id=args.paper_id
+        )
+        print(json.dumps({"text_path": text_path}, indent=2))
+        return 0
+    if args.literature_command == "extract":
+        extract = agent.extract_paper(citation_key=args.citation_key, paper_id=args.paper_id)
+        print(extract.model_dump_json(indent=2))
+        return 0
+    if args.literature_command == "query":
+        answer = agent.answer_query(args.query, limit=args.limit)
+        print(answer.model_dump_json(indent=2))
+        return 0
+    if args.literature_command == "search":
+        candidates = agent.search_papers(args.query, limit=args.limit)
+        print(json.dumps([c.model_dump(mode="json") for c in candidates], indent=2))
+        return 0
+    if args.literature_command == "discover-related":
+        candidates = agent.discover_related(
+            citation_key=args.citation_key,
+            direction=args.direction,
+            limit=args.limit,
+        )
+        print(json.dumps([c.model_dump(mode="json") for c in candidates], indent=2))
+        return 0
+    if args.literature_command == "import-candidate":
+        paper = agent.import_candidate(args.candidate_id, extract_text=args.extract_text)
+        print(paper.model_dump_json(indent=2))
+        return 0
+    if args.literature_command == "test":
+        payload = _run_literature_smoke_test(store, agent, args.citation_key, args.query)
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return 0
+    raise RuntimeError(f"Unknown literature subcommand: {args.literature_command}")
+
+
+def _run_literature_smoke_test(
+    store: ArtifactStore, agent: LiteratureResearcher, citation_key: str, query: str
+) -> dict[str, object]:
+    text = """# Literature Smoke Test
+
+Theorem 1. Let n be a natural number. In the standard model, the identity map on n
+objects returns n objects and preserves equality.
+
+Algorithm 1. Input a natural number n. Return n. The algorithm uses one step in the
+unit-cost RAM model.
+"""
+    text_ref = store.write_text(f"LiteratureDB/papers/{citation_key}/paper.txt", text)
+    paper = PaperMetadata(
+        citation_key=citation_key,
+        title="Literature Smoke Test",
+        source_type="manual",
+        text_path=text_ref.path,
+        artifact_refs=[text_ref],
+    )
+    paper = agent.import_paper(paper)
+    extract = agent.extract_from_text(
+        citation_key=citation_key,
+        paper_text=text,
+        paper_id=paper.paper_id,
+        text_artifact_path=text_ref.path,
+    )
+    answer = agent.answer_query(query, limit=5)
+    return {
+        "paper": paper.model_dump(mode="json"),
+        "extract": extract.model_dump(mode="json"),
+        "answer": answer.model_dump(mode="json"),
+    }
 
 
 if __name__ == "__main__":

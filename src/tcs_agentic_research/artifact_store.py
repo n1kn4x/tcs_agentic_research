@@ -59,6 +59,8 @@ class ArtifactStore:
             "LiteratureDB/papers.jsonl",
             "LiteratureDB/extracted_claims.jsonl",
             "LiteratureDB/notation_mappings.jsonl",
+            "LiteratureDB/query_answers.jsonl",
+            "LiteratureDB/candidates.jsonl",
         ]:
             path = self.root / jsonl
             if not path.exists():
@@ -96,6 +98,9 @@ class ArtifactStore:
     def read_text(self, path: str | Path) -> str:
         return self.resolve(path).read_text(encoding="utf-8")
 
+    def read_bytes(self, path: str | Path) -> bytes:
+        return self.resolve(path).read_bytes()
+
     def write_text(self, path: str | Path, content: str) -> ArtifactRef:
         target = self.resolve(path)
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -103,6 +108,14 @@ class ArtifactStore:
         tmp.write_text(content, encoding="utf-8")
         os.replace(tmp, target)
         return self.artifact_ref(path, summary=f"Wrote text artifact {path}")
+
+    def write_bytes(self, path: str | Path, content: bytes) -> ArtifactRef:
+        target = self.resolve(path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        tmp = target.with_suffix(target.suffix + ".tmp")
+        tmp.write_bytes(content)
+        os.replace(tmp, target)
+        return self.artifact_ref(path, summary=f"Wrote binary artifact {path}")
 
     def read_json(self, path: str | Path) -> Any:
         return json.loads(self.read_text(path))
@@ -220,4 +233,7 @@ def infer_kind(path: Path) -> ArtifactKind:
         ".py": ArtifactKind.python,
         ".sqlite": ArtifactKind.sqlite,
         ".log": ArtifactKind.log,
+        ".pdf": ArtifactKind.other,
+        ".html": ArtifactKind.other,
+        ".txt": ArtifactKind.markdown,
     }.get(suffix, ArtifactKind.other)
