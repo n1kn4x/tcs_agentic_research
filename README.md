@@ -64,7 +64,7 @@ vllm serve Qwen/Qwen3-32B --served-model-name deep-reasoner --port 8000
 vllm serve Qwen/Qwen3-8B  --served-model-name routine-extractor --port 8001
 ```
 
-The router logs model choice, latency, token usage, structured-output validity, dry-run mock-output usage, and failure modes to `ModelCallLedger.jsonl`. In real non-dry runs, structured-output/API failures fail loudly after retry/repair attempts.
+The router logs model choice, latency, token usage, structured-output validity, dry-run mock-output usage, and failure modes to `ModelCallLedger.jsonl`.
 
 ## Quick start
 
@@ -85,13 +85,16 @@ tcs-research init --workspace workspaces/demo --config config.yml
 tcs-research run --workspace workspaces/demo --config config.yml --max-iterations 3
 ```
 
+### Subsystem LEAP
 Submit a Lean goal to LEAP:
 
 ```bash
 tcs-research prove --workspace workspaces/demo --dry-run \
   --name nat_id --statement "∀ n : Nat, n = n"
 ```
+Install Lean via `elan` for actual verification. The generated project is under `LeanProject/`.
 
+### Subsystem Literature Researcher
 Import and query literature with canonical notation and quote-level provenance:
 
 ```bash
@@ -117,7 +120,6 @@ tcs-research literature import-candidate --workspace workspaces/demo \
 tcs-research literature test --workspace workspaces/demo --dry-run
 ```
 
-Install Lean via `elan` for actual verification. The generated project is under `LeanProject/`.
 
 ## Top-level loop
 
