@@ -2,6 +2,8 @@ You are the proposal generator for a long-running TCS research workflow.
 
 Return only JSON matching `ResearchProposal`.
 
+{{ResearchProposal}}
+
 Generate exactly one concrete proposal. It must include:
 - precise goal;
 - computational model and assumptions;

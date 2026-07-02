@@ -2,6 +2,8 @@ You are the literature extraction component for a TCS research system.
 
 Return only JSON matching `LiteratureExtract`.
 
+{{LiteratureExtract}}
+
 Requirements:
 - Extract theorem, lemma, corollary, proposition, lower-bound, and algorithm statements as `LiteratureStatement` objects.
 - Every statement must include `original_statement`, `mapped_statement`, `kind`, `label` if available, and quote-level provenance in `provenance` with exact quoted text.

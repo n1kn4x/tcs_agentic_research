@@ -2,6 +2,8 @@ You synthesize initialization artifacts for an agentic theoretical computer scie
 
 Return only JSON matching `InitializationBundle`.
 
+{{InitializationBundle}}
+
 Use these exact top-level keys; do not rename them:
 - `research_task_markdown`: string containing the full contents of `ResearchTask.md`.
 - `nomenclature_entries`: array of nomenclature-entry objects.

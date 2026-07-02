@@ -1,7 +1,9 @@
 """Prompt loading utilities.
 
 Prompts are plain Markdown files in ``src/tcs_agentic_research/prompts`` so they are easy
-to inspect, version, and edit.
+to inspect, version, and edit. Structured-output schema placeholders such as
+``{{ResearchProposal}}`` are intentionally left unresolved here; they are filled
+by :meth:`tcs_agentic_research.llm.LLMRouter.complete_structured`.
 """
 
 from __future__ import annotations
