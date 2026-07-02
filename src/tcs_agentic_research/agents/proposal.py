@@ -32,7 +32,7 @@ class ProposalAgent:
         iteration = state.iteration + 1
         iteration_dir = self.store.create_iteration_dir(iteration)
         critique: ProposalCritique | None = None
-        proposal = self._fallback_proposal(state)
+        proposal = self._mock_proposal(state)
 
         for attempt in range(max_revisions + 1):
             generation_messages = [
@@ -49,7 +49,7 @@ class ProposalAgent:
                 task_type="proposal_generation",
                 messages=generation_messages,
                 schema=ResearchProposal,
-                fallback=proposal,
+                mock_output=proposal if self.router.dry_run else None,
             )
             proposal_ref = self.store.write_json(
                 f"{iteration_dir}/proposal_{proposal.proposal_id}.json", proposal
@@ -74,7 +74,7 @@ class ProposalAgent:
                 task_type="proposal_critique",
                 messages=critic_messages,
                 schema=ProposalCritique,
-                fallback=self._fallback_critique(proposal),
+                mock_output=self._mock_critique(proposal) if self.router.dry_run else None,
             )
             self.store.append_proposal_event(
                 ProposalLedgerEntry(
@@ -114,9 +114,19 @@ class ProposalAgent:
                 )
                 break
 
-        # Conservative fallback: use a scoping proposal that is almost always safe and auditable.
-        proposal = self._fallback_proposal(state)
-        critique = self._fallback_critique(proposal)
+        # If we get here: No proposal was accepted; revisions were exhausted or the proposal was rejected;
+        # Therefore proposal generation failed to produce an acceptable real proposal
+        # If we are in a real run, refuse to commit a mock proposal
+        if not self.router.dry_run:
+            reason = critique.summary if critique is not None else "No acceptable proposal was produced."
+            raise RuntimeError(
+                "Proposal generation/revision failed in a real run. "
+                f"Last critique: {reason}"
+            )
+
+        # Dry-run mock proposal: useful for exercising graph/artifact plumbing only.
+        proposal = self._mock_proposal(state)
+        critique = self._mock_critique(proposal)
         proposal_ref = self.store.write_json(f"{iteration_dir}/proposal_{proposal.proposal_id}.json", proposal)
         self.store.write_text(
             f"{iteration_dir}/proposal_{proposal.proposal_id}.md", render_proposal_markdown(proposal)
@@ -127,7 +137,7 @@ class ProposalAgent:
                 event_type="accepted",
                 proposal=proposal,
                 critique=critique,
-                reason="Accepted safe fallback after failed proposal revisions.",
+                reason="Accepted dry-run mock proposal after failed proposal revisions.",
                 artifact_refs=[proposal_ref],
             )
         )
@@ -150,7 +160,7 @@ class ProposalAgent:
             indent=2,
         )
 
-    def _fallback_proposal(self, state: ResearchState) -> ResearchProposal:
+    def _mock_proposal(self, state: ResearchState) -> ResearchProposal:
         return ResearchProposal(
             title="Audit-first scoping pass for literature, barriers, and formalizable subclaims",
             precise_goal=(
@@ -205,10 +215,10 @@ class ProposalAgent:
             resource_model="Use explicit asymptotic time, space, query, circuit, proof-size, and quantum resources when relevant.",
         )
 
-    def _fallback_critique(self, proposal: ResearchProposal) -> ProposalCritique:
+    def _mock_critique(self, proposal: ResearchProposal) -> ProposalCritique:
         return ProposalCritique(
             decision=CriticDecision.accept,
-            summary="Fallback proposal is conservative, auditable, and suitable for bootstrapping.",
+            summary="Dry-run mock proposal is conservative, auditable, and suitable for bootstrapping.",
             consistency_with_task="It preserves the task assumptions and asks for provenance before strong claims.",
             plausibility="High as a scoping and verification pass, not as a claimed breakthrough.",
             obstruction_risks=[],

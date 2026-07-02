@@ -28,7 +28,7 @@ class ResearchCriticAgent:
 
     def review(self, report: ResearchReport, context: str = "") -> tuple[ResearchReport, ResearchCritique]:
         report = self._downgrade_or_accept_claims(report)
-        fallback = self._fallback_critique(report)
+        mock_output = self._mock_critique(report)
         messages = [
             {"role": "system", "content": render_prompt("research_critic", override_dir=self.prompt_dir)},
             {
@@ -40,7 +40,7 @@ class ResearchCriticAgent:
             task_type="research_critique",
             messages=messages,
             schema=ResearchCritique,
-            fallback=fallback,
+            mock_output=mock_output if self.router.dry_run else None,
         )
         return report, critique
 
@@ -53,8 +53,16 @@ class ResearchCriticAgent:
                 claim.status = ClaimStatus.refuted
             elif EvidenceType.lean_proof in evidence_types:
                 claim.status = ClaimStatus.proved_by_lean
-            elif EvidenceType.citation in evidence_types and claim.claim_type == ClaimType.literature:
-                claim.status = ClaimStatus.cited
+            elif (
+                EvidenceType.citation in evidence_types
+                and claim.claim_type == ClaimType.literature
+            ):
+                if self._literature_claim_has_statement_support(claim):
+                    claim.status = ClaimStatus.cited
+                else:
+                    claim.status = ClaimStatus.needs_review
+                    if "unaccepted_no_extracted_theorem_or_algorithm" not in claim.tags:
+                        claim.tags.append("unaccepted_no_extracted_theorem_or_algorithm")
             elif EvidenceType.resource_accounting in evidence_types and claim.claim_type in {
                 ClaimType.complexity,
                 ClaimType.resource,
@@ -68,7 +76,28 @@ class ResearchCriticAgent:
                 claim.status = ClaimStatus.conjecture
         return report
 
-    def _fallback_critique(self, report: ResearchReport) -> ResearchCritique:
+    def _literature_claim_has_statement_support(self, claim: ClaimRecord) -> bool:
+        """Require statement-level extraction before accepting literature claims as cited."""
+        citation_keys = {
+            key
+            for evidence in claim.evidence
+            if evidence.evidence_type == EvidenceType.citation
+            for key in evidence.citation_keys
+        }
+        if not citation_keys:
+            return False
+        for record in self.store.read_jsonl("LiteratureDB/extracted_claims.jsonl"):
+            if record.get("citation_key") not in citation_keys:
+                continue
+            if (
+                record.get("theorem_statements")
+                or record.get("algorithm_statements")
+                or record.get("lower_bound_statements")
+            ):
+                return True
+        return False
+
+    def _mock_critique(self, report: ResearchReport) -> ResearchCritique:
         accepted: list[str] = []
         downgraded: list[str] = []
         forced: list[ProofObligation] = []
@@ -95,7 +124,7 @@ class ResearchCriticAgent:
             downgraded_claim_ids=downgraded,
             forced_verifications=forced,
             summary=(
-                "Fallback critic classified claims by evidence type. Unproved mathematical, "
+                "Dry-run mock critic classified claims by evidence type. Unproved mathematical, "
                 "algorithmic, and complexity claims are not accepted as established facts."
             ),
             rejects_report=False,
@@ -110,7 +139,7 @@ class SolvedCheckAgent:
         self.prompt_dir = prompt_dir
 
     def check(self, state: ResearchState, report: ResearchReport | None, context: str = "") -> SolvedVerdict:
-        fallback = self._fallback_verdict(state, report)
+        mock_output = self._mock_verdict(state, report)
         messages = [
             {"role": "system", "content": render_prompt("solved_checker", override_dir=self.prompt_dir)},
             {
@@ -125,11 +154,11 @@ class SolvedCheckAgent:
             task_type="solved_check",
             messages=messages,
             schema=SolvedVerdict,
-            fallback=fallback,
+            mock_output=mock_output if self.router.dry_run else None,
         )
         return self._enforce_conservatism(verdict, state, report)
 
-    def _fallback_verdict(self, state: ResearchState, report: ResearchReport | None) -> SolvedVerdict:
+    def _mock_verdict(self, state: ResearchState, report: ResearchReport | None) -> SolvedVerdict:
         if report is None:
             return SolvedVerdict(
                 outcomes=[SolvedOutcome.partial_progress],
@@ -168,7 +197,7 @@ class SolvedCheckAgent:
             possible_breakthrough=possible and not confirmed,
             confirmed_solved=confirmed,
             requires_independent_replication=possible and not confirmed,
-            rationale="Conservative fallback solved check based on report outcome and verification blockers.",
+            rationale="Conservative dry-run/mock solved check based on report outcome and verification blockers.",
             blocking_issues=blockers,
             next_action="stop_confirmed" if confirmed else ("independent_replication" if possible else "continue"),
         )
