@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from pydantic import BaseModel
+
 from tcs_agentic_research.agents.critics import (
     SolvedCheckAgent,
     is_claim_acceptably_supported,
@@ -76,9 +78,27 @@ def _router(store: ArtifactStore) -> LLMRouter:
     )
 
 
-def test_structured_prompts_have_exact_schema_placeholders() -> None:
+def test_structured_prompts_do_not_inline_schema_placeholders() -> None:
     for prompt_name, schema in PROMPT_SCHEMAS.items():
-        assert "{{" + schema.__name__ + "}}" in load_prompt(prompt_name)
+        text = load_prompt(prompt_name)
+        assert "{{" + schema.__name__ + "}}" not in text
+        assert "Use the guided JSON schema provided by the API." in text
+
+
+class SimpleStructuredOutput(BaseModel):
+    value: str
+
+
+def test_structured_calls_do_not_require_prompt_schema_placeholders(tmp_path: Path) -> None:
+    expected = SimpleStructuredOutput(value="ok")
+    actual = _router(_store(tmp_path)).complete_structured(
+        task_type="deep",
+        messages=[{"role": "system", "content": "Return JSON."}],
+        schema=SimpleStructuredOutput,
+        mock_output=expected,
+    )
+
+    assert actual == expected
 
 
 def test_latest_claim_replay_uses_newest_record(tmp_path: Path) -> None:

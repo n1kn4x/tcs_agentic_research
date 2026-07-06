@@ -115,23 +115,6 @@ class LLMRouter:
         failures: list[str] = []
         response_payload: dict[str, Any] | None = None
 
-        try:
-            messages = _with_structured_output_instruction(messages, schema)
-        except StructuredLLMError as exc:
-            failures.append(f"prompt_schema_placeholder_invalid: {exc}")
-            self._log_call(
-                task_type,
-                profile_name,
-                profile,
-                started,
-                False,
-                schema.__name__,
-                failures,
-                None,
-            )
-            _log_structured_failure(task_type, schema.__name__, failures)
-            raise
-
         if self.dry_run:
             if mock_output is not None:
                 failures.append("dry_run: returned supplied mock output without calling an LLM")
@@ -210,10 +193,8 @@ class LLMRouter:
                     self.settings.max_retries + 1,
                     _truncate(str(exc), 1000),
                 )
-                # Ask the same endpoint to repair, but include the invalid response,
-                # the concrete validation error, and the schema. Without this context
-                # the next call cannot actually know what to fix if guided decoding is
-                # unsupported or ignored by the backend.
+                # Ask the same endpoint to repair with the invalid response and
+                # concrete validation error. The next call still sends guided_json.
                 messages = messages + [
                     {
                         "role": "assistant",
@@ -322,69 +303,13 @@ def _extract_assistant_content(response_payload: dict[str, Any] | None, *, limit
     return _truncate(text, limit)
 
 
-def _with_structured_output_instruction(
-    messages: list[dict[str, str]], schema: type[BaseModel]
-) -> list[dict[str, str]]:
-    """Replace the required class-name schema placeholder in structured prompts."""
-    placeholder = "{{" + schema.__name__ + "}}"
-    contract = _structured_output_contract(schema)
-    rendered_messages: list[dict[str, str]] = []
-    placeholder_found = False
-
-    for message in messages:
-        content = message.get("content", "")
-        if placeholder in content:
-            content = content.replace(placeholder, contract)
-            placeholder_found = True
-        rendered_messages.append({**message, "content": content})
-
-    if not placeholder_found:
-        raise StructuredLLMError(
-            f"Structured prompt for schema `{schema.__name__}` must include "
-            f"the exact placeholder `{placeholder}`."
-        )
-    return rendered_messages
-
-
-def _structured_output_contract(schema: type[BaseModel]) -> str:
-    """Build a compact but concrete schema instruction for models that ignore guided_json."""
-    schema_dict = schema.model_json_schema()
-    required = schema_dict.get("required", [])
-    properties = schema_dict.get("properties", {})
-    field_lines = []
-    for name, spec in properties.items():
-        marker = "required" if name in required else "optional"
-        type_hint = spec.get("type") or (
-            "enum" if "enum" in spec else spec.get("$ref", "object")
-        )
-        field_lines.append(f"- {name} ({marker}, {type_hint})")
-    return (
-        f"Structured-output contract for schema `{schema.__name__}`.\n"
-        "Return exactly one JSON object. Do not wrap it in another key, Markdown, prose, "
-        "an error object, or a reasoning transcript. Do not add fields not present in the schema.\n\n"
-        "Top-level fields:\n"
-        f"{chr(10).join(field_lines) if field_lines else '- [schema has no declared fields]'}\n\n"
-        "Full JSON Schema, truncated if necessary:\n"
-        f"{_structured_output_schema_json(schema)}"
-    )
-
-
-def _structured_output_schema_json(schema: type[BaseModel]) -> str:
-    schema_json = json.dumps(schema.model_json_schema(), indent=2, sort_keys=True)
-    return _truncate(schema_json, 16000)
-
-
 def _structured_repair_prompt(schema: type[BaseModel], exc: Exception) -> str:
-    schema_json = json.dumps(schema.model_json_schema(), indent=2, sort_keys=True)
     return (
         f"The previous response did not validate for schema `{schema.__name__}`.\n\n"
         "Validation error:\n"
         f"{_truncate(str(exc), 6000)}\n\n"
-        "Return ONLY corrected JSON. Do not include Markdown, prose, or an `error` object. "
-        "Use exactly the field names, required fields, and enum values in this JSON Schema. "
-        "Do not add extra fields.\n\n"
-        "JSON Schema:\n"
-        f"{_truncate(schema_json, 16000)}"
+        "Return ONLY corrected JSON that validates against the guided schema provided by the API. "
+        "Do not include Markdown, prose, or an `error` object. Do not add extra fields."
     )
 
 
