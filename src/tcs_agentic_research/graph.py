@@ -35,11 +35,13 @@ class ResearchGraph:
         config_path: str | Path | None = None,
         dry_run: bool = False,
         prompt_dir: str | None = None,
+        max_resarch_thinking_loop_rounds: int = 3,
     ):
         self.store = ArtifactStore(workspace)
         self.store.initialize_layout()
         self.router = LLMRouter.from_config_file(config_path, store=self.store, dry_run=dry_run)
         self.prompt_dir = prompt_dir
+        self.max_resarch_thinking_loop_rounds = max_resarch_thinking_loop_rounds
 
     def build(self):  # LangGraph is an optional runtime dependency until graph execution.
         try:
@@ -142,8 +144,11 @@ class ResearchGraph:
         if not proposal_path:
             raise RuntimeError("No current proposal path in graph state")
         proposal = ResearchProposal.model_validate(self.store.read_json(proposal_path))
-        report, report_path = ResearchAgent(self.store, self.router, prompt_dir=self.prompt_dir).run(
-            proposal, state
+        research_agent = ResearchAgent(self.store, self.router, prompt_dir=self.prompt_dir)
+        report, report_path = research_agent.run(
+            proposal,
+            state,
+            max_loop_rounds=self.max_resarch_thinking_loop_rounds,
         )
         return {"current_report_path": report_path, "current_proposal_id": report.proposal_id}
 
@@ -235,7 +240,7 @@ class ResearchGraph:
         proved_or_refuted_obligations = {
             obligation.statement
             for obligation in report.proof_obligations
-            if obligation.status in {"proved", "refuted"}
+            if obligation.status in {"proved", "experimentally_supported", "refuted"}
         }
         merged_open_obligations = [
             obligation

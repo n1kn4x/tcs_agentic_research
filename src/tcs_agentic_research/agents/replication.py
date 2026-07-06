@@ -5,7 +5,14 @@ from __future__ import annotations
 from ..artifact_store import ArtifactStore
 from ..llm import LLMRouter
 from ..prompt_loader import render_prompt
-from ..schemas import ClaimStatus, ReplicationResult, ResearchReport, ResearchState
+from ..schemas import (
+    ClaimRecord,
+    ClaimStatus,
+    ClaimType,
+    ReplicationResult,
+    ResearchReport,
+    ResearchState,
+)
 
 
 class IndependentReplicationAgent:
@@ -45,13 +52,12 @@ class IndependentReplicationAgent:
         return result
 
     def _mock_result(self, report: ResearchReport) -> ReplicationResult:
-        accepted_statuses = {
-            ClaimStatus.proved_by_lean,
-            ClaimStatus.cited,
-            ClaimStatus.experimentally_supported,
-        }
-        verified = [c.claim_id for c in report.claims_generated if c.status in accepted_statuses]
-        failed = [c.claim_id for c in report.claims_generated if c.status not in accepted_statuses]
+        verified = [
+            c.claim_id for c in report.claims_generated if _claim_is_replication_certified(c)
+        ]
+        failed = [
+            c.claim_id for c in report.claims_generated if not _claim_is_replication_certified(c)
+        ]
         if failed or report.proof_obligations:
             verdict = "needs_human_review"
             summary = "Dry-run mock replication refuses to verify claims with open obligations or non-certifying statuses."
@@ -65,3 +71,16 @@ class IndependentReplicationAgent:
             failed_claim_ids=failed,
             blocking_issues=[o.statement for o in report.proof_obligations],
         )
+
+
+def _claim_is_replication_certified(claim: ClaimRecord) -> bool:
+    if claim.status == ClaimStatus.proved_by_lean:
+        return True
+    if claim.status == ClaimStatus.cited and claim.claim_type == ClaimType.literature:
+        return True
+    if (
+        claim.status == ClaimStatus.experimentally_supported
+        and claim.claim_type == ClaimType.experimental
+    ):
+        return True
+    return False

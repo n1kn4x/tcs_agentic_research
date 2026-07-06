@@ -19,6 +19,7 @@ router:
         - research_execution
         - research_critique
         - theorem_proving
+        - experiment_planning
         - solved_check
         - independent_replication
     routine:

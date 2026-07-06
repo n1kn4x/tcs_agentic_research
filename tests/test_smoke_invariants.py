@@ -8,6 +8,7 @@ from tcs_agentic_research.agents.critics import (
     SolvedCheckAgent,
     is_claim_acceptably_supported,
 )
+from tcs_agentic_research.agents.research import ResearchAgent
 from tcs_agentic_research.artifact_store import ArtifactStore
 from tcs_agentic_research.leap.harness import (
     BlueprintCandidate,
@@ -23,10 +24,12 @@ from tcs_agentic_research.schemas import (
     ClaimType,
     EvidenceRecord,
     EvidenceType,
+    ExperimentPlan,
     InitializationBundle,
     InitializationInterviewTurn,
     LiteratureExtract,
     ModelProfile,
+    ProofObligation,
     ProposalCritique,
     ReplicationResult,
     ReportOutcome,
@@ -49,6 +52,7 @@ PROMPT_SCHEMAS = {
     "leap_direct_prover": FormalProofCandidate,
     "leap_reviser": FormalProofCandidate,
     "literature_researcher": LiteratureExtract,
+    "experiment_planner": ExperimentPlan,
     "proposal_critic": ProposalCritique,
     "proposal_generator": ResearchProposal,
     "research_agent": ResearchReport,
@@ -149,6 +153,39 @@ def test_url_only_literature_claim_is_not_accepted(tmp_path: Path) -> None:
     )
 
     assert not is_claim_acceptably_supported(claim, store)
+
+
+def test_research_loop_runs_experiment_obligation(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    router = _router(store)
+    agent = ResearchAgent(store, router)
+    claim = ClaimRecord(
+        claim_type=ClaimType.experimental,
+        statement="A small executable experiment can run for this obligation.",
+        status=ClaimStatus.conjecture,
+    )
+    obligation = ProofObligation(
+        statement="Run a deterministic smoke experiment.",
+        claim_ids=[claim.claim_id],
+        suggested_tool="experiment",
+    )
+    report = ResearchReport(
+        proposal_id="proposal_exp",
+        outcome=ReportOutcome.partially_succeeded,
+        executive_summary="Draft report with an experiment obligation.",
+        claims_generated=[claim],
+        proof_obligations=[obligation],
+    )
+    proposal = ResearchProposal(title="experiment", precise_goal="run experiment")
+
+    observations = agent._run_subsystem_loop(report, proposal, "context", max_rounds=1)
+
+    assert observations
+    assert report.experimental_results
+    assert list((store.root / "ExperimentRuns").glob("*"))
+    assert report.proof_obligations[0].status == "experimentally_supported"
+    assert report.proof_obligations[0].status != "proved"
+    assert report.experimental_results[0].artifact_refs
 
 
 def test_solved_requires_independent_replication(tmp_path: Path) -> None:

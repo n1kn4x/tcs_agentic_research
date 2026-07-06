@@ -25,6 +25,13 @@ def main(argv: list[str] | None = None) -> int:
     run_p = sub.add_parser("run", help="Run/resume the LangGraph research loop")
     _add_common(run_p)
     run_p.add_argument("--max-iterations", type=int, default=1)
+    run_p.add_argument(
+        "--max-resarch-thinking-loop-rounds",
+        dest="max_resarch_thinking_loop_rounds",
+        type=int,
+        default=3,
+        help="Maximum private research-agent subsystem loop rounds per proposal.",
+    )
     run_p.add_argument("--thread-id", default="default")
 
     status_p = sub.add_parser("status", help="Show compact workspace status")
@@ -161,6 +168,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         config_path=args.config,
         dry_run=args.dry_run,
         prompt_dir=args.prompt_dir,
+        max_resarch_thinking_loop_rounds=args.max_resarch_thinking_loop_rounds,
     )
     result = graph.run(max_iterations=args.max_iterations, thread_id=args.thread_id)
     print(json.dumps(result, indent=2, sort_keys=True, default=str))

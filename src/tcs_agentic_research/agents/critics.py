@@ -85,7 +85,7 @@ def is_claim_acceptably_supported(claim: ClaimRecord, store: ArtifactStore) -> b
     if status == ClaimStatus.cited and claim.claim_type == ClaimType.literature:
         return True
     if status == ClaimStatus.experimentally_supported:
-        return True
+        return claim.claim_type == ClaimType.experimental
     return False
 
 

@@ -251,12 +251,34 @@ class ExperimentResult(StrictModel):
     caveats: list[str] = Field(default_factory=list)
 
 
+class ExperimentPlan(StrictModel):
+    """Executable experiment plan generated inside the private research loop."""
+
+    should_run: bool = True
+    name: str = "research_loop_experiment"
+    execution_mode: Literal["python", "command"] = "python"
+    code: str = ""
+    command: list[str] = Field(default_factory=list)
+    config: dict[str, Any] = Field(default_factory=dict)
+    seeds: list[int] = Field(default_factory=list)
+    timeout_seconds: int = 3600
+    rationale: str = ""
+    expected_interpretation: str = ""
+
+
 class ProofObligation(StrictModel):
     obligation_id: str = Field(default_factory=lambda: new_id("obl"))
     statement: str
     claim_ids: list[str] = Field(default_factory=list)
     suggested_tool: Literal["lean", "informal", "literature", "experiment"] = "lean"
-    status: Literal["open", "in_progress", "proved", "blocked", "refuted"] = "open"
+    status: Literal[
+        "open",
+        "in_progress",
+        "proved",
+        "experimentally_supported",
+        "blocked",
+        "refuted",
+    ] = "open"
     artifact_refs: list[ArtifactRef] = Field(default_factory=list)
 
 

@@ -13,4 +13,7 @@ Rules:
 - Any algorithmic improvement needs explicit complexity/resource estimates and derivation caveats.
 - `required_verifications` should contain only unresolved blocking verification tasks, not generic policy reminders.
 - Experiments may suggest conjectures only; include seeds, configs, and artifact references if available. Do not invent experiment artifacts.
+- If a simulation, brute-force search, numerical check, or counterexample search should be
+  run by the private research loop, add a `ProofObligation` with `suggested_tool` set
+  to `experiment` and a concrete executable description in `statement`.
 - Cite literature only if provenance appears in the supplied context or LiteratureDB, and include citation keys from LiteratureDB in claim evidence.
