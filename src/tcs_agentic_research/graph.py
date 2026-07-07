@@ -35,13 +35,13 @@ class ResearchGraph:
         config_path: str | Path | None = None,
         dry_run: bool = False,
         prompt_dir: str | None = None,
-        max_resarch_thinking_loop_rounds: int = 3,
+        max_research_thinking_loop_rounds: int = 3,
     ):
         self.store = ArtifactStore(workspace)
         self.store.initialize_layout()
         self.router = LLMRouter.from_config_file(config_path, store=self.store, dry_run=dry_run)
         self.prompt_dir = prompt_dir
-        self.max_resarch_thinking_loop_rounds = max_resarch_thinking_loop_rounds
+        self.max_research_thinking_loop_rounds = max_research_thinking_loop_rounds
 
     def build(self):  # LangGraph is an optional runtime dependency until graph execution.
         try:
@@ -148,7 +148,7 @@ class ResearchGraph:
         report, report_path = research_agent.run(
             proposal,
             state,
-            max_loop_rounds=self.max_resarch_thinking_loop_rounds,
+            max_loop_rounds=self.max_research_thinking_loop_rounds,
         )
         return {"current_report_path": report_path, "current_proposal_id": report.proposal_id}
 
@@ -204,22 +204,19 @@ class ResearchGraph:
     def _route_after_initialize(self, graph_state: GraphState) -> str:
         if graph_state.get("confirmed_solved") or graph_state.get("solved"):
             return "end"
-        iteration = int(graph_state.get("iteration") or 0)
-        max_iterations = int(graph_state.get("max_iterations") or 1)
-        if max_iterations <= 0 or iteration >= max_iterations:
-            return "end"
-        return "continue"
+        return "end" if self._iteration_limit_reached(graph_state) else "continue"
 
     def _route_after_solved_check(self, graph_state: GraphState) -> str:
         if graph_state.get("confirmed_solved"):
             return "end"
         if graph_state.get("possible_breakthrough"):
             return "replicate"
+        return "end" if self._iteration_limit_reached(graph_state) else "continue"
+
+    def _iteration_limit_reached(self, graph_state: GraphState) -> bool:
         iteration = int(graph_state.get("iteration") or 0)
         max_iterations = int(graph_state.get("max_iterations") or 1)
-        if iteration >= max_iterations:
-            return "end"
-        return "continue"
+        return max_iterations <= 0 or iteration >= max_iterations
 
     def _require_state(self) -> ResearchState:
         state = self.store.load_state()

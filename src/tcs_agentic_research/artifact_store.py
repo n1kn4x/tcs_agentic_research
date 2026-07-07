@@ -35,33 +35,33 @@ class ArtifactStore:
     PROPOSAL_LEDGER = "ProposalLedger.jsonl"
     MODEL_LEDGER = "ModelCallLedger.jsonl"
 
+    CORE_DIRECTORIES = (
+        "LiteratureDB",
+        "LiteratureDB/papers",
+        "LeanProject",
+        "LeanProject/ProofDAGs",
+        "ExperimentRuns",
+        "Reports",
+        "Reports/critic_summaries",
+        "Reports/iterations",
+    )
+    CORE_JSONL = (CLAIM_LEDGER, PROPOSAL_LEDGER, MODEL_LEDGER)
+    LITERATURE_JSONL = (
+        "LiteratureDB/papers.jsonl",
+        "LiteratureDB/extracted_claims.jsonl",
+        "LiteratureDB/notation_mappings.jsonl",
+        "LiteratureDB/query_answers.jsonl",
+        "LiteratureDB/candidates.jsonl",
+    )
+
     def __init__(self, workspace: str | Path):
         self.root = Path(workspace).expanduser().resolve()
 
     def initialize_layout(self) -> None:
         self.root.mkdir(parents=True, exist_ok=True)
-        for directory in [
-            "LiteratureDB",
-            "LiteratureDB/papers",
-            "LeanProject",
-            "LeanProject/ProofDAGs",
-            "ExperimentRuns",
-            "Reports",
-            "Reports/critic_summaries",
-            "Reports/iterations",
-        ]:
+        for directory in self.CORE_DIRECTORIES:
             (self.root / directory).mkdir(parents=True, exist_ok=True)
-        for jsonl in [self.CLAIM_LEDGER, self.PROPOSAL_LEDGER, self.MODEL_LEDGER]:
-            path = self.root / jsonl
-            if not path.exists():
-                path.write_text("", encoding="utf-8")
-        for jsonl in [
-            "LiteratureDB/papers.jsonl",
-            "LiteratureDB/extracted_claims.jsonl",
-            "LiteratureDB/notation_mappings.jsonl",
-            "LiteratureDB/query_answers.jsonl",
-            "LiteratureDB/candidates.jsonl",
-        ]:
+        for jsonl in (*self.CORE_JSONL, *self.LITERATURE_JSONL):
             path = self.root / jsonl
             if not path.exists():
                 path.write_text("", encoding="utf-8")

@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import json
+from typing import Literal
 
 from ..artifact_store import ArtifactStore
 from ..llm import LLMRouter
 from ..prompt_loader import render_prompt
 from ..render import render_proposal_markdown
 from ..schemas import (
+    ArtifactRef,
     CriticDecision,
     ProposalCritique,
     ProposalLedgerEntry,
@@ -35,88 +37,49 @@ class ProposalAgent:
         proposal = self._mock_proposal(state)
 
         for attempt in range(max_revisions + 1):
-            generation_messages = [
-                {"role": "system", "content": render_prompt("proposal_generator", override_dir=self.prompt_dir)},
-                {
-                    "role": "user",
-                    "content": (
-                        f"Context for proposal generation (attempt {attempt + 1}):\n{context}\n\n"
-                        f"Previous critique, if any:\n{critique.model_dump_json(indent=2) if critique else 'None'}"
-                    ),
-                },
-            ]
-            proposal = self.router.complete_structured(
-                task_type="proposal_generation",
-                messages=generation_messages,
-                schema=ResearchProposal,
-                mock_output=proposal if self.router.dry_run else None,
+            proposal = self._generate_proposal(
+                context=context,
+                attempt=attempt,
+                previous_critique=critique,
+                dry_run_seed=proposal,
             )
-            proposal_ref = self.store.write_json(
-                f"{iteration_dir}/proposal_{proposal.proposal_id}.json", proposal
-            )
-            self.store.write_text(
-                f"{iteration_dir}/proposal_{proposal.proposal_id}.md", render_proposal_markdown(proposal)
-            )
-            self.store.append_proposal_event(
-                ProposalLedgerEntry(
-                    proposal_id=proposal.proposal_id,
-                    event_type="generated" if attempt == 0 else "revised",
-                    proposal=proposal,
-                    artifact_refs=[proposal_ref],
-                )
+            proposal_ref = self._write_proposal_artifacts(iteration_dir, proposal)
+            self._record_proposal_event(
+                proposal_id=proposal.proposal_id,
+                event_type="generated" if attempt == 0 else "revised",
+                proposal_ref=proposal_ref,
+                proposal=proposal,
             )
 
-            critic_messages = [
-                {"role": "system", "content": render_prompt("proposal_critic", override_dir=self.prompt_dir)},
-                {"role": "user", "content": f"Task and state:\n{context}\n\nProposal:\n{proposal.model_dump_json(indent=2)}"},
-            ]
-            critique = self.router.complete_structured(
-                task_type="proposal_critique",
-                messages=critic_messages,
-                schema=ProposalCritique,
-                mock_output=self._mock_critique(proposal) if self.router.dry_run else None,
+            critique = self._review_proposal(context, proposal)
+            self._record_proposal_event(
+                proposal_id=proposal.proposal_id,
+                event_type="critic_review",
+                proposal_ref=proposal_ref,
+                critique=critique,
+                reason=critique.summary,
             )
-            self.store.append_proposal_event(
-                ProposalLedgerEntry(
-                    proposal_id=proposal.proposal_id,
-                    event_type="critic_review",
-                    critique=critique,
-                    reason=critique.summary,
-                    artifact_refs=[proposal_ref],
-                )
-            )
+
             if critique.decision == CriticDecision.accept:
-                self.store.append_proposal_event(
-                    ProposalLedgerEntry(
-                        proposal_id=proposal.proposal_id,
-                        event_type="accepted",
-                        proposal=proposal,
-                        critique=critique,
-                        reason="Accepted by proposal critic.",
-                        artifact_refs=[proposal_ref],
-                    )
+                return self._accept_proposal(
+                    state,
+                    iteration,
+                    proposal,
+                    critique,
+                    proposal_ref,
+                    reason="Accepted by proposal critic.",
                 )
-                state.iteration = iteration
-                state.current_proposal_id = proposal.proposal_id
-                state.artifact_refs.append(proposal_ref)
-                self.store.save_state(state)
-                return proposal, critique, proposal_ref.path
             if critique.decision == CriticDecision.reject:
-                self.store.append_proposal_event(
-                    ProposalLedgerEntry(
-                        proposal_id=proposal.proposal_id,
-                        event_type="rejected",
-                        proposal=proposal,
-                        critique=critique,
-                        reason="Rejected by proposal critic.",
-                        artifact_refs=[proposal_ref],
-                    )
+                self._record_proposal_event(
+                    proposal_id=proposal.proposal_id,
+                    event_type="rejected",
+                    proposal_ref=proposal_ref,
+                    proposal=proposal,
+                    critique=critique,
+                    reason="Rejected by proposal critic.",
                 )
                 break
 
-        # If we get here: No proposal was accepted; revisions were exhausted or the proposal was rejected;
-        # Therefore proposal generation failed to produce an acceptable real proposal
-        # If we are in a real run, refuse to commit a mock proposal
         if not self.router.dry_run:
             reason = critique.summary if critique is not None else "No acceptable proposal was produced."
             raise RuntimeError(
@@ -124,22 +87,115 @@ class ProposalAgent:
                 f"Last critique: {reason}"
             )
 
-        # Dry-run mock proposal: useful for exercising graph/artifact plumbing only.
         proposal = self._mock_proposal(state)
         critique = self._mock_critique(proposal)
-        proposal_ref = self.store.write_json(f"{iteration_dir}/proposal_{proposal.proposal_id}.json", proposal)
-        self.store.write_text(
-            f"{iteration_dir}/proposal_{proposal.proposal_id}.md", render_proposal_markdown(proposal)
+        proposal_ref = self._write_proposal_artifacts(iteration_dir, proposal)
+        return self._accept_proposal(
+            state,
+            iteration,
+            proposal,
+            critique,
+            proposal_ref,
+            reason="Accepted dry-run mock proposal after failed proposal revisions.",
         )
+
+    def _generate_proposal(
+        self,
+        *,
+        context: str,
+        attempt: int,
+        previous_critique: ProposalCritique | None,
+        dry_run_seed: ResearchProposal,
+    ) -> ResearchProposal:
+        messages = [
+            {
+                "role": "system",
+                "content": render_prompt("proposal_generator", override_dir=self.prompt_dir),
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"Context for proposal generation (attempt {attempt + 1}):\n{context}\n\n"
+                    "Previous critique, if any:\n"
+                    f"{previous_critique.model_dump_json(indent=2) if previous_critique else 'None'}"
+                ),
+            },
+        ]
+        return self.router.complete_structured(
+            task_type="proposal_generation",
+            messages=messages,
+            schema=ResearchProposal,
+            mock_output=dry_run_seed if self.router.dry_run else None,
+        )
+
+    def _review_proposal(self, context: str, proposal: ResearchProposal) -> ProposalCritique:
+        messages = [
+            {
+                "role": "system",
+                "content": render_prompt("proposal_critic", override_dir=self.prompt_dir),
+            },
+            {
+                "role": "user",
+                "content": f"Task and state:\n{context}\n\nProposal:\n{proposal.model_dump_json(indent=2)}",
+            },
+        ]
+        return self.router.complete_structured(
+            task_type="proposal_critique",
+            messages=messages,
+            schema=ProposalCritique,
+            mock_output=self._mock_critique(proposal) if self.router.dry_run else None,
+        )
+
+    def _write_proposal_artifacts(
+        self, iteration_dir: str, proposal: ResearchProposal
+    ) -> ArtifactRef:
+        proposal_ref = self.store.write_json(
+            f"{iteration_dir}/proposal_{proposal.proposal_id}.json", proposal
+        )
+        self.store.write_text(
+            f"{iteration_dir}/proposal_{proposal.proposal_id}.md",
+            render_proposal_markdown(proposal),
+        )
+        return proposal_ref
+
+    def _record_proposal_event(
+        self,
+        *,
+        proposal_id: str,
+        event_type: Literal["generated", "revised", "accepted", "rejected", "critic_review"],
+        proposal_ref: ArtifactRef,
+        proposal: ResearchProposal | None = None,
+        critique: ProposalCritique | None = None,
+        reason: str = "",
+    ) -> None:
         self.store.append_proposal_event(
             ProposalLedgerEntry(
-                proposal_id=proposal.proposal_id,
-                event_type="accepted",
+                proposal_id=proposal_id,
+                event_type=event_type,
                 proposal=proposal,
                 critique=critique,
-                reason="Accepted dry-run mock proposal after failed proposal revisions.",
+                reason=reason,
                 artifact_refs=[proposal_ref],
             )
+        )
+
+    def _accept_proposal(
+        self,
+        state: ResearchState,
+        iteration: int,
+        proposal: ResearchProposal,
+        critique: ProposalCritique,
+        proposal_ref: ArtifactRef,
+        *,
+        reason: str,
+    ) -> tuple[ResearchProposal, ProposalCritique, str]:
+        self._record_proposal_event(
+            proposal_id=proposal.proposal_id,
+            event_type="accepted",
+            proposal_ref=proposal_ref,
+            proposal=proposal,
+            critique=critique,
+            reason=reason,
         )
         state.iteration = iteration
         state.current_proposal_id = proposal.proposal_id

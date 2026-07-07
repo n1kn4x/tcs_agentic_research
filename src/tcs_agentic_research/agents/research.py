@@ -262,45 +262,68 @@ class ResearchAgent:
         attempted_experiment_obligation_ids: set[str],
         asked_literature_queries: set[str],
     ) -> list[_ResearchLoopAction]:
+        """Choose deterministic subsystem calls from open report obligations."""
+        return [
+            *self._obligation_actions(
+                report,
+                tool="lean",
+                attempted_ids=attempted_lean_obligation_ids,
+                action_type="lean_proof",
+                rationale=(
+                    "Open Lean proof obligation appears in the draft report; invoke "
+                    "LEAP before the report can treat the claim as established."
+                ),
+                expected_evidence="Lean compiler logs, proof DAG, and any verified Lean file.",
+            ),
+            *self._obligation_actions(
+                report,
+                tool="experiment",
+                attempted_ids=attempted_experiment_obligation_ids,
+                action_type="experiment",
+                rationale=(
+                    "Open experimental verification obligation appears in the draft report; "
+                    "generate and run an experiment through ExperimentAgent."
+                ),
+                expected_evidence="ExperimentRuns artifacts with command/config/logs/seeds.",
+            ),
+            *self._literature_query_actions(report, proposal, asked_literature_queries),
+        ]
+
+    def _obligation_actions(
+        self,
+        report: ResearchReport,
+        *,
+        tool: str,
+        attempted_ids: set[str],
+        action_type: str,
+        rationale: str,
+        expected_evidence: str,
+    ) -> list[_ResearchLoopAction]:
         actions: list[_ResearchLoopAction] = []
         for obligation in report.proof_obligations:
-            if obligation.suggested_tool != "lean":
+            if obligation.suggested_tool != tool:
                 continue
             if obligation.status not in {"open", "in_progress"}:
                 continue
-            if obligation.obligation_id in attempted_lean_obligation_ids:
+            if obligation.obligation_id in attempted_ids:
                 continue
             actions.append(
                 _ResearchLoopAction(
-                    action_type="lean_proof",
+                    action_type=action_type,
                     proof_obligation_id=obligation.obligation_id,
-                    rationale=(
-                        "Open Lean proof obligation appears in the draft report; invoke "
-                        "LEAP before the report can treat the claim as established."
-                    ),
-                    expected_evidence="Lean compiler logs, proof DAG, and any verified Lean file.",
+                    rationale=rationale,
+                    expected_evidence=expected_evidence,
                 )
             )
+        return actions
 
-        for obligation in report.proof_obligations:
-            if obligation.suggested_tool != "experiment":
-                continue
-            if obligation.status not in {"open", "in_progress"}:
-                continue
-            if obligation.obligation_id in attempted_experiment_obligation_ids:
-                continue
-            actions.append(
-                _ResearchLoopAction(
-                    action_type="experiment",
-                    proof_obligation_id=obligation.obligation_id,
-                    rationale=(
-                        "Open experimental verification obligation appears in the draft "
-                        "report; generate and run an experiment through ExperimentAgent."
-                    ),
-                    expected_evidence="ExperimentRuns artifacts with command/config/logs/seeds.",
-                )
-            )
-
+    def _literature_query_actions(
+        self,
+        report: ResearchReport,
+        proposal: ResearchProposal,
+        asked_literature_queries: set[str],
+    ) -> list[_ResearchLoopAction]:
+        actions: list[_ResearchLoopAction] = []
         for query in self._candidate_literature_queries(report, proposal):
             normalized = query.strip()
             if not normalized or normalized in asked_literature_queries:
@@ -311,15 +334,11 @@ class ResearchAgent:
                     query=normalized,
                     rationale=(
                         "A literature/novelty/citation verification need remains; query the "
-                        "local LiteratureDB in canonical notation before making or "
-                        "rejecting claims."
+                        "local LiteratureDB in canonical notation before making or rejecting claims."
                     ),
-                    expected_evidence=(
-                        "Mapped LiteratureDB query answer with quote-level provenance."
-                    ),
+                    expected_evidence="Mapped LiteratureDB query answer with quote-level provenance.",
                 )
             )
-
         return actions
 
     def _candidate_literature_queries(

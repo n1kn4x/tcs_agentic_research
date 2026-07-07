@@ -7,7 +7,6 @@ Mathlib search service while preserving artifact-driven behavior.
 from __future__ import annotations
 
 import re
-from pathlib import Path
 
 from ..artifact_store import ArtifactStore
 from ..schemas import StrictModel

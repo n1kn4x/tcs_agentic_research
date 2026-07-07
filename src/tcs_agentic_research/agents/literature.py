@@ -82,28 +82,27 @@ class LiteratureResearcher:
     ) -> PaperMetadata:
         """Fetch a URL/DOI/arXiv/PDF source into ``LiteratureDB/papers/``."""
         paper = self.fetcher.import_url(url, citation_key=citation_key, title=title, doi=doi)
-        if extract_text and paper.pdf_path:
-            self.extract_pdf_text(citation_key=paper.citation_key)
-            paper = self.require_paper(citation_key=paper.citation_key)
-        return paper
+        return self._extract_text_if_requested(paper, extract_text=extract_text)
 
     def import_arxiv(
         self, arxiv_id: str, *, citation_key: str | None = None, extract_text: bool = False
     ) -> PaperMetadata:
         paper = self.fetcher.import_arxiv(arxiv_id, citation_key=citation_key)
-        if extract_text and paper.pdf_path:
-            self.extract_pdf_text(citation_key=paper.citation_key)
-            paper = self.require_paper(citation_key=paper.citation_key)
-        return paper
+        return self._extract_text_if_requested(paper, extract_text=extract_text)
 
     def import_doi(
         self, doi: str, *, citation_key: str | None = None, extract_text: bool = False
     ) -> PaperMetadata:
         paper = self.fetcher.import_doi(doi, citation_key=citation_key)
-        if extract_text and paper.pdf_path:
-            self.extract_pdf_text(citation_key=paper.citation_key)
-            paper = self.require_paper(citation_key=paper.citation_key)
-        return paper
+        return self._extract_text_if_requested(paper, extract_text=extract_text)
+
+    def _extract_text_if_requested(
+        self, paper: PaperMetadata, *, extract_text: bool
+    ) -> PaperMetadata:
+        if not extract_text or not paper.pdf_path:
+            return paper
+        self.extract_pdf_text(citation_key=paper.citation_key)
+        return self.require_paper(citation_key=paper.citation_key)
 
     def extract_pdf_text(
         self,

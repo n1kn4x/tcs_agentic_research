@@ -26,8 +26,7 @@ def main(argv: list[str] | None = None) -> int:
     _add_common(run_p)
     run_p.add_argument("--max-iterations", type=int, default=1)
     run_p.add_argument(
-        "--max-resarch-thinking-loop-rounds",
-        dest="max_resarch_thinking_loop_rounds",
+        "--max-research-thinking-loop-rounds",
         type=int,
         default=3,
         help="Maximum private research-agent subsystem loop rounds per proposal.",
@@ -163,12 +162,13 @@ def _cmd_run(args: argparse.Namespace) -> int:
     store.initialize_layout()
     if store.load_state() is None or not store.exists(ArtifactStore.RESEARCH_TASK):
         raise RuntimeError("Workspace is uninitialized; run `tcs-research init` first.")
+    max_loop_rounds = int(args.max_research_thinking_loop_rounds)
     graph = ResearchGraph(
         workspace=args.workspace,
         config_path=args.config,
         dry_run=args.dry_run,
         prompt_dir=args.prompt_dir,
-        max_resarch_thinking_loop_rounds=args.max_resarch_thinking_loop_rounds,
+        max_research_thinking_loop_rounds=max_loop_rounds,
     )
     result = graph.run(max_iterations=args.max_iterations, thread_id=args.thread_id)
     print(json.dumps(result, indent=2, sort_keys=True, default=str))
