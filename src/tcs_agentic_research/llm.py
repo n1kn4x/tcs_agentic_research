@@ -106,9 +106,9 @@ class LLMRouter:
     ) -> T:
         """Complete a structured call and validate it against ``schema``.
 
-        ``mock_output`` is only usable in dry-run mode. In real runs, the JSON Schema is
-        provided twice: injected into prompt placeholders for model-visible instructions,
-        and sent through vLLM ``guided_json``/``response_format`` when available. Schema/API
+        ``mock_output`` is only usable in dry-run mode. In real runs, schema placeholders
+        in prompts are expanded for model-visible instructions, and the output schema is
+        sent through vLLM ``guided_json``/``response_format`` when available. Schema/API
         failures are logged and raised after retry/repair attempts; mock outputs are never
         returned as a recovery path.
         """
@@ -116,6 +116,23 @@ class LLMRouter:
         started = time.perf_counter()
         failures: list[str] = []
         response_payload: dict[str, Any] | None = None
+
+        if mock_output is not None and not self.dry_run:
+            failures.append("real_run: mock_output was supplied; refusing to use it")
+            self._log_call(
+                task_type,
+                profile_name,
+                profile,
+                started,
+                False,
+                schema.__name__,
+                failures,
+                None,
+            )
+            _log_structured_failure(task_type, schema.__name__, failures)
+            raise ValueError("mock_output may only be supplied when LLMRouter.dry_run is true")
+
+        messages = _prepare_structured_messages(messages, schema)
 
         if self.dry_run:
             if mock_output is not None:
@@ -146,22 +163,6 @@ class LLMRouter:
             raise StructuredLLMError(
                 f"dry-run router cannot synthesize {schema.__name__}; provide a mock_output"
             )
-        if mock_output is not None:
-            failures.append("real_run: mock_output was supplied; refusing to use it")
-            self._log_call(
-                task_type,
-                profile_name,
-                profile,
-                started,
-                False,
-                schema.__name__,
-                failures,
-                None,
-            )
-            _log_structured_failure(task_type, schema.__name__, failures)
-            raise ValueError("mock_output may only be supplied when LLMRouter.dry_run is true")
-
-        messages = _prepare_structured_messages(messages, schema)
 
         for attempt in range(self.settings.max_retries + 1):
             try:
@@ -199,8 +200,8 @@ class LLMRouter:
                     _truncate(str(exc), 1000),
                 )
                 # Ask the same endpoint to repair with the invalid response and
-                # concrete validation error. The next call still sends guided_json in
-                # addition to the schema already injected through prompt placeholders.
+                # concrete validation error. The next call still sends guided_json
+                # with the structured-call output schema.
                 messages = messages + [
                     {
                         "role": "assistant",
@@ -258,8 +259,8 @@ class LLMRouter:
         if json_schema is not None:
             body["response_format"] = {"type": "json_object"}
             # vLLM supports guided decoding through guided_json in recent versions.
-            # This is additive to the in-prompt schema placeholder, which remains useful
-            # because backend support and adherence vary across vLLM/model versions.
+            # In-prompt schema placeholders remain useful because backend support and
+            # adherence vary across vLLM/model versions.
             body["guided_json"] = json_schema
         headers = {"Authorization": f"Bearer {profile.api_key}"}
         url = profile.base_url.rstrip("/") + "/chat/completions"
@@ -323,39 +324,68 @@ def _schema_prompt(schema: type[BaseModel]) -> str:
     )
 
 
+_SCHEMA_PLACEHOLDER_RE = re.compile(r"\{\{([A-Za-z_][A-Za-z0-9_]*)\}\}")
+
+
 def _prepare_structured_messages(
     messages: list[dict[str, str]], schema: type[BaseModel]
 ) -> list[dict[str, str]]:
-    """Insert the schema prompt into structured-call messages.
-
-    Repo prompts contain a schema-specific placeholder (for example ``{{InitializationBundle}}``);
-    replace it in place so the model sees the full schema exactly where the prompt says 
-    it will appear. If no matching placeholder is present, append a final user message 
-    carrying the schema as a compatibility fallback for external/custom prompts.
-    """
-    schema_text = _schema_prompt(schema)
-    placeholders = [schema_placeholder(schema), "{{Schema}}"]
+    """Replace schema placeholders in structured-call messages."""
     rendered: list[dict[str, str]] = []
-    replaced = False
     for message in messages:
         rendered_message = dict(message)
         content = rendered_message.get("content", "")
         if isinstance(content, str):
-            for placeholder in placeholders:
-                if placeholder in content:
-                    content = content.replace(placeholder, schema_text)
-                    replaced = True
-            rendered_message["content"] = content
+            rendered_message["content"] = _render_schema_placeholders(content, output_schema=schema)
         rendered.append(rendered_message)
-    if replaced:
-        return rendered
-    return [
-        *rendered,
-        {
-            "role": "user",
-            "content": "Output format for this structured response:\n\n" + schema_text,
-        },
-    ]
+    return rendered
+
+
+def _render_schema_placeholders(content: str, *, output_schema: type[BaseModel]) -> str:
+    def replace(match: re.Match[str]) -> str:
+        schema_name = match.group(1)
+        schema = _resolve_schema_placeholder(schema_name, output_schema=output_schema)
+        return _schema_prompt(schema)
+
+    return _SCHEMA_PLACEHOLDER_RE.sub(replace, content)
+
+
+def _resolve_schema_placeholder(
+    schema_name: str, *, output_schema: type[BaseModel]
+) -> type[BaseModel]:
+    candidates: list[type[BaseModel]] = []
+    if output_schema.__name__ == schema_name:
+        candidates.append(output_schema)
+    for candidate in _iter_pydantic_model_subclasses():
+        if candidate.__name__ == schema_name:
+            candidates.append(candidate)
+
+    unique_candidates = list(dict.fromkeys(candidates))
+    if not unique_candidates:
+        raise StructuredLLMError(
+            f"Unknown schema placeholder `{{{{{schema_name}}}}}`: "
+            f"no Pydantic schema named `{schema_name}` is available."
+        )
+    if len(unique_candidates) > 1:
+        raise StructuredLLMError(
+            f"Ambiguous schema placeholder `{{{{{schema_name}}}}}`: "
+            f"multiple Pydantic schemas named `{schema_name}` are available."
+        )
+    return unique_candidates[0]
+
+
+def _iter_pydantic_model_subclasses() -> list[type[BaseModel]]:
+    seen: set[type[BaseModel]] = set()
+    stack = list(BaseModel.__subclasses__())
+    ordered: list[type[BaseModel]] = []
+    while stack:
+        candidate = stack.pop()
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        ordered.append(candidate)
+        stack.extend(candidate.__subclasses__())
+    return ordered
 
 
 def _extract_assistant_content(response_payload: dict[str, Any] | None, *, limit: int = 8000) -> str:

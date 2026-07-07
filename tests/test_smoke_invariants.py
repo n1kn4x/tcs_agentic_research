@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from pydantic import BaseModel
+import pytest
 
 from tcs_agentic_research.agents.critics import (
     SolvedCheckAgent,
@@ -15,7 +15,12 @@ from tcs_agentic_research.leap.harness import (
     DecompositionReview,
     FormalProofCandidate,
 )
-from tcs_agentic_research.llm import LLMRouter, _llm_json_schema
+from tcs_agentic_research.llm import (
+    LLMRouter,
+    StructuredLLMError,
+    _llm_json_schema,
+    _prepare_structured_messages,
+)
 from tcs_agentic_research.prompt_loader import load_prompt
 from tcs_agentic_research.schemas import (
     ArtifactRef,
@@ -89,22 +94,31 @@ def test_repo_structured_prompts_intentionally_keep_schema_placeholders() -> Non
         assert "Use the complete JSON schema inserted below" in text
 
 
-class SimpleStructuredOutput(BaseModel):
-    value: str
-
-
-def test_structured_calls_support_custom_messages_without_placeholders(tmp_path: Path) -> None:
-    # Compatibility fallback for ad hoc/custom prompts only. Repo prompts should keep their
-    # schema placeholders so the full schema is injected at the intended prompt location.
-    expected = SimpleStructuredOutput(value="ok")
-    actual = _router(_store(tmp_path)).complete_structured(
-        task_type="deep",
-        messages=[{"role": "system", "content": "Return JSON."}],
-        schema=SimpleStructuredOutput,
-        mock_output=expected,
+def test_schema_placeholders_are_resolved_by_name_not_by_output_schema() -> None:
+    rendered = _prepare_structured_messages(
+        [{"role": "system", "content": "Use {{ResearchReport}}."}],
+        ExperimentPlan,
     )
 
-    assert actual == expected
+    content = rendered[0]["content"]
+    assert "{{ResearchReport}}" not in content
+    assert "Complete JSON Schema for `ResearchReport`." in content
+    assert "Complete JSON Schema for `ExperimentPlan`." not in content
+    assert len(rendered) == 1
+
+
+def test_structured_messages_without_placeholders_are_not_appended() -> None:
+    messages = [{"role": "system", "content": "Return JSON."}]
+
+    assert _prepare_structured_messages(messages, ResearchReport) == messages
+
+
+def test_unknown_schema_placeholders_raise() -> None:
+    with pytest.raises(StructuredLLMError, match="DoesNotExist"):
+        _prepare_structured_messages(
+            [{"role": "system", "content": "Use {{DoesNotExist}}."}],
+            ResearchReport,
+        )
 
 
 def test_llm_schema_omits_system_owned_fields() -> None:
