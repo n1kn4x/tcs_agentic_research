@@ -106,9 +106,11 @@ class LLMRouter:
     ) -> T:
         """Complete a structured call and validate it against ``schema``.
 
-        ``mock_output`` is only usable in dry-run mode. In real runs, schema/API
-        failures are logged and raised after retry/repair attempts; mock outputs
-        are never returned as a recovery path.
+        ``mock_output`` is only usable in dry-run mode. In real runs, the JSON Schema is
+        provided twice: injected into prompt placeholders for model-visible instructions,
+        and sent through vLLM ``guided_json``/``response_format`` when available. Schema/API
+        failures are logged and raised after retry/repair attempts; mock outputs are never
+        returned as a recovery path.
         """
         profile_name, profile = self.select_profile(task_type)
         started = time.perf_counter()
@@ -197,7 +199,8 @@ class LLMRouter:
                     _truncate(str(exc), 1000),
                 )
                 # Ask the same endpoint to repair with the invalid response and
-                # concrete validation error. The next call still sends guided_json.
+                # concrete validation error. The next call still sends guided_json in
+                # addition to the schema already injected through prompt placeholders.
                 messages = messages + [
                     {
                         "role": "assistant",
@@ -255,6 +258,8 @@ class LLMRouter:
         if json_schema is not None:
             body["response_format"] = {"type": "json_object"}
             # vLLM supports guided decoding through guided_json in recent versions.
+            # This is additive to the in-prompt schema placeholder, which remains useful
+            # because backend support and adherence vary across vLLM/model versions.
             body["guided_json"] = json_schema
         headers = {"Authorization": f"Bearer {profile.api_key}"}
         url = profile.base_url.rstrip("/") + "/chat/completions"
@@ -323,10 +328,10 @@ def _prepare_structured_messages(
 ) -> list[dict[str, str]]:
     """Insert the schema prompt into structured-call messages.
 
-    If a message contains the schema-specific placeholder (for example
-    ``{{InitializationBundle}}``), replace it in place. If no matching placeholder is
-    present, append a final user message carrying the schema so existing custom prompts
-    continue to work.
+    Repo prompts contain a schema-specific placeholder (for example ``{{InitializationBundle}}``);
+    replace it in place so the model sees the full schema exactly where the prompt says 
+    it will appear. If no matching placeholder is present, append a final user message 
+    carrying the schema as a compatibility fallback for external/custom prompts.
     """
     schema_text = _schema_prompt(schema)
     placeholders = [schema_placeholder(schema), "{{Schema}}"]
@@ -370,8 +375,8 @@ def _structured_repair_prompt(schema: type[BaseModel], exc: Exception) -> str:
         "Validation error:\n"
         f"{_truncate(str(exc), 6000)}\n\n"
         "Return ONLY corrected JSON that validates against the schema already included "
-        "in the prompt and the guided schema provided by the API. Do not include Markdown, "
-        "prose, or an `error` object. Do not add extra fields."
+        "in the prompt and, when supported, the guided schema provided by the API. "
+        "Do not include Markdown, prose, or an `error` object. Do not add extra fields."
     )
 
 

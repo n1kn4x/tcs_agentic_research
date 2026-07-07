@@ -171,8 +171,10 @@ Partial LEAP results are still recorded: proved lemmas, open goals, blocked goal
 ## Prompts and schemas
 
 Prompts live in `src/tcs_agentic_research/prompts/*.md` and are intended to be edited.
-The corresponding Pydantic schema which determines the output format is sent to vLLM using `guided_json`/`response_format`.
-returned JSON with the same Pydantic model.
+Structured prompts contain schema placeholders like `{{ResearchReport}}`. At runtime 
+each placeholder is replaced with the full Pydantic JSON Schema. Also the same schema is sent to vLLM
+through `guided_json`/`response_format` when supported. Returned JSON is validated with
+the same Pydantic model.
 
 All state-changing agent outputs use Pydantic models in `src/tcs_agentic_research/schemas.py` and
 are serialized as JSON/JSONL/YAML artifacts.

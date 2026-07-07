@@ -82,7 +82,7 @@ def _router(store: ArtifactStore) -> LLMRouter:
     )
 
 
-def test_structured_prompts_keep_schema_placeholders() -> None:
+def test_repo_structured_prompts_intentionally_keep_schema_placeholders() -> None:
     for prompt_name, schema in PROMPT_SCHEMAS.items():
         text = load_prompt(prompt_name)
         assert "{{" + schema.__name__ + "}}" in text
@@ -93,7 +93,9 @@ class SimpleStructuredOutput(BaseModel):
     value: str
 
 
-def test_structured_calls_do_not_require_prompt_schema_placeholders(tmp_path: Path) -> None:
+def test_structured_calls_support_custom_messages_without_placeholders(tmp_path: Path) -> None:
+    # Compatibility fallback for ad hoc/custom prompts only. Repo prompts should keep their
+    # schema placeholders so the full schema is injected at the intended prompt location.
     expected = SimpleStructuredOutput(value="ok")
     actual = _router(_store(tmp_path)).complete_structured(
         task_type="deep",
