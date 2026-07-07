@@ -16,6 +16,10 @@ from pydantic import BaseModel, ValidationError
 from .artifact_store import ArtifactStore
 from .schemas import AppConfig, ModelCallRecord, ModelProfile, RouterSettings
 
+def schema_placeholder(schema: type[BaseModel]) -> str:
+    return "{{" + schema.__name__ + "}}"
+
+
 T = TypeVar("T", bound=BaseModel)
 
 logger = logging.getLogger(__name__)
@@ -159,7 +163,7 @@ class LLMRouter:
             _log_structured_failure(task_type, schema.__name__, failures)
             raise ValueError("mock_output may only be supplied when LLMRouter.dry_run is true")
 
-        messages = _with_structured_output_instruction(messages, schema)
+        messages = _prepare_structured_messages(messages, schema)
         for attempt in range(self.settings.max_retries + 1):
             try:
                 response_payload = self._post_chat_completion(
@@ -295,6 +299,82 @@ class LLMRouter:
             self.store.append_model_call(record)
 
 
+def _prepare_structured_messages(
+    messages: list[dict[str, str]], schema: type[BaseModel]
+) -> list[dict[str, str]]:
+    """Inject schema documentation into prompt placeholders or append it as a fallback.
+
+    Prompt files may contain a schema-specific placeholder such as
+    ``{{InitializationBundle}}`` where the complete output contract should appear.
+    The replacement includes the full Pydantic JSON Schema, including recursively
+    referenced ``$defs`` and enum values.  If a prompt has no matching placeholder,
+    keep the historical behavior of appending a schema contract as an extra message.
+    """
+    schema_text = _schema_prompt(schema)
+    placeholder = schema_placeholder(schema)
+    rendered: list[dict[str, str]] = []
+    found_placeholder = False
+    for message in messages:
+        content = message.get("content", "")
+        if placeholder in content:
+            found_placeholder = True
+            content = content.replace(placeholder, schema_text)
+        rendered.append({**message, "content": content})
+    if found_placeholder:
+        return rendered
+    return _with_structured_output_instruction(rendered, schema)
+
+
+def _schema_prompt(schema: type[BaseModel]) -> str:
+    """Render a complete, prompt-friendly schema contract for a Pydantic model."""
+    schema_dict = schema.model_json_schema()
+    schema_json = json.dumps(schema_dict, indent=2, sort_keys=True)
+    required = schema_dict.get("required", [])
+    properties = schema_dict.get("properties", {})
+    field_lines = []
+    for name, spec in properties.items():
+        marker = "required" if name in required else "optional"
+        field_lines.append(f"- {name}: {marker}; {_describe_schema_fragment(spec)}")
+    if not field_lines:
+        field_lines.append("- [schema has no declared top-level fields]")
+    return (
+        f"Structured-output contract for schema `{schema.__name__}`.\n"
+        "Return exactly one JSON object. Do not wrap it in another key, Markdown, prose, "
+        "an error object, or a reasoning transcript. Do not add fields not present in "
+        "the schema.\n"
+        "Fields marked with `additionalProperties: false` reject any extra keys.\n\n"
+        "Top-level fields:\n"
+        f"{chr(10).join(field_lines)}\n\n"
+        "Complete JSON Schema, including recursive `$defs` sub-schemas and enum values:\n"
+        f"{schema_json}"
+    )
+
+
+def _describe_schema_fragment(fragment: dict[str, Any]) -> str:
+    """Return a compact description for one JSON-schema fragment."""
+    if "enum" in fragment:
+        return "one of " + ", ".join(json.dumps(value) for value in fragment["enum"])
+    if "const" in fragment:
+        return "constant " + json.dumps(fragment["const"])
+    if "$ref" in fragment:
+        return "object " + fragment["$ref"].rsplit("/", maxsplit=1)[-1]
+    if "anyOf" in fragment:
+        return " or ".join(_describe_schema_fragment(item) for item in fragment["anyOf"])
+    if "allOf" in fragment:
+        return " and ".join(_describe_schema_fragment(item) for item in fragment["allOf"])
+    fragment_type = fragment.get("type")
+    if fragment_type == "array":
+        items = fragment.get("items", {})
+        if isinstance(items, dict):
+            return "array of " + _describe_schema_fragment(items)
+        return "array"
+    if isinstance(fragment_type, list):
+        return " or ".join(str(item) for item in fragment_type)
+    if fragment_type:
+        return str(fragment_type)
+    return fragment.get("title", "object")
+
+
 def _extract_assistant_content(response_payload: dict[str, Any] | None, *, limit: int = 8000) -> str:
     if response_payload is None:
         return "[No response payload was available from the previous attempt.]"
@@ -309,39 +389,19 @@ def _extract_assistant_content(response_payload: dict[str, Any] | None, *, limit
 def _with_structured_output_instruction(
     messages: list[dict[str, str]], schema: type[BaseModel]
 ) -> list[dict[str, str]]:
-    """Append a compact but concrete schema instruction for backends that ignore guided_json."""
-    schema_dict = schema.model_json_schema()
-    required = schema_dict.get("required", [])
-    properties = schema_dict.get("properties", {})
-    field_lines = []
-    for name, spec in properties.items():
-        marker = "required" if name in required else "optional"
-        type_hint = spec.get("type") or ("enum" if "enum" in spec else spec.get("$ref", "object"))
-        field_lines.append(f"- {name} ({marker}, {type_hint})")
-    schema_json = json.dumps(schema_dict, indent=2, sort_keys=True)
-    instruction = (
-        f"Structured-output contract for schema `{schema.__name__}`.\n"
-        "Return exactly one JSON object. Do not wrap it in another key, Markdown, prose, "
-        "an error object, or a reasoning transcript. Do not add fields not present in the schema.\n\n"
-        "Top-level fields:\n"
-        f"{chr(10).join(field_lines) if field_lines else '- [schema has no declared fields]'}\n\n"
-        "Full JSON Schema, truncated if necessary:\n"
-        f"{_truncate(schema_json, 16000)}"
-    )
-    return [*messages, {"role": "user", "content": instruction}]
+    """Append a concrete schema instruction for backends that ignore guided_json."""
+    return [*messages, {"role": "user", "content": _schema_prompt(schema)}]
 
 
 def _structured_repair_prompt(schema: type[BaseModel], exc: Exception) -> str:
-    schema_json = json.dumps(schema.model_json_schema(), indent=2, sort_keys=True)
     return (
         f"The previous response did not validate for schema `{schema.__name__}`.\n\n"
         "Validation error:\n"
         f"{_truncate(str(exc), 6000)}\n\n"
         "Return ONLY corrected JSON. Do not include Markdown, prose, or an `error` object. "
-        "Use exactly the field names, required fields, and enum values in this JSON Schema. "
+        "Use exactly the field names, required fields, and enum values in this schema. "
         "Do not add extra fields.\n\n"
-        "JSON Schema:\n"
-        f"{_truncate(schema_json, 16000)}"
+        f"{_schema_prompt(schema)}"
     )
 
 
