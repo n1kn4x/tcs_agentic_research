@@ -159,6 +159,8 @@ class LLMRouter:
             _log_structured_failure(task_type, schema.__name__, failures)
             raise ValueError("mock_output may only be supplied when LLMRouter.dry_run is true")
 
+        messages = _prepare_structured_messages(messages, schema)
+
         for attempt in range(self.settings.max_retries + 1):
             try:
                 response_payload = self._post_chat_completion(
@@ -292,6 +294,67 @@ class LLMRouter:
             self.store.append_model_call(record)
 
 
+def schema_placeholder(schema: type[BaseModel] | str) -> str:
+    """Return the named prompt placeholder for a structured-output schema."""
+    name = schema if isinstance(schema, str) else schema.__name__
+    return "{{" + name + "}}"
+
+
+def _schema_prompt(schema: type[BaseModel]) -> str:
+    """Render a complete JSON Schema block suitable for inclusion in prompts.
+
+    Pydantic's JSON Schema contains recursive sub-schemas in ``$defs`` and explicit
+    ``enum``/``const`` values, which gives the model the same output layout that guided
+    decoding/validation enforces out of band.
+    """
+    schema_json = json.dumps(schema.model_json_schema(), indent=2, sort_keys=True)
+    return (
+        f"Complete JSON Schema for `{schema.__name__}`.\n"
+        "Return ONLY a JSON value that validates against this schema. "
+        "Nested object schemas are included recursively under `$defs`; "
+        "enum/const entries list the permitted field values. "
+        "Do not include Markdown, prose, comments, an `error` object, or extra fields.\n\n"
+        "```json\n"
+        f"{schema_json}\n"
+        "```"
+    )
+
+
+def _prepare_structured_messages(
+    messages: list[dict[str, str]], schema: type[BaseModel]
+) -> list[dict[str, str]]:
+    """Insert the schema prompt into structured-call messages.
+
+    If a message contains the schema-specific placeholder (for example
+    ``{{InitializationBundle}}``), replace it in place. If no matching placeholder is
+    present, append a final user message carrying the schema so existing custom prompts
+    continue to work.
+    """
+    schema_text = _schema_prompt(schema)
+    placeholders = [schema_placeholder(schema), "{{Schema}}"]
+    rendered: list[dict[str, str]] = []
+    replaced = False
+    for message in messages:
+        rendered_message = dict(message)
+        content = rendered_message.get("content", "")
+        if isinstance(content, str):
+            for placeholder in placeholders:
+                if placeholder in content:
+                    content = content.replace(placeholder, schema_text)
+                    replaced = True
+            rendered_message["content"] = content
+        rendered.append(rendered_message)
+    if replaced:
+        return rendered
+    return [
+        *rendered,
+        {
+            "role": "user",
+            "content": "Output format for this structured response:\n\n" + schema_text,
+        },
+    ]
+
+
 def _extract_assistant_content(response_payload: dict[str, Any] | None, *, limit: int = 8000) -> str:
     if response_payload is None:
         return "[No response payload was available from the previous attempt.]"
@@ -308,8 +371,9 @@ def _structured_repair_prompt(schema: type[BaseModel], exc: Exception) -> str:
         f"The previous response did not validate for schema `{schema.__name__}`.\n\n"
         "Validation error:\n"
         f"{_truncate(str(exc), 6000)}\n\n"
-        "Return ONLY corrected JSON that validates against the guided schema provided by the API. "
-        "Do not include Markdown, prose, or an `error` object. Do not add extra fields."
+        "Return ONLY corrected JSON that validates against the schema already included "
+        "in the prompt and the guided schema provided by the API. Do not include Markdown, "
+        "prose, or an `error` object. Do not add extra fields."
     )
 
 

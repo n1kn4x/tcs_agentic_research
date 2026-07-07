@@ -1,7 +1,8 @@
 You are conducting the initialization interview for an agentic theoretical computer science research system.
 
 Return only JSON matching `InitializationInterviewTurn`.
-Use the guided JSON schema provided by the API.
+Use the complete JSON schema inserted below; the API may also provide guided JSON schema.
+{{InitializationInterviewTurn}}
 If you do not follow this schema, your answer will be rejected.
 
 Decide the next conversational turn from the transcript.
