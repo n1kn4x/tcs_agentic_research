@@ -168,10 +168,11 @@ class LLMRouter:
                     messages,
                     temperature=profile.temperature if temperature is None else temperature,
                     max_tokens=profile.max_tokens if max_tokens is None else max_tokens,
-                    json_schema=schema.model_json_schema(),
+                    json_schema=_llm_json_schema(schema),
                 )
                 content = response_payload["choices"][0]["message"]["content"]
                 payload = _extract_json(content)
+                _strip_system_owned_payload_fields(payload)
                 result = schema.model_validate(payload)
                 self._log_call(
                     task_type,
@@ -301,19 +302,16 @@ def schema_placeholder(schema: type[BaseModel] | str) -> str:
 
 
 def _schema_prompt(schema: type[BaseModel]) -> str:
-    """Render a complete JSON Schema block suitable for inclusion in prompts.
-
-    Pydantic's JSON Schema contains recursive sub-schemas in ``$defs`` and explicit
-    ``enum``/``const`` values, which gives the model the same output layout that guided
-    decoding/validation enforces out of band.
-    """
-    schema_json = json.dumps(schema.model_json_schema(), indent=2, sort_keys=True)
+    """Render the model-facing JSON Schema for structured output prompts."""
+    schema_json = json.dumps(_llm_json_schema(schema), indent=2, sort_keys=True)
     return (
         f"Complete JSON Schema for `{schema.__name__}`.\n"
         "Return ONLY a JSON value that validates against this schema. "
-        "Nested object schemas are included recursively under `$defs`; "
-        "enum/const entries list the permitted field values. "
-        "Do not include Markdown, prose, comments, an `error` object, or extra fields.\n\n"
+        "System-owned fields such as IDs, timestamps, hashes, and artifact references "
+        "are intentionally omitted; the application fills them after validation. "
+        "Do not invent IDs. If a reference list requires an ID not present in the input, "
+        "leave it empty. Do not include Markdown, prose, comments, an `error` object, "
+        "or extra fields.\n\n"
         "```json\n"
         f"{schema_json}\n"
         "```"
@@ -392,6 +390,79 @@ def _log_structured_failure(task_type: str, schema_name: str, failures: list[str
         schema_name,
         _truncate("; ".join(failures), 4000),
     )
+
+
+SYSTEM_OWNED_SCHEMA_FIELDS = {
+    "answer_id",
+    "artifact_refs",
+    "call_id",
+    "claim_id",
+    "candidate_id",
+    "created_at",
+    "dag_id",
+    "duplicate_id",
+    "event_id",
+    "evidence_id",
+    "extract_id",
+    "goal_id",
+    "imported_at",
+    "metadata_path",
+    "obligation_id",
+    "paper_id",
+    "proposal_id",
+    "quote_id",
+    "related_proposal_ids",
+    "related_report_ids",
+    "depends_on_claim_ids",
+    "supersedes_claim_ids",
+    "report_id",
+    "result_id",
+    "run_id",
+    "sha256",
+    "source_refs",
+    "statement_id",
+    "task_id",
+    "text_artifact_ref",
+    "updated_at",
+    "verdict_id",
+}
+
+
+def _llm_json_schema(schema: type[BaseModel]) -> dict[str, Any]:
+    payload = schema.model_json_schema()
+    _strip_system_owned_schema_fields(payload)
+    return payload
+
+
+def _strip_system_owned_schema_fields(node: Any) -> None:
+    if isinstance(node, dict):
+        properties = node.get("properties")
+        if isinstance(properties, dict):
+            for field_name in SYSTEM_OWNED_SCHEMA_FIELDS:
+                properties.pop(field_name, None)
+            required = node.get("required")
+            if isinstance(required, list):
+                node["required"] = [
+                    field_name
+                    for field_name in required
+                    if field_name not in SYSTEM_OWNED_SCHEMA_FIELDS
+                ]
+        for value in node.values():
+            _strip_system_owned_schema_fields(value)
+    elif isinstance(node, list):
+        for item in node:
+            _strip_system_owned_schema_fields(item)
+
+
+def _strip_system_owned_payload_fields(node: Any) -> None:
+    if isinstance(node, dict):
+        for field_name in SYSTEM_OWNED_SCHEMA_FIELDS:
+            node.pop(field_name, None)
+        for value in node.values():
+            _strip_system_owned_payload_fields(value)
+    elif isinstance(node, list):
+        for item in node:
+            _strip_system_owned_payload_fields(item)
 
 
 def _extract_json(content: str) -> Any:

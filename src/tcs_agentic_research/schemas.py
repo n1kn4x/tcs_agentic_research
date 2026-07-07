@@ -284,7 +284,7 @@ class ProofObligation(StrictModel):
 
 class ResearchReport(StrictModel):
     report_id: str = Field(default_factory=lambda: new_id("report"))
-    proposal_id: str
+    proposal_id: str = ""
     outcome: ReportOutcome
     executive_summary: str
     claims_generated: list[ClaimRecord] = Field(default_factory=list)

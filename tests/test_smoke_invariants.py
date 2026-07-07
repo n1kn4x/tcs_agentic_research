@@ -15,7 +15,7 @@ from tcs_agentic_research.leap.harness import (
     DecompositionReview,
     FormalProofCandidate,
 )
-from tcs_agentic_research.llm import LLMRouter
+from tcs_agentic_research.llm import LLMRouter, _llm_json_schema
 from tcs_agentic_research.prompt_loader import load_prompt
 from tcs_agentic_research.schemas import (
     ArtifactRef,
@@ -82,11 +82,11 @@ def _router(store: ArtifactStore) -> LLMRouter:
     )
 
 
-def test_structured_prompts_do_not_inline_schema_placeholders() -> None:
+def test_structured_prompts_keep_schema_placeholders() -> None:
     for prompt_name, schema in PROMPT_SCHEMAS.items():
         text = load_prompt(prompt_name)
-        assert "{{" + schema.__name__ + "}}" not in text
-        assert "Use the guided JSON schema provided by the API." in text
+        assert "{{" + schema.__name__ + "}}" in text
+        assert "Use the complete JSON schema inserted below" in text
 
 
 class SimpleStructuredOutput(BaseModel):
@@ -103,6 +103,45 @@ def test_structured_calls_do_not_require_prompt_schema_placeholders(tmp_path: Pa
     )
 
     assert actual == expected
+
+
+def test_llm_schema_omits_system_owned_fields() -> None:
+    schema = _llm_json_schema(ResearchReport)
+    property_names = _schema_property_names(schema)
+
+    for field_name in [
+        "proposal_id",
+        "report_id",
+        "claim_id",
+        "evidence_id",
+        "obligation_id",
+        "artifact_refs",
+        "created_at",
+        "updated_at",
+        "related_proposal_ids",
+        "related_report_ids",
+    ]:
+        assert field_name not in property_names
+
+    report = ResearchReport.model_validate(
+        {"outcome": "partially_succeeded", "executive_summary": "draft"}
+    )
+    assert report.proposal_id == ""
+    assert report.report_id.startswith("report_")
+
+
+def _schema_property_names(node: object) -> set[str]:
+    names: set[str] = set()
+    if isinstance(node, dict):
+        properties = node.get("properties")
+        if isinstance(properties, dict):
+            names.update(str(key) for key in properties)
+        for value in node.values():
+            names.update(_schema_property_names(value))
+    elif isinstance(node, list):
+        for item in node:
+            names.update(_schema_property_names(item))
+    return names
 
 
 def test_latest_claim_replay_uses_newest_record(tmp_path: Path) -> None:

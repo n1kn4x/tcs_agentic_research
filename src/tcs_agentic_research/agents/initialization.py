@@ -172,6 +172,10 @@ class InitializationAgent:
         self, bundle: InitializationBundle, *, extra_refs: list[ArtifactRef] | None = None
     ) -> ResearchState:
         task_ref = self.store.write_text(ArtifactStore.RESEARCH_TASK, bundle.research_task_markdown)
+        for entry in bundle.nomenclature_entries:
+            # Initialization nomenclature provenance is the task artifact just written, not
+            # model-invented source refs.
+            entry.source_refs = [task_ref]
         nomenclature_payload = {
             "version": 1,
             "symbols": [entry.model_dump(mode="json") for entry in bundle.nomenclature_entries],

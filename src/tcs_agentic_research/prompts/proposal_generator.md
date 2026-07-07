@@ -13,7 +13,7 @@ Generate exactly one concrete proposal. It must include:
 - success and partial success criteria;
 - required tools (literature, Lean/LEAP, experiments/coding when needed);
 - known risks/barriers;
-- explicit resource model.
+- explicit resource model, or a component-wise resource model template plus open obligations for the missing bounds.
 
-Prefer proposals that create auditable artifacts and avoid unsupported breakthrough claims. Use prior ledgers to avoid repetition.
+If key technical facts are unknown, state them as expected lemmas, required checks, or partial-success criteria rather than pretending they are solved. Prefer proposals that create auditable artifacts and avoid unsupported breakthrough claims. Use prior ledgers to avoid repetition.
 Your answer will be checked by an independent proposal critic.
