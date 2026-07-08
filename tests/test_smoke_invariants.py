@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import httpx
 import pytest
 
 from tcs_agentic_research.agents.critics import (
@@ -89,6 +90,50 @@ def _router(store: ArtifactStore) -> LLMRouter:
         store=store,
         dry_run=True,
     )
+
+
+def test_chat_completion_http_errors_include_vllm_response_body(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeClient:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            pass
+
+        def __enter__(self) -> "FakeClient":
+            return self
+
+        def __exit__(self, *args: object) -> bool:
+            return False
+
+        def post(self, url: str, **kwargs: object) -> httpx.Response:
+            request = httpx.Request("POST", url)
+            return httpx.Response(
+                400,
+                request=request,
+                json={
+                    "error": {
+                        "message": "This model's maximum context length is 4096 tokens.",
+                        "type": "BadRequestError",
+                        "code": 400,
+                    }
+                },
+            )
+
+    monkeypatch.setattr("tcs_agentic_research.llm.httpx.Client", FakeClient)
+    router = LLMRouter(RouterSettings(profiles={"deep": ModelProfile(model="mock")}))
+
+    with pytest.raises(httpx.HTTPStatusError) as exc_info:
+        router._post_chat_completion(
+            ModelProfile(model="mock"),
+            [{"role": "user", "content": "too much context"}],
+            temperature=0.0,
+            max_tokens=4096,
+        )
+
+    message = str(exc_info.value)
+    assert "vLLM/OpenAI-compatible server response body" in message
+    assert "maximum context length" in message
+    assert '"type": "BadRequestError"' in message
 
 
 def test_repo_structured_prompts_intentionally_keep_schema_placeholders() -> None:

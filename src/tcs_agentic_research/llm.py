@@ -266,7 +266,7 @@ class LLMRouter:
         url = profile.base_url.rstrip("/") + "/chat/completions"
         with httpx.Client(timeout=self.settings.timeout_seconds) as client:
             response = client.post(url, headers=headers, json=body)
-            response.raise_for_status()
+            _raise_for_status_with_body(response)
             return response.json()
 
     def _log_call(
@@ -299,6 +299,27 @@ class LLMRouter:
         )
         if self.store is not None:
             self.store.append_model_call(record)
+
+
+def _raise_for_status_with_body(response: httpx.Response) -> None:
+    """Raise HTTP errors with the provider's response body included."""
+    try:
+        response.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        body = _format_http_error_body(response)
+        message = f"{exc}\nvLLM/OpenAI-compatible server response body: {body}"
+        raise httpx.HTTPStatusError(message, request=exc.request, response=exc.response) from exc
+
+
+def _format_http_error_body(response: httpx.Response, *, limit: int = 4000) -> str:
+    text = response.text.strip()
+    if not text:
+        return "<empty>"
+    try:
+        payload = response.json()
+    except ValueError:
+        return _truncate(text, limit)
+    return _truncate(json.dumps(payload, ensure_ascii=False, sort_keys=True), limit)
 
 
 def schema_placeholder(schema: type[BaseModel] | str) -> str:
