@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from ..artifact_store import ArtifactStore
-from ..literature.fetchers import LiteratureFetcher
+from ..literature.fetchers import LiteratureFetcher, parse_arxiv_id, parse_doi
 from ..literature.nomenclature import NomenclatureMapper
 from ..literature.openalex import OpenAlexClient
 from ..literature.pdf_text import PDFTextExtractor
@@ -31,6 +31,7 @@ from ..schemas import (
     LiteratureExtract,
     LiteratureQueryAnswer,
     LiteratureQuote,
+    LiteratureSource,
     LiteratureStatement,
     PaperMetadata,
 )
@@ -57,6 +58,24 @@ class LiteratureResearcher:
     # ------------------------------------------------------------------
     # Import/fetch capabilities
     # ------------------------------------------------------------------
+    def import_source(self, source: LiteratureSource) -> PaperMetadata:
+        token = source.source.strip()
+        citation_key = source.citation_key or None
+        arxiv_id = parse_arxiv_id(token) or (token if source.source_type == "arxiv" else None)
+        if arxiv_id:
+            return self.import_arxiv(
+                str(arxiv_id), citation_key=citation_key, extract_text=source.extract_text
+            )
+        doi = parse_doi(token) or (token if source.source_type == "doi" else None)
+        if doi:
+            return self.import_doi(str(doi), citation_key=citation_key, extract_text=source.extract_text)
+        return self.import_url(
+            token,
+            citation_key=citation_key,
+            title=source.title or None,
+            extract_text=source.extract_text,
+        )
+
     def import_paper(self, paper: PaperMetadata) -> PaperMetadata:
         """Register already-known paper metadata in ``LiteratureDB``."""
         if paper.metadata_path:

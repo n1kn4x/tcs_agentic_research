@@ -14,10 +14,12 @@ from ..schemas import (
     CriticDecision,
     ProposalCritique,
     ProposalLedgerEntry,
+    ProposalLoopAction,
     ProposalRisk,
     ResearchProposal,
     ResearchState,
 )
+from .literature import LiteratureResearcher
 
 
 class ProposalAgent:
@@ -25,9 +27,14 @@ class ProposalAgent:
         self.store = store
         self.router = router
         self.prompt_dir = prompt_dir
+        self.literature = LiteratureResearcher(store, router, prompt_dir=prompt_dir)
 
     def generate_and_review(
-        self, state: ResearchState, *, max_revisions: int = 2
+        self,
+        state: ResearchState,
+        *,
+        max_revisions: int = 2,
+        max_thinking_loop_rounds: int = 15,
     ) -> tuple[ResearchProposal, ProposalCritique, str]:
         task = self.store.read_text(ArtifactStore.RESEARCH_TASK)
         context = self._context_blob(state, task)
@@ -37,17 +44,20 @@ class ProposalAgent:
         proposal = self._mock_proposal(state)
 
         for attempt in range(max_revisions + 1):
-            proposal = self._generate_proposal(
+            proposal, trace_refs = self._generate_proposal(
                 context=context,
+                iteration_dir=iteration_dir,
                 attempt=attempt,
                 previous_critique=critique,
                 dry_run_seed=proposal,
+                max_rounds=max_thinking_loop_rounds,
             )
             proposal_ref = self._write_proposal_artifacts(iteration_dir, proposal)
+            event_refs = [proposal_ref, *trace_refs]
             self._record_proposal_event(
                 proposal_id=proposal.proposal_id,
                 event_type="generated" if attempt == 0 else "revised",
-                proposal_ref=proposal_ref,
+                artifact_refs=event_refs,
                 proposal=proposal,
             )
 
@@ -55,7 +65,7 @@ class ProposalAgent:
             self._record_proposal_event(
                 proposal_id=proposal.proposal_id,
                 event_type="critic_review",
-                proposal_ref=proposal_ref,
+                artifact_refs=event_refs,
                 critique=critique,
                 reason=critique.summary,
             )
@@ -67,13 +77,14 @@ class ProposalAgent:
                     proposal,
                     critique,
                     proposal_ref,
+                    trace_refs=trace_refs,
                     reason="Accepted by proposal critic.",
                 )
             if critique.decision == CriticDecision.reject:
                 self._record_proposal_event(
                     proposal_id=proposal.proposal_id,
                     event_type="rejected",
-                    proposal_ref=proposal_ref,
+                    artifact_refs=event_refs,
                     proposal=proposal,
                     critique=critique,
                     reason="Rejected by proposal critic.",
@@ -96,6 +107,7 @@ class ProposalAgent:
             proposal,
             critique,
             proposal_ref,
+            trace_refs=[],
             reason="Accepted dry-run mock proposal after failed proposal revisions.",
         )
 
@@ -103,10 +115,72 @@ class ProposalAgent:
         self,
         *,
         context: str,
+        iteration_dir: str,
         attempt: int,
         previous_critique: ProposalCritique | None,
         dry_run_seed: ResearchProposal,
-    ) -> ResearchProposal:
+        max_rounds: int = 15,
+    ) -> tuple[ResearchProposal, list[ArtifactRef]]:
+        trace: list[dict[str, object]] = []
+        if self.router.dry_run:
+            trace.append(
+                {
+                    "round": 0,
+                    "action": "commit_proposal",
+                    "observation": "dry-run returned deterministic proposal seed",
+                }
+            )
+            return dry_run_seed, self._write_proposal_trace(
+                iteration_dir, attempt=attempt, proposal=dry_run_seed, trace=trace
+            )
+
+        max_rounds = max(1, max_rounds)
+        for round_index in range(1, max_rounds + 1):
+            action = self._choose_loop_action(
+                context=context,
+                attempt=attempt,
+                round_index=round_index,
+                max_rounds=max_rounds,
+                previous_critique=previous_critique,
+                trace=trace,
+            )
+            trace.append({"round": round_index, "action": action.model_dump(mode="json")})
+            if action.action_type == "commit_proposal":
+                if action.proposal is None:
+                    trace.append(
+                        {
+                            "round": round_index,
+                            "observation": "commit_proposal action omitted the required proposal field",
+                        }
+                    )
+                    continue
+                proposal = action.proposal
+                trace.append({"round": round_index, "observation": "proposal committed"})
+                return proposal, self._write_proposal_trace(
+                    iteration_dir, attempt=attempt, proposal=proposal, trace=trace
+                )
+            observation = self._execute_loop_action(action)
+            trace.append({"round": round_index, "observation": observation})
+
+        trace_refs = self._write_uncommitted_proposal_trace(
+            iteration_dir, attempt=attempt, trace=trace
+        )
+        raise RuntimeError(
+            "Proposal generator did not commit a proposal within "
+            f"{max_rounds} thinking-loop round(s). Trace: "
+            f"{', '.join(ref.path for ref in trace_refs)}"
+        )
+
+    def _choose_loop_action(
+        self,
+        *,
+        context: str,
+        attempt: int,
+        round_index: int,
+        max_rounds: int,
+        previous_critique: ProposalCritique | None,
+        trace: list[dict[str, object]],
+    ) -> ProposalLoopAction:
         messages = [
             {
                 "role": "system",
@@ -115,18 +189,72 @@ class ProposalAgent:
             {
                 "role": "user",
                 "content": (
-                    f"Context for proposal generation (attempt {attempt + 1}):\n{context}\n\n"
+                    f"Proposal-generation attempt {attempt + 1}, loop round {round_index} of "
+                    f"{max_rounds}.\n"
+                    "If this is the final round, return `commit_proposal` with the "
+                    "`proposal` field populated.\n\n"
+                    f"Context:\n{context}\n\n"
                     "Previous critique, if any:\n"
-                    f"{previous_critique.model_dump_json(indent=2) if previous_critique else 'None'}"
+                    f"{previous_critique.model_dump_json(indent=2) if previous_critique else 'None'}\n\n"
+                    "Loop trace so far:\n"
+                    f"{json.dumps(trace[-12:], indent=2, sort_keys=True)}"
                 ),
             },
         ]
         return self.router.complete_structured(
             task_type="proposal_generation",
             messages=messages,
-            schema=ResearchProposal,
-            mock_output=dry_run_seed if self.router.dry_run else None,
+            schema=ProposalLoopAction,
         )
+
+    def _execute_loop_action(self, action: ProposalLoopAction) -> dict[str, object]:
+        try:
+            if action.action_type == "query_literature":
+                answer = self.literature.answer_query(action.query, limit=5)
+                return {
+                    "status": "ok",
+                    "tool": "query_literature",
+                    "query": action.query,
+                    "result_count": len(answer.results),
+                    "answer": answer.model_dump(mode="json"),
+                }
+            if action.action_type == "search_papers":
+                candidates = self.literature.search_papers(action.query, limit=8)
+                return {
+                    "status": "ok",
+                    "tool": "search_papers",
+                    "query": action.query,
+                    "candidate_count": len(candidates),
+                    "candidates": [c.model_dump(mode="json") for c in candidates],
+                }
+            if action.action_type == "import_url":
+                paper = self.literature.import_url(action.url, extract_text=action.extract_text)
+                return {"status": "ok", "tool": "import_url", "paper": paper.model_dump(mode="json")}
+            if action.action_type == "import_arxiv":
+                paper = self.literature.import_arxiv(
+                    action.arxiv_id, extract_text=action.extract_text
+                )
+                return {"status": "ok", "tool": "import_arxiv", "paper": paper.model_dump(mode="json")}
+            if action.action_type == "import_doi":
+                paper = self.literature.import_doi(action.doi, extract_text=action.extract_text)
+                return {"status": "ok", "tool": "import_doi", "paper": paper.model_dump(mode="json")}
+            if action.action_type == "import_candidate":
+                paper = self.literature.import_candidate(
+                    action.candidate_id, extract_text=action.extract_text
+                )
+                return {
+                    "status": "ok",
+                    "tool": "import_candidate",
+                    "paper": paper.model_dump(mode="json"),
+                }
+        except Exception as exc:  # noqa: BLE001 - proposal exploration can recover from tool failures
+            return {
+                "status": "error",
+                "tool": action.action_type,
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+            }
+        return {"status": "ignored", "tool": action.action_type}
 
     def _review_proposal(self, context: str, proposal: ResearchProposal) -> ProposalCritique:
         messages = [
@@ -158,12 +286,101 @@ class ProposalAgent:
         )
         return proposal_ref
 
+    def _write_proposal_trace(
+        self,
+        iteration_dir: str,
+        *,
+        attempt: int,
+        proposal: ResearchProposal,
+        trace: list[dict[str, object]],
+    ) -> list[ArtifactRef]:
+        payload = {
+            "proposal_id": proposal.proposal_id,
+            "attempt": attempt + 1,
+            "trace": trace,
+        }
+        json_ref = self.store.write_json(
+            f"{iteration_dir}/proposal_thinking_trace_{proposal.proposal_id}.json", payload
+        )
+        lines = [f"# Proposal Thinking Trace `{proposal.proposal_id}`", ""]
+        for item in trace:
+            lines.append(f"## Round {item.get('round', '?')}")
+            if "action" in item:
+                lines.extend(
+                    [
+                        "",
+                        "Action:",
+                        "",
+                        "```json",
+                        json.dumps(item["action"], indent=2, sort_keys=True),
+                        "```",
+                    ]
+                )
+            if "observation" in item:
+                lines.extend(
+                    [
+                        "",
+                        "Observation:",
+                        "",
+                        "```json",
+                        json.dumps(item["observation"], indent=2, sort_keys=True),
+                        "```",
+                    ]
+                )
+            lines.append("")
+        md_ref = self.store.write_text(
+            f"{iteration_dir}/proposal_thinking_trace_{proposal.proposal_id}.md",
+            "\n".join(lines).rstrip() + "\n",
+        )
+        return [json_ref, md_ref]
+
+    def _write_uncommitted_proposal_trace(
+        self,
+        iteration_dir: str,
+        *,
+        attempt: int,
+        trace: list[dict[str, object]],
+    ) -> list[ArtifactRef]:
+        stem = f"proposal_thinking_trace_uncommitted_attempt_{attempt + 1:02d}"
+        payload = {"attempt": attempt + 1, "committed": False, "trace": trace}
+        json_ref = self.store.write_json(f"{iteration_dir}/{stem}.json", payload)
+        lines = ["# Uncommitted Proposal Thinking Trace", ""]
+        for item in trace:
+            lines.append(f"## Round {item.get('round', '?')}")
+            if "action" in item:
+                lines.extend(
+                    [
+                        "",
+                        "Action:",
+                        "",
+                        "```json",
+                        json.dumps(item["action"], indent=2, sort_keys=True),
+                        "```",
+                    ]
+                )
+            if "observation" in item:
+                lines.extend(
+                    [
+                        "",
+                        "Observation:",
+                        "",
+                        "```json",
+                        json.dumps(item["observation"], indent=2, sort_keys=True),
+                        "```",
+                    ]
+                )
+            lines.append("")
+        md_ref = self.store.write_text(
+            f"{iteration_dir}/{stem}.md", "\n".join(lines).rstrip() + "\n"
+        )
+        return [json_ref, md_ref]
+
     def _record_proposal_event(
         self,
         *,
         proposal_id: str,
         event_type: Literal["generated", "revised", "accepted", "rejected", "critic_review"],
-        proposal_ref: ArtifactRef,
+        artifact_refs: list[ArtifactRef],
         proposal: ResearchProposal | None = None,
         critique: ProposalCritique | None = None,
         reason: str = "",
@@ -175,7 +392,7 @@ class ProposalAgent:
                 proposal=proposal,
                 critique=critique,
                 reason=reason,
-                artifact_refs=[proposal_ref],
+                artifact_refs=artifact_refs,
             )
         )
 
@@ -187,19 +404,20 @@ class ProposalAgent:
         critique: ProposalCritique,
         proposal_ref: ArtifactRef,
         *,
+        trace_refs: list[ArtifactRef],
         reason: str,
     ) -> tuple[ResearchProposal, ProposalCritique, str]:
         self._record_proposal_event(
             proposal_id=proposal.proposal_id,
             event_type="accepted",
-            proposal_ref=proposal_ref,
+            artifact_refs=[proposal_ref, *trace_refs],
             proposal=proposal,
             critique=critique,
             reason=reason,
         )
         state.iteration = iteration
         state.current_proposal_id = proposal.proposal_id
-        state.artifact_refs.append(proposal_ref)
+        state.artifact_refs.extend([proposal_ref, *trace_refs])
         self.store.save_state(state)
         return proposal, critique, proposal_ref.path
 
@@ -212,6 +430,13 @@ class ProposalAgent:
                 "research_state": state.model_dump(mode="json"),
                 "recent_claim_ledger_entries": claim_tail,
                 "recent_proposal_ledger_entries": proposal_tail,
+                "literature_papers": self.store.read_jsonl("LiteratureDB/papers.jsonl", limit=20),
+                "literature_candidates": self.store.read_jsonl(
+                    "LiteratureDB/candidates.jsonl", limit=20
+                ),
+                "recent_literature_query_answers": self.store.read_jsonl(
+                    "LiteratureDB/query_answers.jsonl", limit=20
+                ),
             },
             indent=2,
         )

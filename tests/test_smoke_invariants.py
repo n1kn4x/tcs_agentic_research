@@ -8,6 +8,7 @@ from tcs_agentic_research.agents.critics import (
     SolvedCheckAgent,
     is_claim_acceptably_supported,
 )
+from tcs_agentic_research.agents.initialization import InitializationAgent
 from tcs_agentic_research.agents.research import ResearchAgent
 from tcs_agentic_research.artifact_store import ArtifactStore
 from tcs_agentic_research.leap.harness import (
@@ -33,9 +34,12 @@ from tcs_agentic_research.schemas import (
     InitializationBundle,
     InitializationInterviewTurn,
     LiteratureExtract,
+    LiteratureSource,
     ModelProfile,
+    PaperMetadata,
     ProofObligation,
     ProposalCritique,
+    ProposalLoopAction,
     ReplicationResult,
     ReportOutcome,
     ResearchCritique,
@@ -59,7 +63,7 @@ PROMPT_SCHEMAS = {
     "literature_researcher": LiteratureExtract,
     "experiment_planner": ExperimentPlan,
     "proposal_critic": ProposalCritique,
-    "proposal_generator": ResearchProposal,
+    "proposal_generator": ProposalLoopAction,
     "research_agent": ResearchReport,
     "research_critic": ResearchCritique,
     "solved_checker": SolvedVerdict,
@@ -158,6 +162,40 @@ def _schema_property_names(node: object) -> set[str]:
         for item in node:
             names.update(_schema_property_names(item))
     return names
+
+
+def test_initialization_imports_declared_literature_sources(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = _store(tmp_path)
+    imported: list[LiteratureSource] = []
+
+    def fake_import_source(self, source: LiteratureSource) -> PaperMetadata:  # noqa: ANN001
+        imported.append(source)
+        ref = store.write_text("LiteratureDB/papers/example/paper.txt", "paper text")
+        paper = PaperMetadata(
+            citation_key="example",
+            title="Example",
+            source_type="url",
+            text_path=ref.path,
+            artifact_refs=[ref],
+        )
+        store.append_jsonl("LiteratureDB/papers.jsonl", paper)
+        return paper
+
+    monkeypatch.setattr(
+        "tcs_agentic_research.agents.literature.LiteratureResearcher.import_source",
+        fake_import_source,
+    )
+    bundle = InitializationBundle(
+        research_task_markdown="# Task",
+        literature_sources=[LiteratureSource(source="https://example.org/paper.pdf")],
+    )
+
+    state = InitializationAgent(store, _router(store)).commit_bundle(bundle)
+
+    assert imported and imported[0].source == "https://example.org/paper.pdf"
+    assert any(ref.path == "LiteratureDB/papers.jsonl" for ref in state.artifact_refs)
 
 
 def test_latest_claim_replay_uses_newest_record(tmp_path: Path) -> None:

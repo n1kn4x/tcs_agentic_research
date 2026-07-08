@@ -17,9 +17,11 @@ from ..schemas import (
     EvidenceType,
     InitializationBundle,
     InitializationInterviewTurn,
+    LiteratureSource,
     ProposalLedgerEntry,
     ResearchState,
 )
+from .literature import LiteratureResearcher
 
 
 INTERVIEW_TRANSCRIPT = "InitializationInterview.md"
@@ -183,6 +185,7 @@ class InitializationAgent:
             "notes": bundle.initial_state_notes,
         }
         nomenclature_ref = self.store.write_yaml(ArtifactStore.NOMENCLATURE, nomenclature_payload)
+        literature_refs = self._import_literature_sources(bundle.literature_sources)
         claims = bundle.initial_claims or [
             ClaimRecord(
                 claim_type=ClaimType.definition,
@@ -208,6 +211,7 @@ class InitializationAgent:
             artifact_refs=[
                 task_ref,
                 nomenclature_ref,
+                *literature_refs,
                 *extra_refs,
                 self.store.artifact_ref(ArtifactStore.CLAIM_LEDGER, kind=ArtifactKind.jsonl),
                 self.store.artifact_ref(ArtifactStore.PROPOSAL_LEDGER, kind=ArtifactKind.jsonl),
@@ -224,7 +228,7 @@ class InitializationAgent:
                     "Initialization created canonical task, nomenclature, "
                     "and initial ledger entries."
                 ),
-                artifact_refs=[task_ref, nomenclature_ref, *extra_refs, state_ref],
+                artifact_refs=[task_ref, nomenclature_ref, *literature_refs, *extra_refs, state_ref],
             )
         )
         return state
@@ -250,6 +254,37 @@ class InitializationAgent:
                 if evidence.evidence_type == EvidenceType.citation and not evidence.citation_keys:
                     evidence.confidence = min(evidence.confidence, 0.1)
         return claims
+
+    def _import_literature_sources(self, sources: list[LiteratureSource]) -> list[ArtifactRef]:
+        refs: list[ArtifactRef] = []
+        if not sources:
+            return refs
+        researcher = LiteratureResearcher(self.store, self.router, prompt_dir=self.prompt_dir)
+        for source in sources:
+            if not source.source.strip():
+                continue
+            try:
+                paper = researcher.import_source(source)
+            except Exception as exc:  # noqa: BLE001 - initialization must surface source failures
+                if source.import_required or source.user_supplied:
+                    raise RuntimeError(
+                        "Failed to import user-provided literature source "
+                        f"`{source.source}`: {type(exc).__name__}: {exc}"
+                    ) from exc
+                continue
+            for ref in paper.artifact_refs:
+                if ref.path not in {existing.path for existing in refs}:
+                    refs.append(ref)
+        for ledger_path in [
+            "LiteratureDB/papers.jsonl",
+            "LiteratureDB/extracted_claims.jsonl",
+            "LiteratureDB/notation_mappings.jsonl",
+        ]:
+            if self.store.exists(ledger_path):
+                ref = self.store.artifact_ref(ledger_path)
+                if ref.path not in {existing.path for existing in refs}:
+                    refs.append(ref)
+        return refs
 
     def _mock_interview_turn(
         self, transcript: list[dict[str, str]]

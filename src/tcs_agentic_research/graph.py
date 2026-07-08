@@ -36,12 +36,16 @@ class ResearchGraph:
         dry_run: bool = False,
         prompt_dir: str | None = None,
         max_research_thinking_loop_rounds: int = 3,
+        max_proposal_revisions: int = 2,
+        max_proposal_thinking_loop_rounds: int = 15,
     ):
         self.store = ArtifactStore(workspace)
         self.store.initialize_layout()
         self.router = LLMRouter.from_config_file(config_path, store=self.store, dry_run=dry_run)
         self.prompt_dir = prompt_dir
         self.max_research_thinking_loop_rounds = max_research_thinking_loop_rounds
+        self.max_proposal_revisions = max_proposal_revisions
+        self.max_proposal_thinking_loop_rounds = max_proposal_thinking_loop_rounds
 
     def build(self):  # LangGraph is an optional runtime dependency until graph execution.
         try:
@@ -131,7 +135,11 @@ class ResearchGraph:
         state = self._require_state()
         proposal, _critique, proposal_path = ProposalAgent(
             self.store, self.router, prompt_dir=self.prompt_dir
-        ).generate_and_review(state)
+        ).generate_and_review(
+            state,
+            max_revisions=self.max_proposal_revisions,
+            max_thinking_loop_rounds=self.max_proposal_thinking_loop_rounds,
+        )
         return {
             "iteration": state.iteration,
             "current_proposal_id": proposal.proposal_id,

@@ -8,6 +8,7 @@ If you do not follow this schema, your answer will be rejected.
 Your job is to turn the LLM-guided user interview into initialization artifacts:
 - a complete `ResearchTask.md` with problem statement, model, assumptions, success criteria, fallback outcomes, literature context, user knowledge, supplied definitions/theorems/Lean snippets, tools, constraints, and notation notes;
 - `Nomenclature.yml` entries for canonical symbols and aliases;
+- `literature_sources` entries for every user-provided paper, URL, DOI, arXiv ID, or PDF source, preserving the exact source string when possible;
 - initial claims that are administrative or definitional only unless the user supplies evidence.
 
 Write down unresolved issues explicitly instead of inventing answers.

@@ -124,9 +124,21 @@ class NomenclatureEntry(StrictModel):
     source_refs: list[ArtifactRef] = Field(default_factory=list)
 
 
+class LiteratureSource(StrictModel):
+    source: str
+    source_type: Literal["url", "arxiv", "doi", "pdf", "unknown"] = "unknown"
+    citation_key: str = ""
+    title: str = ""
+    role: str = ""
+    user_supplied: bool = True
+    import_required: bool = True
+    extract_text: bool = True
+
+
 class InitializationBundle(StrictModel):
     research_task_markdown: str
     nomenclature_entries: list[NomenclatureEntry] = Field(default_factory=list)
+    literature_sources: list[LiteratureSource] = Field(default_factory=list)
     initial_state_notes: list[str] = Field(default_factory=list)
     initial_claims: list[ClaimRecord] = Field(default_factory=list)
     fallback_publishable_outcomes: list[str] = Field(default_factory=list)
@@ -182,6 +194,26 @@ class ResearchProposal(StrictModel):
     literature_queries: list[str] = Field(default_factory=list)
     resource_model: str = ""
     created_at: str = Field(default_factory=utc_now)
+
+
+class ProposalLoopAction(StrictModel):
+    action_type: Literal[
+        "query_literature",
+        "search_papers",
+        "import_url",
+        "import_arxiv",
+        "import_doi",
+        "import_candidate",
+        "commit_proposal",
+    ]
+    rationale: str = ""
+    query: str = ""
+    url: str = ""
+    arxiv_id: str = ""
+    doi: str = ""
+    candidate_id: str = ""
+    extract_text: bool = True
+    proposal: ResearchProposal | None = None
 
 
 class CriticDecision(str, Enum):
