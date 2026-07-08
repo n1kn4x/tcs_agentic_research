@@ -6,7 +6,7 @@ import httpx
 import pytest
 
 from tcs_agentic_research.agents.critics import (
-    SolvedCheckAgent,
+    check_solved_deterministically,
     is_claim_acceptably_supported,
 )
 from tcs_agentic_research.agents.initialization import InitializationAgent
@@ -48,8 +48,6 @@ from tcs_agentic_research.schemas import (
     ResearchReport,
     ResearchState,
     RouterSettings,
-    SolvedOutcome,
-    SolvedVerdict,
 )
 
 
@@ -67,7 +65,6 @@ PROMPT_SCHEMAS = {
     "proposal_generator": ProposalLoopAction,
     "research_agent": ResearchReport,
     "research_critic": ResearchCritique,
-    "solved_checker": SolvedVerdict,
 }
 
 
@@ -351,16 +348,7 @@ def test_solved_requires_independent_replication(tmp_path: Path) -> None:
         claims_generated=[claim],
     )
     state = ResearchState(confirmed_by_replication=False)
-    optimistic = SolvedVerdict(
-        outcomes=[SolvedOutcome.solves_main_task],
-        possible_breakthrough=False,
-        confirmed_solved=True,
-        rationale="optimistic",
-    )
-
-    checked = SolvedCheckAgent(store, _router(store))._enforce_conservatism(
-        optimistic, state, report
-    )
+    checked = check_solved_deterministically(store, state, report)
 
     assert not checked.confirmed_solved
     assert checked.possible_breakthrough

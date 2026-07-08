@@ -20,7 +20,6 @@ router:
         - research_critique
         - theorem_proving
         - experiment_planning
-        - solved_check
         - independent_replication
     routine:
       model: routine-extractor

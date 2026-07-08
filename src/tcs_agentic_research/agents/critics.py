@@ -1,6 +1,8 @@
-"""Critic agents for scientific fidelity and conservative solved checks."""
+"""Critic agents for scientific fidelity and deterministic solved verdicts."""
 
 from __future__ import annotations
+
+from typing import TypeVar
 
 from ..artifact_store import ArtifactStore
 from ..llm import LLMRouter
@@ -18,6 +20,9 @@ from ..schemas import (
     SolvedOutcome,
     SolvedVerdict,
 )
+
+
+T = TypeVar("T")
 
 
 REJECTED_CLAIM_STATUSES = {
@@ -188,198 +193,125 @@ class ResearchCriticAgent:
         )
 
 
-class SolvedCheckAgent:
-    def __init__(self, store: ArtifactStore, router: LLMRouter, *, prompt_dir: str | None = None):
-        self.store = store
-        self.router = router
-        self.prompt_dir = prompt_dir
-
-    def check(self, state: ResearchState, report: ResearchReport | None, context: str = "") -> SolvedVerdict:
-        mock_output = self._mock_verdict(state, report)
-        messages = [
-            {"role": "system", "content": render_prompt("solved_checker", override_dir=self.prompt_dir)},
-            {
-                "role": "user",
-                "content": (
-                    f"Context:\n{context}\n\nState:\n{state.model_dump_json(indent=2)}\n\n"
-                    f"Latest report:\n{report.model_dump_json(indent=2) if report else 'None'}"
-                ),
-            },
-        ]
-        verdict = self.router.complete_structured(
-            task_type="solved_check",
-            messages=messages,
-            schema=SolvedVerdict,
-            mock_output=mock_output if self.router.dry_run else None,
-        )
-        return self._enforce_conservatism(verdict, state, report)
-
-    def _mock_verdict(self, state: ResearchState, report: ResearchReport | None) -> SolvedVerdict:
-        if report is None:
-            return SolvedVerdict(
-                outcomes=[SolvedOutcome.partial_progress],
-                rationale="No report exists yet.",
-                blocking_issues=["Run at least one research iteration."],
-            )
-        outcomes = self._outcomes_from_report(report)
-        blockers_without_replication = self._hard_blockers(
-            state, report, include_replication=False
-        )
-        prior_replication_failed = (
-            "replication_failed_or_incomplete" in state.outcome_flags
-            and not state.confirmed_by_replication
-        )
-        possible = (
-            report.outcome == ReportOutcome.succeeded
-            and not blockers_without_replication
-            and not state.confirmed_by_replication
-            and not prior_replication_failed
-        )
-        confirmed = (
-            report.outcome == ReportOutcome.succeeded
-            and not blockers_without_replication
-            and state.confirmed_by_replication
-        )
-        blockers = list(blockers_without_replication)
-        if possible and not state.confirmed_by_replication:
-            blockers.append("Independent replication has not confirmed the result.")
-        if prior_replication_failed:
-            blockers.append("Independent replication failed or was incomplete.")
+def check_solved_deterministically(
+    store: ArtifactStore, state: ResearchState, report: ResearchReport | None
+) -> SolvedVerdict:
+    """Compute the solved verdict from hard evidence gates without an LLM call."""
+    if report is None:
         return SolvedVerdict(
-            outcomes=outcomes,
-            possible_breakthrough=possible,
-            confirmed_solved=confirmed,
-            requires_independent_replication=possible,
-            rationale="Conservative solved check based on hard evidence gates.",
-            blocking_issues=list(dict.fromkeys(blockers)),
-            next_action="stop_confirmed"
-            if confirmed
-            else ("independent_replication" if possible else "continue"),
+            outcomes=[SolvedOutcome.partial_progress],
+            rationale="No report exists yet.",
+            blocking_issues=["Run at least one research iteration."],
+            next_action="continue",
         )
 
-    def _enforce_conservatism(
-        self, verdict: SolvedVerdict, state: ResearchState, report: ResearchReport | None
-    ) -> SolvedVerdict:
-        if report is None:
-            verdict.confirmed_solved = False
-            verdict.possible_breakthrough = False
-            verdict.requires_independent_replication = False
-            verdict.next_action = "continue"
-            _append_unique(verdict.blocking_issues, "No report exists yet.")
-            return verdict
+    blockers = _solved_hard_blockers(store, report)
+    prior_replication_failed = (
+        "replication_failed_or_incomplete" in state.outcome_flags
+        and not state.confirmed_by_replication
+    )
+    outcomes = _solved_outcomes_from_report(report)
 
-        blockers_without_replication = self._hard_blockers(
-            state, report, include_replication=False
+    if blockers or report.outcome != ReportOutcome.succeeded:
+        possible = False
+        confirmed = False
+        requires_replication = False
+        next_action = "continue"
+        if prior_replication_failed:
+            _append_unique(blockers, "Independent replication failed or was incomplete.")
+    elif state.confirmed_by_replication:
+        possible = False
+        confirmed = True
+        requires_replication = False
+        next_action = "stop_confirmed"
+    elif prior_replication_failed:
+        possible = False
+        confirmed = False
+        requires_replication = False
+        next_action = "continue"
+        _append_unique(blockers, "Prior independent replication failed or was incomplete.")
+    else:
+        possible = True
+        confirmed = False
+        requires_replication = True
+        next_action = "independent_replication"
+        _append_unique(blockers, "Independent replication has not confirmed the result.")
+
+    if any("proof obligation" in blocker.lower() for blocker in blockers):
+        _append_unique(outcomes, SolvedOutcome.needs_formalization)
+    needs_resource_review = any(
+        "complexity" in blocker.lower() or "resource" in blocker.lower() for blocker in blockers
+    )
+    if needs_resource_review:
+        _append_unique(outcomes, SolvedOutcome.needs_complexity_review)
+
+    return SolvedVerdict(
+        outcomes=outcomes,
+        possible_breakthrough=possible,
+        confirmed_solved=confirmed,
+        requires_independent_replication=requires_replication,
+        rationale="Deterministic solved verdict based on hard evidence gates.",
+        blocking_issues=blockers,
+        next_action=next_action,
+    )
+
+
+def _solved_hard_blockers(store: ArtifactStore, report: ResearchReport) -> list[str]:
+    blockers: list[str] = []
+    if report.outcome != ReportOutcome.succeeded:
+        blockers.append(f"Latest report outcome is `{report.outcome.value}`, not `succeeded`.")
+    if report.outcome == ReportOutcome.succeeded and not report.claims_generated:
+        blockers.append("Succeeded reports must contain generated claims with evidence.")
+    open_obligations = [
+        obligation
+        for obligation in report.proof_obligations
+        if obligation.status in {"open", "in_progress", "blocked"}
+    ]
+    if open_obligations:
+        blockers.append("Open or blocked proof obligations remain.")
+    if any(estimate.needs_derivation_review for estimate in report.complexity_estimates):
+        blockers.append("Complexity/resource estimates require derivation review.")
+    if report.required_verifications:
+        blockers.append("Required verification items remain unresolved.")
+    if report.unresolved_issues:
+        blockers.append("Report still lists unresolved issues.")
+    unsupported = []
+    for claim in report.claims_generated:
+        if claim.claim_type not in CENTRAL_SOLVED_CLAIM_TYPES:
+            continue
+        if claim.status in REJECTED_CLAIM_STATUSES:
+            blockers.append(f"Central claim `{claim.claim_id}` is {claim.status.value}.")
+            continue
+        if not is_claim_acceptably_supported(claim, store):
+            unsupported.append(claim.claim_id)
+    if unsupported:
+        blockers.append(
+            "Central claims lack certifying claim-local evidence: " + ", ".join(unsupported)
         )
-        prior_replication_failed = (
-            "replication_failed_or_incomplete" in state.outcome_flags
-            and not state.confirmed_by_replication
-        )
-        for blocker in blockers_without_replication:
-            _append_unique(verdict.blocking_issues, blocker)
+    return list(dict.fromkeys(blockers))
 
-        if blockers_without_replication or report.outcome != ReportOutcome.succeeded:
-            verdict.confirmed_solved = False
-            verdict.possible_breakthrough = False
-            verdict.requires_independent_replication = False
-            verdict.next_action = "continue"
-        elif state.confirmed_by_replication:
-            verdict.confirmed_solved = True
-            verdict.possible_breakthrough = False
-            verdict.requires_independent_replication = False
-            verdict.next_action = "stop_confirmed"
-        elif prior_replication_failed:
-            verdict.confirmed_solved = False
-            verdict.possible_breakthrough = False
-            verdict.requires_independent_replication = False
-            verdict.next_action = "continue"
-            _append_unique(
-                verdict.blocking_issues,
-                "Prior independent replication failed or was incomplete.",
-            )
-        else:
-            verdict.confirmed_solved = False
-            verdict.possible_breakthrough = True
-            verdict.requires_independent_replication = True
-            verdict.next_action = "independent_replication"
-            _append_unique(
-                verdict.blocking_issues,
-                "Independent replication has not confirmed the result.",
-            )
 
-        for outcome in self._outcomes_from_report(report):
-            if outcome not in verdict.outcomes:
-                verdict.outcomes.append(outcome)
-        if any("proof obligation" in blocker.lower() for blocker in verdict.blocking_issues):
-            if SolvedOutcome.needs_formalization not in verdict.outcomes:
-                verdict.outcomes.append(SolvedOutcome.needs_formalization)
-        needs_resource_review = any(
-            "complexity" in blocker.lower() or "resource" in blocker.lower()
-            for blocker in verdict.blocking_issues
-        )
-        if needs_resource_review and SolvedOutcome.needs_complexity_review not in verdict.outcomes:
-            verdict.outcomes.append(SolvedOutcome.needs_complexity_review)
-        return verdict
-
-    def _hard_blockers(
-        self, state: ResearchState, report: ResearchReport, *, include_replication: bool
-    ) -> list[str]:
-        blockers: list[str] = []
-        if report.outcome != ReportOutcome.succeeded:
-            blockers.append(f"Latest report outcome is `{report.outcome.value}`, not `succeeded`.")
-        if report.outcome == ReportOutcome.succeeded and not report.claims_generated:
-            blockers.append("Succeeded reports must contain generated claims with evidence.")
-        open_obligations = [
-            obligation
-            for obligation in report.proof_obligations
-            if obligation.status in {"open", "in_progress", "blocked"}
-        ]
-        if open_obligations:
-            blockers.append("Open or blocked proof obligations remain.")
-        if any(estimate.needs_derivation_review for estimate in report.complexity_estimates):
-            blockers.append("Complexity/resource estimates require derivation review.")
-        if report.required_verifications:
-            blockers.append("Required verification items remain unresolved.")
-        if report.unresolved_issues:
-            blockers.append("Report still lists unresolved issues.")
-        unsupported = []
-        for claim in report.claims_generated:
-            if claim.claim_type not in CENTRAL_SOLVED_CLAIM_TYPES:
-                continue
-            if claim.status in REJECTED_CLAIM_STATUSES:
-                blockers.append(f"Central claim `{claim.claim_id}` is {claim.status.value}.")
-                continue
-            if not is_claim_acceptably_supported(claim, self.store):
-                unsupported.append(claim.claim_id)
-        if unsupported:
-            blockers.append(
-                "Central claims lack certifying claim-local evidence: " + ", ".join(unsupported)
-            )
-        if include_replication and not state.confirmed_by_replication:
-            blockers.append("Independent replication has not confirmed the result.")
-        return list(dict.fromkeys(blockers))
-
-    def _outcomes_from_report(self, report: ResearchReport) -> list[SolvedOutcome]:
-        outcomes: list[SolvedOutcome] = []
-        if report.outcome == ReportOutcome.counterexample_found:
-            outcomes.append(SolvedOutcome.counterexample_found)
-        elif report.outcome == ReportOutcome.negative_result:
-            outcomes.append(SolvedOutcome.negative_result)
-        elif report.outcome == ReportOutcome.succeeded:
-            outcomes.append(SolvedOutcome.solves_main_task)
-        elif report.outcome == ReportOutcome.partially_succeeded:
-            outcomes.append(SolvedOutcome.partial_progress)
-        else:
-            outcomes.append(SolvedOutcome.dead_end)
-        if any(o.status in {"open", "in_progress", "blocked"} for o in report.proof_obligations):
-            outcomes.append(SolvedOutcome.needs_formalization)
-        if any(e.needs_derivation_review for e in report.complexity_estimates):
-            outcomes.append(SolvedOutcome.needs_complexity_review)
-        if report.experimental_results and not any(
-            ev.evidence_type == EvidenceType.lean_proof for ev in report.evidence
-        ):
-            outcomes.append(SolvedOutcome.needs_experiment)
-        return list(dict.fromkeys(outcomes))
+def _solved_outcomes_from_report(report: ResearchReport) -> list[SolvedOutcome]:
+    outcomes: list[SolvedOutcome] = []
+    if report.outcome == ReportOutcome.counterexample_found:
+        outcomes.append(SolvedOutcome.counterexample_found)
+    elif report.outcome == ReportOutcome.negative_result:
+        outcomes.append(SolvedOutcome.negative_result)
+    elif report.outcome == ReportOutcome.succeeded:
+        outcomes.append(SolvedOutcome.solves_main_task)
+    elif report.outcome == ReportOutcome.partially_succeeded:
+        outcomes.append(SolvedOutcome.partial_progress)
+    else:
+        outcomes.append(SolvedOutcome.dead_end)
+    if any(o.status in {"open", "in_progress", "blocked"} for o in report.proof_obligations):
+        outcomes.append(SolvedOutcome.needs_formalization)
+    if any(e.needs_derivation_review for e in report.complexity_estimates):
+        outcomes.append(SolvedOutcome.needs_complexity_review)
+    if report.experimental_results and not any(
+        ev.evidence_type == EvidenceType.lean_proof for ev in report.evidence
+    ):
+        outcomes.append(SolvedOutcome.needs_experiment)
+    return list(dict.fromkeys(outcomes))
 
 
 def _literature_claim_has_statement_support(store: ArtifactStore, claim: ClaimRecord) -> bool:
@@ -409,6 +341,6 @@ def _add_tag(claim: ClaimRecord, tag: str) -> None:
         claim.tags.append(tag)
 
 
-def _append_unique(items: list[str], item: str) -> None:
+def _append_unique(items: list[T], item: T) -> None:
     if item not in items:
         items.append(item)

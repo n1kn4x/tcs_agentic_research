@@ -392,7 +392,7 @@ See `Nomenclature.yml`.
                 "literature and notation synthesis",
             ],
             assumptions=["TBD"],
-            success_criteria=["conservative solved check and independent replication"],
+            success_criteria=["deterministic solved verdict and independent replication"],
         )
 
 

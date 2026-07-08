@@ -131,7 +131,7 @@ while not state.solved:
     proposal = GenerateResearchProposal(state)
     report = RunTCSResearchSubagent(proposal, state)
     state = UpdateResearchState(state, report)
-    solved_verdict = CheckIsSolved(state, report)
+    solved_verdict = ComputeSolvedVerdict(state, report)  # deterministic evidence gates
 
     if solved_verdict.possible_breakthrough:
         replication = IndependentReplicationAgent.verify(state, report)
@@ -141,7 +141,7 @@ while not state.solved:
         break
 ```
 
-Nodes durably write artifacts before returning. The graph is resumable through `GraphCheckpoints.sqlite` using a LangGraph `thread_id`.
+Nodes durably write artifacts before returning. Solved verdicts are computed deterministically from evidence gates. The graph is resumable through `GraphCheckpoints.sqlite` using a LangGraph `thread_id`.
 
 ## Agents
 

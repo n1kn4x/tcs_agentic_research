@@ -96,7 +96,7 @@ def render_report_markdown(report: ResearchReport) -> str:
 
 
 def render_verdict_markdown(verdict: SolvedVerdict) -> str:
-    return f"""# Solved Check `{verdict.verdict_id}`
+    return f"""# Solved Verdict `{verdict.verdict_id}`
 
 **Outcomes:** {", ".join(o.value for o in verdict.outcomes)}  
 **Possible breakthrough:** {verdict.possible_breakthrough}  

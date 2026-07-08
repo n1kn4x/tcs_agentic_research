@@ -311,7 +311,7 @@ def _raise_for_status_with_body(response: httpx.Response) -> None:
         raise httpx.HTTPStatusError(message, request=exc.request, response=exc.response) from exc
 
 
-def _format_http_error_body(response: httpx.Response, *, limit: int = 4000) -> str:
+def _format_http_error_body(response: httpx.Response, *, limit: int = 5000) -> str:
     text = response.text.strip()
     if not text:
         return "<empty>"

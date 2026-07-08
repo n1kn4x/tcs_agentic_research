@@ -5,7 +5,11 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from .agents.critics import SolvedCheckAgent, is_claim_acceptably_supported, is_claim_rejected
+from .agents.critics import (
+    check_solved_deterministically,
+    is_claim_acceptably_supported,
+    is_claim_rejected,
+)
 from .agents.proposal import ProposalAgent
 from .agents.replication import IndependentReplicationAgent
 from .agents.research import ResearchAgent
@@ -60,7 +64,7 @@ class ResearchGraph:
         builder.add_node("generate_research_proposal", self._node_generate_proposal)
         builder.add_node("run_tcs_research_subagent", self._node_run_research)
         builder.add_node("update_research_state", self._node_update_state)
-        builder.add_node("check_is_solved", self._node_check_solved)
+        builder.add_node("compute_solved_verdict", self._node_compute_solved_verdict)
         builder.add_node("independent_replication", self._node_independent_replication)
 
         builder.add_edge(START, "initialize_task")
@@ -71,17 +75,17 @@ class ResearchGraph:
         )
         builder.add_edge("generate_research_proposal", "run_tcs_research_subagent")
         builder.add_edge("run_tcs_research_subagent", "update_research_state")
-        builder.add_edge("update_research_state", "check_is_solved")
+        builder.add_edge("update_research_state", "compute_solved_verdict")
         builder.add_conditional_edges(
-            "check_is_solved",
-            self._route_after_solved_check,
+            "compute_solved_verdict",
+            self._route_after_solved_verdict,
             {
                 "replicate": "independent_replication",
                 "continue": "generate_research_proposal",
                 "end": END,
             },
         )
-        builder.add_edge("independent_replication", "check_is_solved")
+        builder.add_edge("independent_replication", "compute_solved_verdict")
         return builder.compile(checkpointer=self._make_checkpointer())
 
     def run(
@@ -173,13 +177,11 @@ class ResearchGraph:
             "solved": state.solved,
         }
 
-    def _node_check_solved(self, graph_state: GraphState) -> dict[str, Any]:
+    def _node_compute_solved_verdict(self, graph_state: GraphState) -> dict[str, Any]:
         state = self._require_state()
         report_path = graph_state.get("current_report_path")
         report = ResearchReport.model_validate(self.store.read_json(report_path)) if report_path else None
-        verdict = SolvedCheckAgent(self.store, self.router, prompt_dir=self.prompt_dir).check(
-            state, report
-        )
+        verdict = check_solved_deterministically(self.store, state, report)
         rel_dir = self.store.create_iteration_dir(state.iteration)
         verdict_ref = self.store.write_json(f"{rel_dir}/solved_verdict_{verdict.verdict_id}.json", verdict)
         self.store.write_text(
@@ -214,7 +216,7 @@ class ResearchGraph:
             return "end"
         return "end" if self._iteration_limit_reached(graph_state) else "continue"
 
-    def _route_after_solved_check(self, graph_state: GraphState) -> str:
+    def _route_after_solved_verdict(self, graph_state: GraphState) -> str:
         if graph_state.get("confirmed_solved"):
             return "end"
         if graph_state.get("possible_breakthrough"):
