@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import sys
 from collections import Counter
 from enum import Enum
 from pathlib import Path
@@ -89,34 +91,34 @@ def compact_json_dumps(payload: Any) -> str:
     plain = _to_plain(payload)
     candidates, counts = _collect_candidates(plain)
     repeated = {candidate for candidate, count in counts.items() if count > 1}
-    if not repeated:
-        return _json_dumps(plain)
+    final_payload = plain
 
-    candidate_refs = _assign_reference_ids(repeated)
-    used_refs: set[str] = set()
-    compact_payload = _replace_repeated_values(plain, candidate_refs, used_refs)
+    if repeated:
+        candidate_refs = _assign_reference_ids(repeated)
+        used_refs: set[str] = set()
+        compact_payload = _replace_repeated_values(plain, candidate_refs, used_refs)
 
-    if not used_refs:
-        return _json_dumps(plain)
+        if used_refs:
+            definitions = {
+                ref_id: candidates[candidate]
+                for candidate, ref_id in sorted(
+                    candidate_refs.items(), key=lambda item: item[1]
+                )
+                if ref_id in used_refs
+            }
+            final_payload = {
+                "$deduplication": (
+                    "This prompt JSON is self-contained. Any value of the form "
+                    "{'$ref': '<id>'} is an exact replacement for the full value stored at "
+                    "top-level '$defs[<id>]'. No information has been summarized or omitted; "
+                    "only repeated exact text/data was moved to '$defs'."
+                ),
+                "$defs": definitions,
+                "payload": compact_payload,
+            }
 
-    definitions = {
-        ref_id: candidates[candidate]
-        for candidate, ref_id in sorted(
-            candidate_refs.items(), key=lambda item: item[1]
-        )
-        if ref_id in used_refs
-    }
-    wrapped = {
-        "$deduplication": (
-            "This prompt JSON is self-contained. Any value of the form "
-            "{'$ref': '<id>'} is an exact replacement for the full value stored at "
-            "top-level '$defs[<id>]'. No information has been summarized or omitted; "
-            "only repeated exact text/data was moved to '$defs'."
-        ),
-        "$defs": definitions,
-        "payload": compact_payload,
-    }
-    return _json_dumps(wrapped)
+    _maybe_print_prompt_compaction_stats(plain, final_payload)
+    return _json_dumps(final_payload)
 
 
 
@@ -235,6 +237,60 @@ def _canonical_json(value: Any) -> str:
 
 def _json_dumps(value: Any) -> str:
     return json.dumps(value, sort_keys=False, ensure_ascii=False, separators=(",", ":"))
+
+
+
+def _pretty_json_dumps(value: Any) -> str:
+    return json.dumps(value, sort_keys=False, ensure_ascii=False, indent=2)
+
+
+
+def _maybe_print_prompt_compaction_stats(raw_payload: Any, final_payload: Any) -> None:
+    if not os.environ.get("TCS_PROMPT_COMPACT_STATS"):
+        return
+
+    raw_pretty_chars = len(_pretty_json_dumps(raw_payload))
+    raw_minified_chars = len(_json_dumps(raw_payload))
+    final_pretty_chars = len(_pretty_json_dumps(final_payload))
+    final_minified_chars = len(_json_dumps(final_payload))
+    refs_emitted = _count_prompt_refs(final_payload)
+    defs_emitted = _count_prompt_defs(final_payload)
+
+    print(
+        "[prompt-compact] "
+        f"raw_pretty_chars={raw_pretty_chars} "
+        f"raw_minified_chars={raw_minified_chars} "
+        f"dedup_pretty_chars={final_pretty_chars} "
+        f"dedup_minified_chars={final_minified_chars} "
+        f"pretty_saved_raw_chars={raw_pretty_chars - raw_minified_chars} "
+        f"dedup_saved_pretty_chars={raw_pretty_chars - final_pretty_chars} "
+        f"dedup_saved_minified_chars={raw_minified_chars - final_minified_chars} "
+        f"pretty_saved_after_dedup_chars={final_pretty_chars - final_minified_chars} "
+        f"total_saved_vs_raw_pretty_chars={raw_pretty_chars - final_minified_chars} "
+        f"refs_emitted={refs_emitted} "
+        f"defs_emitted={defs_emitted}",
+        file=sys.stderr,
+    )
+
+
+
+def _count_prompt_refs(value: Any) -> int:
+    if isinstance(value, dict):
+        if set(value) == {"$ref"}:
+            return 1
+        return sum(_count_prompt_refs(child) for child in value.values())
+    if isinstance(value, list):
+        return sum(_count_prompt_refs(child) for child in value)
+    return 0
+
+
+
+def _count_prompt_defs(value: Any) -> int:
+    if isinstance(value, dict):
+        defs = value.get("$defs")
+        if isinstance(defs, dict):
+            return len(defs)
+    return 0
 
 
 
