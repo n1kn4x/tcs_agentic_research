@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import json
-from typing import Literal
+from typing import Any, Literal
 
 from ..artifact_store import ArtifactStore
 from ..llm import LLMRouter
 from ..prompt_loader import render_prompt
+from ..prompt_serialization import compact_json_dumps
 from ..render import render_proposal_markdown
 from ..schemas import (
     ArtifactRef,
@@ -37,7 +38,7 @@ class ProposalAgent:
         max_thinking_loop_rounds: int = 15,
     ) -> tuple[ResearchProposal, ProposalCritique, str]:
         task = self.store.read_text(ArtifactStore.RESEARCH_TASK)
-        context = self._context_blob(state, task)
+        context = self._context_payload(state, task)
         iteration = state.iteration + 1
         iteration_dir = self.store.create_iteration_dir(iteration)
         critique: ProposalCritique | None = None
@@ -114,7 +115,7 @@ class ProposalAgent:
     def _generate_proposal(
         self,
         *,
-        context: str,
+        context: Any,
         iteration_dir: str,
         attempt: int,
         previous_critique: ProposalCritique | None,
@@ -174,32 +175,33 @@ class ProposalAgent:
     def _choose_loop_action(
         self,
         *,
-        context: str,
+        context: Any,
         attempt: int,
         round_index: int,
         max_rounds: int,
         previous_critique: ProposalCritique | None,
         trace: list[dict[str, object]],
     ) -> ProposalLoopAction:
+        prompt_payload = {
+            "proposal_generation_attempt": attempt + 1,
+            "loop_round": round_index,
+            "max_rounds": max_rounds,
+            "instruction": (
+                "If this is the final round, return `commit_proposal` with the `proposal` "
+                "field populated."
+            ),
+            "context": context,
+            "previous_critique": previous_critique.model_dump(mode="json")
+            if previous_critique
+            else None,
+            "loop_trace_so_far": trace[-12:],
+        }
         messages = [
             {
                 "role": "system",
                 "content": render_prompt("proposal_generator", override_dir=self.prompt_dir),
             },
-            {
-                "role": "user",
-                "content": (
-                    f"Proposal-generation attempt {attempt + 1}, loop round {round_index} of "
-                    f"{max_rounds}.\n"
-                    "If this is the final round, return `commit_proposal` with the "
-                    "`proposal` field populated.\n\n"
-                    f"Context:\n{context}\n\n"
-                    "Previous critique, if any:\n"
-                    f"{previous_critique.model_dump_json(indent=2) if previous_critique else 'None'}\n\n"
-                    "Loop trace so far:\n"
-                    f"{json.dumps(trace[-12:], indent=2, sort_keys=True)}"
-                ),
-            },
+            {"role": "user", "content": compact_json_dumps(prompt_payload)},
         ]
         return self.router.complete_structured(
             task_type="proposal_generation",
@@ -256,7 +258,11 @@ class ProposalAgent:
             }
         return {"status": "ignored", "tool": action.action_type}
 
-    def _review_proposal(self, context: str, proposal: ResearchProposal) -> ProposalCritique:
+    def _review_proposal(self, context: Any, proposal: ResearchProposal) -> ProposalCritique:
+        prompt_payload = {
+            "task_and_state": context,
+            "proposal": proposal.model_dump(mode="json"),
+        }
         messages = [
             {
                 "role": "system",
@@ -264,7 +270,8 @@ class ProposalAgent:
             },
             {
                 "role": "user",
-                "content": f"Task and state:\n{context}\n\nProposal:\n{proposal.model_dump_json(indent=2)}",
+                "content": "Review this proposal against the task/state payload.\n"
+                + compact_json_dumps(prompt_payload),
             },
         ]
         return self.router.complete_structured(
@@ -421,25 +428,22 @@ class ProposalAgent:
         self.store.save_state(state)
         return proposal, critique, proposal_ref.path
 
-    def _context_blob(self, state: ResearchState, task: str) -> str:
+    def _context_payload(self, state: ResearchState, task: str) -> dict[str, object]:
         claim_tail = self.store.read_jsonl(ArtifactStore.CLAIM_LEDGER, limit=20)
         proposal_tail = self.store.read_jsonl(ArtifactStore.PROPOSAL_LEDGER, limit=20)
-        return json.dumps(
-            {
-                "research_task_md": task,
-                "research_state": state.model_dump(mode="json"),
-                "recent_claim_ledger_entries": claim_tail,
-                "recent_proposal_ledger_entries": proposal_tail,
-                "literature_papers": self.store.read_jsonl("LiteratureDB/papers.jsonl", limit=20),
-                "literature_candidates": self.store.read_jsonl(
-                    "LiteratureDB/candidates.jsonl", limit=20
-                ),
-                "recent_literature_query_answers": self.store.read_jsonl(
-                    "LiteratureDB/query_answers.jsonl", limit=20
-                ),
-            },
-            indent=2,
-        )
+        return {
+            "research_task_md": task,
+            "research_state": state.model_dump(mode="json"),
+            "recent_claim_ledger_entries": claim_tail,
+            "recent_proposal_ledger_entries": proposal_tail,
+            "literature_papers": self.store.read_jsonl("LiteratureDB/papers.jsonl", limit=20),
+            "literature_candidates": self.store.read_jsonl(
+                "LiteratureDB/candidates.jsonl", limit=20
+            ),
+            "recent_literature_query_answers": self.store.read_jsonl(
+                "LiteratureDB/query_answers.jsonl", limit=20
+            ),
+        }
 
     def _mock_proposal(self, state: ResearchState) -> ResearchProposal:
         return ResearchProposal(

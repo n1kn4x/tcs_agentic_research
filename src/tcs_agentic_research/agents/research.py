@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-import json
 import re
 from dataclasses import asdict, dataclass
+from typing import Any
 
 from ..artifact_store import ArtifactStore
 from ..llm import LLMRouter
 from ..prompt_loader import render_prompt
+from ..prompt_serialization import compact_json_dumps
 from ..render import render_report_markdown
 from ..schemas import (
     ArtifactRef,
@@ -119,21 +120,18 @@ class ResearchAgent:
         state: ResearchState,
         proposal: ResearchProposal,
         literature_answers: list[dict[str, object]],
-    ) -> str:
-        return json.dumps(
-            {
-                "research_task_md": task,
-                "research_state": state.model_dump(mode="json"),
-                "proposal": proposal.model_dump(mode="json"),
-                # Literature context is only supplied through mapped-nomenclature answers,
-                # with quote-level provenance and duplicate-result flags.
-                "local_literature_answers": literature_answers,
-                "recent_claims": self.store.read_jsonl(ArtifactStore.CLAIM_LEDGER, limit=30),
-            },
-            indent=2,
-        )
+    ) -> dict[str, object]:
+        return {
+            "research_task_md": task,
+            "research_state": state.model_dump(mode="json"),
+            "proposal": proposal.model_dump(mode="json"),
+            # Literature context is only supplied through mapped-nomenclature answers,
+            # with quote-level provenance and duplicate-result flags.
+            "local_literature_answers": literature_answers,
+            "recent_claims": self.store.read_jsonl(ArtifactStore.CLAIM_LEDGER, limit=30),
+        }
 
-    def _generate_report(self, proposal: ResearchProposal, context: str) -> ResearchReport:
+    def _generate_report(self, proposal: ResearchProposal, context: Any) -> ResearchReport:
         mock_output = self._mock_report(proposal)
         messages = [
             {
@@ -147,7 +145,7 @@ class ResearchAgent:
                     "referenced by durable artifacts. The research subagent will run "
                     "a bounded observe-plan-act loop after this draft to invoke "
                     "verification/literature subsystems for explicit obligations.\n"
-                    f"Context:\n{context}"
+                    "Context:\n" + compact_json_dumps(context)
                 ),
             },
         ]
@@ -162,7 +160,7 @@ class ResearchAgent:
         self,
         report: ResearchReport,
         proposal: ResearchProposal,
-        base_context: str,
+        base_context: Any,
         *,
         max_rounds: int,
     ) -> list[str]:
@@ -231,26 +229,24 @@ class ResearchAgent:
 
     def _loop_context(
         self,
-        base_context: str,
+        base_context: Any,
         report: ResearchReport,
         observations: list[str],
-    ) -> str:
-        loop_state = {
-            "current_report": report.model_dump(mode="json"),
-            "private_loop_observations": observations,
+    ) -> dict[str, object]:
+        return {
+            "base_context": base_context,
+            "research_subagent_private_loop_state": {
+                "current_report": report.model_dump(mode="json"),
+                "private_loop_observations": observations,
+            },
         }
-        return (
-            base_context
-            + "\n\nResearch subagent private loop state:\n"
-            + json.dumps(loop_state, indent=2)
-        )
 
     def _final_critic_context(
         self,
-        base_context: str,
+        base_context: Any,
         report: ResearchReport,
         observations: list[str],
-    ) -> str:
+    ) -> dict[str, object]:
         return self._loop_context(base_context, report, observations)
 
     def _plan_subsystem_actions(
@@ -384,7 +380,7 @@ class ResearchAgent:
         action: _ResearchLoopAction,
         report: ResearchReport,
         *,
-        context: str,
+        context: Any,
     ) -> tuple[str, list[ArtifactRef]]:
         if action.action_type == "literature_query":
             return self._run_literature_action(action, report)
@@ -460,7 +456,7 @@ class ResearchAgent:
         action: _ResearchLoopAction,
         report: ResearchReport,
         *,
-        context: str,
+        context: Any,
     ) -> tuple[str, list[ArtifactRef]]:
         obligation = self._find_obligation(report, action.proof_obligation_id)
         if obligation is None:
@@ -470,16 +466,12 @@ class ResearchAgent:
                 [],
             )
         goal = self._lean_goal_from_obligation(obligation)
-        result = self.theorem_prover.prove(
-            goal,
-            context=(
-                context
-                + "\n\nSelected research-loop action:\n"
-                + json.dumps(asdict(action), indent=2)
-                + "\n\nCurrent report before LEAP verification:\n"
-                + report.model_dump_json(indent=2)
-            ),
-        )
+        leap_context = {
+            "context": context,
+            "selected_research_loop_action": asdict(action),
+            "current_report_before_leap_verification": report.model_dump(mode="json"),
+        }
+        result = self.theorem_prover.prove(goal, context=compact_json_dumps(leap_context))
         self._record_theorem_prover_result(report, obligation, result)
         refs = _unique_refs([*result.proved_artifacts, *result.artifact_refs])
         return (
@@ -493,7 +485,7 @@ class ResearchAgent:
         action: _ResearchLoopAction,
         report: ResearchReport,
         *,
-        context: str,
+        context: Any,
     ) -> tuple[str, list[ArtifactRef]]:
         obligation = self._find_obligation(report, action.proof_obligation_id)
         if obligation is None:
@@ -538,9 +530,15 @@ class ResearchAgent:
         obligation: ProofObligation,
         report: ResearchReport,
         *,
-        context: str,
+        context: Any,
     ) -> ExperimentPlan:
         mock_output = self._mock_experiment_plan(obligation)
+        prompt_payload = {
+            "action": asdict(action),
+            "obligation": obligation.model_dump(mode="json"),
+            "current_report": report.model_dump(mode="json"),
+            "context": context,
+        }
         messages = [
             {
                 "role": "system",
@@ -548,13 +546,8 @@ class ResearchAgent:
             },
             {
                 "role": "user",
-                "content": (
-                    "Create an executable experiment for this research-loop action.\n\n"
-                    f"Action:\n{json.dumps(asdict(action), indent=2)}\n\n"
-                    f"Obligation:\n{obligation.model_dump_json(indent=2)}\n\n"
-                    f"Current report:\n{report.model_dump_json(indent=2)}\n\n"
-                    f"Context:\n{context}"
-                ),
+                "content": "Create an executable experiment for this research-loop action.\n"
+                + compact_json_dumps(prompt_payload),
             },
         ]
         return self.router.complete_structured(

@@ -5,6 +5,7 @@ from __future__ import annotations
 from ..artifact_store import ArtifactStore
 from ..llm import LLMRouter
 from ..prompt_loader import render_prompt
+from ..prompt_serialization import compact_json_dumps
 from ..schemas import (
     ClaimRecord,
     ClaimStatus,
@@ -30,13 +31,18 @@ class IndependentReplicationAgent:
         }
         mock_output = self._mock_result(report)
         messages = [
-            {"role": "system", "content": render_prompt("independent_replication", override_dir=self.prompt_dir)},
+            {
+                "role": "system",
+                "content": render_prompt(
+                    "independent_replication", override_dir=self.prompt_dir
+                ),
+            },
             {
                 "role": "user",
                 "content": (
                     "Independently verify the claimed breakthrough from this minimized context. "
                     "Do not rely on persuasive history; reconstruct or refute.\n"
-                    f"{minimized_context}"
+                    + compact_json_dumps(minimized_context)
                 ),
             },
         ]

@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from typing import TypeVar
+from typing import Any, TypeVar
 
 from ..artifact_store import ArtifactStore
 from ..llm import LLMRouter
 from ..prompt_loader import render_prompt
+from ..prompt_serialization import compact_json_dumps
 from ..schemas import (
     ClaimRecord,
     ClaimStatus,
@@ -107,14 +108,23 @@ class ResearchCriticAgent:
         self.router = router
         self.prompt_dir = prompt_dir
 
-    def review(self, report: ResearchReport, context: str = "") -> tuple[ResearchReport, ResearchCritique]:
+    def review(
+        self, report: ResearchReport, context: Any = ""
+    ) -> tuple[ResearchReport, ResearchCritique]:
         report = self.enforce_evidence_statuses(report)
         mock_output = self._mock_critique(report)
+        prompt_payload = {
+            "context": context,
+            "report_to_critique": report.model_dump(mode="json"),
+        }
         messages = [
-            {"role": "system", "content": render_prompt("research_critic", override_dir=self.prompt_dir)},
+            {
+                "role": "system",
+                "content": render_prompt("research_critic", override_dir=self.prompt_dir),
+            },
             {
                 "role": "user",
-                "content": f"Context:\n{context}\n\nReport to critique:\n{report.model_dump_json(indent=2)}",
+                "content": "Context and report to critique:\n" + compact_json_dumps(prompt_payload),
             },
         ]
         critique = self.router.complete_structured(

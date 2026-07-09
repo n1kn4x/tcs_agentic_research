@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import httpx
@@ -24,6 +25,7 @@ from tcs_agentic_research.llm import (
     _prepare_structured_messages,
 )
 from tcs_agentic_research.prompt_loader import load_prompt
+from tcs_agentic_research.prompt_serialization import compact_json_dumps
 from tcs_agentic_research.schemas import (
     ArtifactRef,
     ClaimRecord,
@@ -138,6 +140,41 @@ def test_repo_structured_prompts_intentionally_keep_schema_placeholders() -> Non
         text = load_prompt(prompt_name)
         assert "{{" + schema.__name__ + "}}" in text
         assert "Use the complete JSON schema inserted below" in text
+
+
+def test_prompt_compaction_is_self_contained_and_lossless_for_duplicate_refs() -> None:
+    ref = ArtifactRef(
+        path="ResearchTask.md",
+        kind="markdown",
+        sha256="abc123",
+        summary="Core task artifact.",
+        created_at="2026-01-01T00:00:00+00:00",
+    )
+    expected = {
+        "first": ref.model_dump(mode="json"),
+        "second": ref.model_dump(mode="json"),
+    }
+
+    compacted = json.loads(compact_json_dumps(expected))
+
+    assert "$defs" in compacted
+    assert compacted["payload"]["first"] == compacted["payload"]["second"]
+    assert _expand_prompt_refs(compacted) == expected
+
+
+def _expand_prompt_refs(compacted: dict[str, object]) -> object:
+    defs = compacted.get("$defs", {})
+
+    def expand(node: object) -> object:
+        if isinstance(node, dict) and set(node) == {"$ref"}:
+            return defs[str(node["$ref"])]
+        if isinstance(node, dict):
+            return {key: expand(value) for key, value in node.items()}
+        if isinstance(node, list):
+            return [expand(value) for value in node]
+        return node
+
+    return expand(compacted["payload"])
 
 
 def test_schema_placeholders_are_resolved_by_name_not_by_output_schema() -> None:
