@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import json
 from pathlib import Path
 
@@ -21,11 +22,13 @@ from tcs_agentic_research.leap.harness import (
 from tcs_agentic_research.llm import (
     LLMRouter,
     StructuredLLMError,
+    SYSTEM_OWNED_SCHEMA_FIELDS,
     _llm_json_schema,
     _prepare_structured_messages,
 )
 from tcs_agentic_research.prompt_loader import load_prompt
 from tcs_agentic_research.prompt_serialization import compact_json_dumps
+from tcs_agentic_research import schemas as schema_module
 from tcs_agentic_research.schemas import (
     ArtifactRef,
     ClaimRecord,
@@ -50,6 +53,7 @@ from tcs_agentic_research.schemas import (
     ResearchReport,
     ResearchState,
     RouterSettings,
+    StrictModel,
 )
 
 
@@ -227,6 +231,16 @@ def test_llm_schema_omits_system_owned_fields() -> None:
     )
     assert report.proposal_id == ""
     assert report.report_id.startswith("report_")
+
+
+def test_system_owned_fields_are_never_required_for_validation() -> None:
+    for _name, model in inspect.getmembers(schema_module, inspect.isclass):
+        if not issubclass(model, StrictModel):
+            continue
+        for field_name, field in model.model_fields.items():
+            assert not (
+                field_name in SYSTEM_OWNED_SCHEMA_FIELDS and field.is_required()
+            ), f"{model.__name__}.{field_name} is stripped from LLM payloads but required"
 
 
 def _schema_property_names(node: object) -> set[str]:

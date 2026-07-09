@@ -237,7 +237,7 @@ class ProposalCritique(StrictModel):
 
 class ProposalLedgerEntry(StrictModel):
     event_id: str = Field(default_factory=lambda: new_id("proposal_event"))
-    proposal_id: str
+    proposal_id: str = ""
     event_type: Literal["generated", "revised", "accepted", "rejected", "critic_review"]
     proposal: ResearchProposal | None = None
     critique: ProposalCritique | None = None
@@ -275,7 +275,7 @@ class LiteratureDependency(StrictModel):
 
 
 class ExperimentResult(StrictModel):
-    run_id: str
+    run_id: str = Field(default_factory=lambda: new_id("run"))
     summary: str
     artifact_refs: list[ArtifactRef] = Field(default_factory=list)
     seeds: list[int] = Field(default_factory=list)
@@ -525,7 +525,7 @@ class LeanCompilerLog(StrictModel):
 
 
 class ProofDAGSummary(StrictModel):
-    dag_id: str
+    dag_id: str = Field(default_factory=lambda: new_id("dag"))
     root_goal_id: str
     open_goal_ids: list[str] = Field(default_factory=list)
     proved_goal_ids: list[str] = Field(default_factory=list)
