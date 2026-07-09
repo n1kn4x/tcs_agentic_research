@@ -72,15 +72,16 @@ class _Candidate(tuple):
 
 
 
-def compact_json_dumps(payload: Any, *, indent: int = 2) -> str:
-    """Serialize ``payload`` as self-contained JSON with exact duplicate values referenced once.
+def compact_json_dumps(payload: Any) -> str:
+    """Serialize ``payload`` as minified, self-contained JSON with exact duplicates referenced once.
 
     The function is intentionally conservative:
     - canonical data is first converted to plain JSON-compatible values;
     - only exact duplicate values are replaced, so no information is summarized or discarded;
     - every emitted ``{"$ref": "..."}`` has its full value in the top-level ``"$defs"`` table;
     - ID-bearing objects and artifact references are eligible even when they are relatively small;
-    - generic containers and strings are deduplicated only when large enough to avoid noisy refs.
+    - generic containers and strings are deduplicated only when large enough to avoid noisy refs;
+    - prompt JSON is minified to avoid spending context on pretty-printing whitespace.
 
     The returned string is meant for LLM prompts, not for persistence as canonical state.
     """
@@ -89,14 +90,14 @@ def compact_json_dumps(payload: Any, *, indent: int = 2) -> str:
     candidates, counts = _collect_candidates(plain)
     repeated = {candidate for candidate, count in counts.items() if count > 1}
     if not repeated:
-        return _json_dumps(plain, indent=indent)
+        return _json_dumps(plain)
 
     candidate_refs = _assign_reference_ids(repeated)
     used_refs: set[str] = set()
     compact_payload = _replace_repeated_values(plain, candidate_refs, used_refs)
 
     if not used_refs:
-        return _json_dumps(plain, indent=indent)
+        return _json_dumps(plain)
 
     definitions = {
         ref_id: candidates[candidate]
@@ -115,7 +116,7 @@ def compact_json_dumps(payload: Any, *, indent: int = 2) -> str:
         "$defs": definitions,
         "payload": compact_payload,
     }
-    return _json_dumps(wrapped, indent=indent)
+    return _json_dumps(wrapped)
 
 
 
@@ -232,8 +233,8 @@ def _canonical_json(value: Any) -> str:
 
 
 
-def _json_dumps(value: Any, *, indent: int) -> str:
-    return json.dumps(value, sort_keys=False, ensure_ascii=False, indent=indent)
+def _json_dumps(value: Any) -> str:
+    return json.dumps(value, sort_keys=False, ensure_ascii=False, separators=(",", ":"))
 
 
 
