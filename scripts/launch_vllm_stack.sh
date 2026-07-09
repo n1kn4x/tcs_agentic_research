@@ -17,6 +17,16 @@ set -euo pipefail
 command -v tmux >/dev/null 2>&1 || { echo "tmux is required" >&2; exit 1; }
 command -v vllm >/dev/null 2>&1 || { echo "vllm is required on PATH" >&2; exit 1; }
 
+PYTHON_BIN="${PYTHON_BIN:-}"
+if [[ -z "$PYTHON_BIN" ]]; then
+  if command -v python3 >/dev/null 2>&1; then
+    PYTHON_BIN="python3"
+  else
+    PYTHON_BIN="python"
+  fi
+fi
+command -v "$PYTHON_BIN" >/dev/null 2>&1 || { echo "python3 or python is required to parse *_EXTRA_ARGS" >&2; exit 1; }
+
 HOST="${HOST:-0.0.0.0}"
 LOG_DIR="${LOG_DIR:-logs/vllm}"
 REPLACE="${REPLACE:-0}"
@@ -64,10 +74,12 @@ DEEP_DTYPE="${DEEP_DTYPE:-auto}"
 ROUTINE_DTYPE="${ROUTINE_DTYPE:-auto}"
 PROOF_DTYPE="${PROOF_DTYPE:-auto}"
 
-# Free-form additional vLLM args. Useful for reasoning parsers, for example:
+# Free-form additional vLLM args. Shell-style quoting is respected, so JSON
+# values containing spaces can be written as single-quoted arguments. Examples:
 #   DEEP_EXTRA_ARGS='--enable-reasoning --reasoning-parser qwen3'
-#   VERIFIER_EXTRA_ARGS='--enable-reasoning --reasoning-parser deepseek_r1'
-DEEP_EXTRA_ARGS="${DEEP_EXTRA_ARGS:- --hf-overrides '{"rope_parameters": {"factor": 4.0, "original_max_position_embeddings": 32768, "rope_theta": 1000000, "rope_type": "yarn"}}' --default-chat-template-kwargs '{"enable_thinking": false}'}"
+#   DEEP_EXTRA_ARGS='--hf-overrides '\''{"foo": {"bar": 1}}'\'''
+DEFAULT_DEEP_EXTRA_ARGS="--hf-overrides '{\"rope_parameters\": {\"factor\": 4.0, \"original_max_position_embeddings\": 32768, \"rope_theta\": 1000000, \"rope_type\": \"yarn\"}}' --default-chat-template-kwargs '{\"enable_thinking\": false}'"
+DEEP_EXTRA_ARGS="${DEEP_EXTRA_ARGS:-$DEFAULT_DEEP_EXTRA_ARGS}"
 ROUTINE_EXTRA_ARGS="${ROUTINE_EXTRA_ARGS:-}"
 PROOF_EXTRA_ARGS="${PROOF_EXTRA_ARGS:-}"
 
@@ -75,6 +87,37 @@ mkdir -p "$LOG_DIR"
 
 shell_join() {
   printf '%q ' "$@"
+}
+
+parse_extra_args_into_array() {
+  local extra_args="$1"
+  local -n out_array="$2"
+  local tmp parsed_arg
+
+  tmp="$(mktemp)"
+  if ! EXTRA_ARGS="$extra_args" "$PYTHON_BIN" - <<'PY' >"$tmp"
+import os
+import shlex
+import sys
+
+try:
+    args = shlex.split(os.environ["EXTRA_ARGS"])
+except ValueError as exc:
+    print(f"failed to parse *_EXTRA_ARGS: {exc}", file=sys.stderr)
+    sys.exit(2)
+
+for arg in args:
+    sys.stdout.buffer.write(arg.encode("utf-8") + b"\0")
+PY
+  then
+    rm -f "$tmp"
+    return 1
+  fi
+
+  while IFS= read -r -d '' parsed_arg; do
+    out_array+=("$parsed_arg")
+  done <"$tmp"
+  rm -f "$tmp"
 }
 
 launch_profile() {
@@ -125,8 +168,11 @@ launch_profile() {
     cmd+=(--trust-remote-code)
   fi
   if [[ -n "$extra_args" ]]; then
-    # shellcheck disable=SC2206
-    local -a parsed_extra_args=( $extra_args )
+    local -a parsed_extra_args=()
+    if ! parse_extra_args_into_array "$extra_args" parsed_extra_args; then
+      echo "Failed to parse extra args for $session" >&2
+      exit 1
+    fi
     cmd+=("${parsed_extra_args[@]}")
   fi
 
