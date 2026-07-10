@@ -10,7 +10,7 @@ router:
   timeout_seconds: 600
   max_retries: 2
   profiles:
-    deep:
+    deep-think-tools:
       model: deep-reasoner
       base_url: http://localhost:8000/v1
       api_key: EMPTY
@@ -27,13 +27,30 @@ router:
           enable_thinking: true
           preserve_thinking: true
       task_types:
+        - proposal_generation
+
+    deep:
+      model: deep-reasoner
+      base_url: http://localhost:8000/v1
+      api_key: EMPTY
+      temperature: 1.0
+      max_tokens: 32768
+      supports_tools: false
+      extra_body:
+        top_p: 0.95
+        top_k: 20
+        min_p: 0.0
+        presence_penalty: 1.5
+        repetition_penalty: 1.0
+        chat_template_kwargs:
+          enable_thinking: false
+          preserve_thinking: false
+      task_types:
         - initialization
         - initialization_interview
-        - proposal_generation
-        - proposal_critique
         - research_execution
-        - research_critique
-        - independent_replication
+        - obstruction_search
+
     precise:
       model: deep-reasoner
       base_url: http://localhost:8000/v1
@@ -54,6 +71,7 @@ router:
       task_types:
         - theorem_proving
         - experiment_planning
+
     routine:
       model: routine-extractor
       base_url: http://localhost:8001/v1
