@@ -41,7 +41,6 @@ class ResearchGraph:
         prompt_dir: str | None = None,
         max_research_thinking_loop_rounds: int = 3,
         max_proposal_revisions: int = 2,
-        max_proposal_thinking_loop_rounds: int = 15,
     ):
         self.store = ArtifactStore(workspace)
         self.store.initialize_layout()
@@ -49,7 +48,6 @@ class ResearchGraph:
         self.prompt_dir = prompt_dir
         self.max_research_thinking_loop_rounds = max_research_thinking_loop_rounds
         self.max_proposal_revisions = max_proposal_revisions
-        self.max_proposal_thinking_loop_rounds = max_proposal_thinking_loop_rounds
 
     def build(self):  # LangGraph is an optional runtime dependency until graph execution.
         try:
@@ -142,7 +140,6 @@ class ResearchGraph:
         ).generate_and_review(
             state,
             max_revisions=self.max_proposal_revisions,
-            max_thinking_loop_rounds=self.max_proposal_thinking_loop_rounds,
         )
         return {
             "iteration": state.iteration,

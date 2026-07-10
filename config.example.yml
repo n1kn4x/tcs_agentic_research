@@ -11,6 +11,10 @@ router:
       api_key: EMPTY
       temperature: 0.2
       max_tokens: 8192
+      supports_tools: true
+      extra_body:
+        chat_template_kwargs:
+          enable_thinking: true
       task_types:
         - initialization
         - initialization_interview
@@ -27,6 +31,7 @@ router:
       api_key: EMPTY
       temperature: 0.0
       max_tokens: 4096
+      supports_tools: false
       task_types:
         - formatting
         - extraction

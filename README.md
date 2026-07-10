@@ -60,7 +60,8 @@ docker compose -f docker-compose.vllm.yml up
 Or run vLLM directly:
 
 ```bash
-vllm serve Qwen/Qwen3-32B --served-model-name deep-reasoner --port 8000
+vllm serve Qwen/Qwen3-32B --served-model-name deep-reasoner --port 8000 \
+  --enable-auto-tool-choice --tool-call-parser hermes
 vllm serve Qwen/Qwen3-8B  --served-model-name routine-extractor --port 8001
 ```
 
@@ -146,7 +147,7 @@ Nodes durably write artifacts before returning. Solved verdicts are computed det
 ## Agents
 
 - `InitializationAgent`: LLM-guided adaptive interview and synthesis of `ResearchTask.md`, `Nomenclature.yml`, initial state, and ledgers.
-- `ProposalAgent`: proposal generator plus proposal critic with revision/rejection logic.
+- `ProposalAgent`: proposal generator using native OpenAI/vLLM tool calls plus proposal critic with revision/rejection logic. Private model reasoning is not replayed into future contexts; only committed proposal artifacts are.
 - `ResearchAgent`: executes a selected proposal and writes a structured `ResearchReport`.
 - `ResearchCriticAgent`: distinguishes proofs, citations, experiments, informal arguments, conjectures, refutations, and forced verification obligations.
 - `LiteratureResearcher`: modular literature pipeline for OpenAlex search/citation candidate discovery, arXiv/DOI/PDF import, PDF text extraction, theorem/algorithm extraction, nomenclature updates, duplicate detection, and quote-provenance query answers in mapped notation.

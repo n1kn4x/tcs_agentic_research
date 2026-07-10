@@ -32,7 +32,6 @@ def main(argv: list[str] | None = None) -> int:
         help="Maximum private research-agent subsystem loop rounds per proposal.",
     )
     run_p.add_argument("--max-proposal-revisions", type=int, default=2)
-    run_p.add_argument("--max-proposal-thinking-loop-rounds", type=int, default=15)
     run_p.add_argument("--thread-id", default="default")
 
     status_p = sub.add_parser("status", help="Show compact workspace status")
@@ -172,7 +171,6 @@ def _cmd_run(args: argparse.Namespace) -> int:
         prompt_dir=args.prompt_dir,
         max_research_thinking_loop_rounds=max_loop_rounds,
         max_proposal_revisions=int(args.max_proposal_revisions),
-        max_proposal_thinking_loop_rounds=int(args.max_proposal_thinking_loop_rounds),
     )
     result = graph.run(max_iterations=args.max_iterations, thread_id=args.thread_id)
     print(json.dumps(result, indent=2, sort_keys=True, default=str))

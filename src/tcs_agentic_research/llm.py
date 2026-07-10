@@ -6,6 +6,7 @@ import json
 import logging
 import re
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, TypeVar
 
@@ -13,7 +14,7 @@ import httpx
 import yaml
 from pydantic import BaseModel, ValidationError
 
-from .artifact_store import ArtifactStore
+from .artifact_store import ArtifactStore, to_plain
 from .schemas import AppConfig, ModelCallRecord, ModelProfile, RouterSettings
 
 T = TypeVar("T", bound=BaseModel)
@@ -69,7 +70,7 @@ class LLMRouter:
         self,
         *,
         task_type: str,
-        messages: list[dict[str, str]],
+        messages: list[dict[str, Any]],
         temperature: float | None = None,
         max_tokens: int | None = None,
     ) -> str:
@@ -98,7 +99,7 @@ class LLMRouter:
         self,
         *,
         task_type: str,
-        messages: list[dict[str, str]],
+        messages: list[dict[str, Any]],
         schema: type[T],
         mock_output: T | None = None,
         temperature: float | None = None,
@@ -241,14 +242,285 @@ class LLMRouter:
         _log_structured_failure(task_type, schema.__name__, failures)
         raise StructuredLLMError("; ".join(failures))
 
+    def complete_structured_with_tools(
+        self,
+        *,
+        task_type: str,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        tool_executors: dict[str, Callable[[dict[str, Any]], Any]],
+        schema: type[T],
+        final_tool_name: str,
+        mock_output: T | None = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+    ) -> tuple[T, dict[str, Any]]:
+        """Complete a structured task through the OpenAI/vLLM tool-call interface.
+
+        The model may use ordinary tools for external observations and must finish by calling
+        ``final_tool_name`` with arguments that validate against ``schema``. Raw assistant
+        content/reasoning is intentionally not preserved in the returned trace; the trace contains
+        only tool names, arguments, observations, validation errors, and finalization metadata.
+        """
+        profile_name, profile = self.select_profile(task_type)
+        started = time.perf_counter()
+        failures: list[str] = []
+        response_payload: dict[str, Any] | None = None
+        usage_totals = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+        trace: dict[str, Any] = {
+            "task_type": task_type,
+            "schema": schema.__name__,
+            "final_tool_name": final_tool_name,
+            "private_reasoning": "redacted_not_logged_or_replayed",
+            "tool_calls": [],
+        }
+
+        if mock_output is not None and not self.dry_run:
+            failures.append("real_run: mock_output was supplied; refusing to use it")
+            self._log_call(
+                task_type,
+                profile_name,
+                profile,
+                started,
+                False,
+                schema.__name__,
+                failures,
+                None,
+            )
+            _log_structured_failure(task_type, schema.__name__, failures)
+            raise ValueError("mock_output may only be supplied when LLMRouter.dry_run is true")
+
+        messages = _prepare_structured_messages(messages, schema)
+
+        if self.dry_run:
+            if mock_output is not None:
+                failures.append("dry_run: returned supplied mock output without calling an LLM")
+                trace["finalization"] = {"mode": "dry_run_mock_output"}
+                self._log_call(
+                    task_type,
+                    profile_name,
+                    profile,
+                    started,
+                    True,
+                    schema.__name__,
+                    failures,
+                    None,
+                    used_mock_output=True,
+                )
+                return mock_output, trace
+            failures.append("dry_run: no mock output supplied")
+            self._log_call(
+                task_type,
+                profile_name,
+                profile,
+                started,
+                False,
+                schema.__name__,
+                failures,
+                None,
+            )
+            raise StructuredLLMError(
+                f"dry-run router cannot synthesize {schema.__name__}; provide a mock_output"
+            )
+
+        if not profile.supports_tools:
+            failures.append(f"profile `{profile_name}` does not declare supports_tools=true")
+            self._log_call(
+                task_type,
+                profile_name,
+                profile,
+                started,
+                False,
+                schema.__name__,
+                failures,
+                None,
+            )
+            _log_structured_failure(task_type, schema.__name__, failures)
+            raise StructuredLLMError("; ".join(failures))
+
+        if _find_tool(tools, final_tool_name) is None:
+            failures.append(f"final tool `{final_tool_name}` was not included in tools")
+            self._log_call(
+                task_type,
+                profile_name,
+                profile,
+                started,
+                False,
+                schema.__name__,
+                failures,
+                None,
+            )
+            _log_structured_failure(task_type, schema.__name__, failures)
+            raise StructuredLLMError("; ".join(failures))
+
+        history = [dict(message) for message in messages]
+        turn_index = 0
+
+        while True:
+            turn_index += 1
+            try:
+                response_payload = self._post_chat_completion(
+                    profile,
+                    history,
+                    temperature=profile.temperature if temperature is None else temperature,
+                    max_tokens=profile.max_tokens if max_tokens is None else max_tokens,
+                    tools=tools,
+                    tool_choice="auto",
+                )
+                _accumulate_usage(usage_totals, response_payload)
+                message = response_payload["choices"][0]["message"]
+                tool_calls = _message_tool_calls(message)
+
+                if tool_calls:
+                    history.append(_assistant_tool_call_message(tool_calls))
+                    for tool_call in tool_calls:
+                        call_id, tool_name, raw_arguments = _tool_call_parts(tool_call)
+                        try:
+                            arguments = _drop_private_tool_argument_fields(
+                                _parse_tool_arguments(raw_arguments)
+                            )
+                        except Exception as exc:  # noqa: BLE001 - return as tool observation
+                            failures.append(
+                                f"turn_{turn_index}: tool_arguments_invalid for "
+                                f"{tool_name or '<unknown>'}: {exc}"
+                            )
+                            observation = {
+                                "status": "error",
+                                "error_type": type(exc).__name__,
+                                "error": str(exc),
+                            }
+                            history.append(_tool_result_message(call_id, tool_name, observation))
+                            trace["tool_calls"].append(
+                                {
+                                    "turn": turn_index,
+                                    "name": tool_name,
+                                    "arguments": raw_arguments,
+                                    "status": "argument_error",
+                                    "observation": observation,
+                                }
+                            )
+                            continue
+
+                        if tool_name == final_tool_name:
+                            try:
+                                payload = to_plain(arguments)
+                                _strip_system_owned_payload_fields(payload)
+                                result = schema.model_validate(payload)
+                                trace["finalization"] = {
+                                    "turn": turn_index,
+                                    "mode": "final_tool_call",
+                                    "tool_name": final_tool_name,
+                                }
+                                self._log_call(
+                                    task_type,
+                                    profile_name,
+                                    profile,
+                                    started,
+                                    True,
+                                    schema.__name__,
+                                    failures,
+                                    _usage_payload(usage_totals),
+                                )
+                                return result, trace
+                            except (ValidationError, TypeError, ValueError) as exc:
+                                failures.append(
+                                    f"turn_{turn_index}: final_tool_payload_invalid: {exc}"
+                                )
+                                observation = {
+                                    "status": "error",
+                                    "error_type": type(exc).__name__,
+                                    "error": _truncate(str(exc), 4000),
+                                    "instruction": (
+                                        f"Retry by calling `{final_tool_name}` with arguments "
+                                        f"that validate as `{schema.__name__}`."
+                                    ),
+                                }
+                                history.append(_tool_result_message(call_id, tool_name, observation))
+                                trace["tool_calls"].append(
+                                    {
+                                        "turn": turn_index,
+                                        "name": tool_name,
+                                        "arguments": to_plain(arguments),
+                                        "status": "validation_error",
+                                        "observation": observation,
+                                    }
+                                )
+                                continue
+
+                        observation = _execute_openai_tool(tool_name, arguments, tool_executors)
+                        history.append(_tool_result_message(call_id, tool_name, observation))
+                        trace["tool_calls"].append(
+                            {
+                                "turn": turn_index,
+                                "name": tool_name,
+                                "arguments": to_plain(arguments),
+                                "status": observation.get("status", "ok")
+                                if isinstance(observation, dict)
+                                else "ok",
+                                "observation": to_plain(observation),
+                            }
+                        )
+                    continue
+
+                content = _strip_reasoning_blocks(str(message.get("content") or "")).strip()
+                if content:
+                    try:
+                        payload = _extract_json(content)
+                        _strip_system_owned_payload_fields(payload)
+                        result = schema.model_validate(payload)
+                        trace["finalization"] = {
+                            "turn": turn_index,
+                            "mode": "assistant_content_json",
+                        }
+                        self._log_call(
+                            task_type,
+                            profile_name,
+                            profile,
+                            started,
+                            True,
+                            schema.__name__,
+                            failures,
+                            _usage_payload(usage_totals),
+                        )
+                        return result, trace
+                    except (ValidationError, json.JSONDecodeError, TypeError, ValueError) as exc:
+                        failures.append(f"turn_{turn_index}: no_valid_final_tool_or_json: {exc}")
+
+                history.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            f"Do not call more external tools unless necessary. Finish by calling "
+                            f"`{final_tool_name}` with arguments that validate as "
+                            f"`{schema.__name__}`. Do not reveal private reasoning."
+                        ),
+                    }
+                )
+            except Exception as exc:  # noqa: BLE001 - exact failure recorded for auditability
+                failures.append(f"turn_{turn_index}: {type(exc).__name__}: {exc}")
+                self._log_call(
+                    task_type,
+                    profile_name,
+                    profile,
+                    started,
+                    False,
+                    schema.__name__,
+                    failures,
+                    _usage_payload(usage_totals, fallback=response_payload),
+                )
+                _log_structured_failure(task_type, schema.__name__, failures)
+                raise StructuredLLMError("; ".join(failures)) from exc
+
     def _post_chat_completion(
         self,
         profile: ModelProfile,
-        messages: list[dict[str, str]],
+        messages: list[dict[str, Any]],
         *,
         temperature: float,
         max_tokens: int,
         json_schema: dict[str, Any] | None = None,
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: Any | None = None,
     ) -> dict[str, Any]:
         body: dict[str, Any] = {
             "model": profile.model,
@@ -256,12 +528,17 @@ class LLMRouter:
             "temperature": temperature,
             "max_tokens": max_tokens,
         }
+        body.update(profile.extra_body)
         if json_schema is not None:
             body["response_format"] = {"type": "json_object"}
             # vLLM supports guided decoding through guided_json in recent versions.
             # In-prompt schema placeholders remain useful because backend support and
             # adherence vary across vLLM/model versions.
             body["guided_json"] = json_schema
+        if tools is not None:
+            body["tools"] = tools
+        if tool_choice is not None:
+            body["tool_choice"] = tool_choice
         headers = {"Authorization": f"Bearer {profile.api_key}"}
         url = profile.base_url.rstrip("/") + "/chat/completions"
         with httpx.Client(timeout=self.settings.timeout_seconds) as client:
@@ -299,6 +576,149 @@ class LLMRouter:
         )
         if self.store is not None:
             self.store.append_model_call(record)
+
+
+def openai_tool_from_schema(
+    name: str,
+    description: str,
+    schema: type[BaseModel],
+    *,
+    strip_system_owned_fields: bool = True,
+) -> dict[str, Any]:
+    """Build an OpenAI-compatible function tool from a Pydantic schema."""
+    parameters = _llm_json_schema(schema) if strip_system_owned_fields else schema.model_json_schema()
+    return {
+        "type": "function",
+        "function": {
+            "name": name,
+            "description": description,
+            "parameters": parameters,
+        },
+    }
+
+
+def _find_tool(tools: list[dict[str, Any]], name: str) -> dict[str, Any] | None:
+    for tool in tools:
+        function = tool.get("function") if isinstance(tool, dict) else None
+        if isinstance(function, dict) and function.get("name") == name:
+            return tool
+    return None
+
+
+def _message_tool_calls(message: dict[str, Any]) -> list[dict[str, Any]]:
+    tool_calls = message.get("tool_calls") or []
+    if not isinstance(tool_calls, list):
+        return []
+    return [call for call in tool_calls if isinstance(call, dict)]
+
+
+def _assistant_tool_call_message(tool_calls: list[dict[str, Any]]) -> dict[str, Any]:
+    return {"role": "assistant", "content": "", "tool_calls": [_sanitize_tool_call(call) for call in tool_calls]}
+
+
+def _sanitize_tool_call(tool_call: dict[str, Any]) -> dict[str, Any]:
+    call_id, name, arguments = _tool_call_parts(tool_call)
+    return {
+        "id": call_id,
+        "type": "function",
+        "function": {"name": name, "arguments": arguments},
+    }
+
+
+def _tool_call_parts(tool_call: dict[str, Any]) -> tuple[str, str, Any]:
+    function = tool_call.get("function") if isinstance(tool_call, dict) else None
+    function = function if isinstance(function, dict) else {}
+    call_id = str(tool_call.get("id") or f"call_{abs(hash(json.dumps(tool_call, sort_keys=True, default=str)))}")
+    name = str(function.get("name") or "")
+    arguments = function.get("arguments", {})
+    return call_id, name, arguments
+
+
+def _parse_tool_arguments(arguments: Any) -> dict[str, Any]:
+    if isinstance(arguments, dict):
+        return arguments
+    if arguments is None:
+        return {}
+    if isinstance(arguments, str):
+        text = _strip_reasoning_blocks(arguments).strip()
+        if not text:
+            return {}
+        payload = _extract_json(text)
+        if isinstance(payload, dict):
+            return payload
+        raise TypeError("tool arguments must decode to a JSON object")
+    raise TypeError(f"tool arguments must be a dict or JSON string, got {type(arguments).__name__}")
+
+
+_PRIVATE_TOOL_ARGUMENT_FIELDS = {
+    "analysis",
+    "chain_of_thought",
+    "internal_reasoning",
+    "private_reasoning",
+    "rationale",
+    "reasoning",
+    "scratchpad",
+    "thought",
+    "thoughts",
+}
+
+
+def _drop_private_tool_argument_fields(node: Any) -> Any:
+    if isinstance(node, dict):
+        return {
+            key: _drop_private_tool_argument_fields(value)
+            for key, value in node.items()
+            if key not in _PRIVATE_TOOL_ARGUMENT_FIELDS
+        }
+    if isinstance(node, list):
+        return [_drop_private_tool_argument_fields(item) for item in node]
+    return node
+
+
+def _execute_openai_tool(
+    tool_name: str,
+    arguments: dict[str, Any],
+    executors: dict[str, Callable[[dict[str, Any]], Any]],
+) -> dict[str, Any]:
+    executor = executors.get(tool_name)
+    if executor is None:
+        return {
+            "status": "error",
+            "error_type": "UnknownTool",
+            "error": f"No executor is registered for tool `{tool_name}`.",
+        }
+    try:
+        result = to_plain(executor(arguments))
+        if isinstance(result, dict):
+            return result
+        return {"status": "ok", "result": result}
+    except Exception as exc:  # noqa: BLE001 - tool failures are observations for the model
+        return {"status": "error", "error_type": type(exc).__name__, "error": str(exc)}
+
+
+def _tool_result_message(call_id: str, tool_name: str, observation: Any) -> dict[str, Any]:
+    return {
+        "role": "tool",
+        "tool_call_id": call_id,
+        "name": tool_name,
+        "content": json.dumps(to_plain(observation), ensure_ascii=False, separators=(",", ":")),
+    }
+
+
+def _accumulate_usage(totals: dict[str, int], response_payload: dict[str, Any] | None) -> None:
+    usage = (response_payload or {}).get("usage", {})
+    for key in ["prompt_tokens", "completion_tokens", "total_tokens"]:
+        value = usage.get(key)
+        if isinstance(value, int):
+            totals[key] = totals.get(key, 0) + value
+
+
+def _usage_payload(
+    totals: dict[str, int], *, fallback: dict[str, Any] | None = None
+) -> dict[str, Any] | None:
+    if any(totals.get(key) for key in ["prompt_tokens", "completion_tokens", "total_tokens"]):
+        return {"usage": {key: value for key, value in totals.items() if value}}
+    return fallback
 
 
 def _raise_for_status_with_body(response: httpx.Response) -> None:
@@ -416,7 +836,7 @@ def _extract_assistant_content(response_payload: dict[str, Any] | None, *, limit
         content = response_payload["choices"][0]["message"].get("content", "")
     except Exception:  # noqa: BLE001 - best-effort diagnostic context for repair prompts
         content = json.dumps(response_payload, sort_keys=True)
-    text = str(content).strip() or "[The previous attempt returned empty assistant content.]"
+    text = _strip_reasoning_blocks(str(content)).strip() or "[The previous attempt returned empty assistant content.]"
     return _truncate(text, limit)
 
 

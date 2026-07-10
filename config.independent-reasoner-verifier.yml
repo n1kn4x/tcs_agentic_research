@@ -18,6 +18,10 @@ router:
       api_key: EMPTY
       temperature: 0.7
       max_tokens: 24576
+      supports_tools: true
+      extra_body:
+        chat_template_kwargs:
+          enable_thinking: true
       task_types:
         - initialization
         - initialization_interview
@@ -31,6 +35,10 @@ router:
       api_key: EMPTY
       temperature: 0.35
       max_tokens: 16384
+      supports_tools: false
+      extra_body:
+        chat_template_kwargs:
+          enable_thinking: true
       task_types:
         - proposal_critique
         - research_critique
@@ -43,6 +51,7 @@ router:
       api_key: EMPTY
       temperature: 0.0
       max_tokens: 8192
+      supports_tools: false
       task_types:
         - theorem_proving
 
@@ -52,6 +61,7 @@ router:
       api_key: EMPTY
       temperature: 0.0
       max_tokens: 8192
+      supports_tools: false
       task_types:
         - formatting
         - extraction

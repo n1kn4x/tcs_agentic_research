@@ -196,26 +196,6 @@ class ResearchProposal(StrictModel):
     created_at: str = Field(default_factory=utc_now)
 
 
-class ProposalLoopAction(StrictModel):
-    action_type: Literal[
-        "query_literature",
-        "search_papers",
-        "import_url",
-        "import_arxiv",
-        "import_doi",
-        "import_candidate",
-        "commit_proposal",
-    ]
-    rationale: str = ""
-    query: str = ""
-    url: str = ""
-    arxiv_id: str = ""
-    doi: str = ""
-    candidate_id: str = ""
-    extract_text: bool = True
-    proposal: ResearchProposal | None = None
-
-
 class CriticDecision(str, Enum):
     accept = "accept"
     revise = "revise"
@@ -568,6 +548,8 @@ class ModelProfile(StrictModel):
     temperature: float = 0.0
     max_tokens: int = 4096
     task_types: list[str] = Field(default_factory=list)
+    supports_tools: bool = False
+    extra_body: dict[str, Any] = Field(default_factory=dict)
 
 
 class RouterSettings(StrictModel):

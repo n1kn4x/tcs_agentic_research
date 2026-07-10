@@ -25,6 +25,7 @@ from tcs_agentic_research.llm import (
     SYSTEM_OWNED_SCHEMA_FIELDS,
     _llm_json_schema,
     _prepare_structured_messages,
+    openai_tool_from_schema,
 )
 from tcs_agentic_research.prompt_loader import load_prompt
 from tcs_agentic_research.prompt_serialization import compact_json_dumps
@@ -45,7 +46,6 @@ from tcs_agentic_research.schemas import (
     PaperMetadata,
     ProofObligation,
     ProposalCritique,
-    ProposalLoopAction,
     ReplicationResult,
     ReportOutcome,
     ResearchCritique,
@@ -68,7 +68,7 @@ PROMPT_SCHEMAS = {
     "literature_researcher": LiteratureExtract,
     "experiment_planner": ExperimentPlan,
     "proposal_critic": ProposalCritique,
-    "proposal_generator": ProposalLoopAction,
+    "proposal_generator": ResearchProposal,
     "research_agent": ResearchReport,
     "research_critic": ResearchCritique,
 }
@@ -206,6 +206,127 @@ def test_unknown_schema_placeholders_raise() -> None:
             [{"role": "system", "content": "Use {{DoesNotExist}}."}],
             ResearchReport,
         )
+
+
+def test_tool_schema_can_keep_tool_argument_ids() -> None:
+    class CandidateImportArgs(StrictModel):
+        candidate_id: str
+
+    stripped = openai_tool_from_schema("import_candidate", "", CandidateImportArgs)
+    preserved = openai_tool_from_schema(
+        "import_candidate",
+        "",
+        CandidateImportArgs,
+        strip_system_owned_fields=False,
+    )
+
+    assert "candidate_id" not in stripped["function"]["parameters"].get("properties", {})
+    assert "candidate_id" in preserved["function"]["parameters"]["properties"]
+
+
+def test_structured_tool_completion_uses_openai_tool_calls(tmp_path: Path) -> None:
+    class QueryArgs(StrictModel):
+        query: str
+
+    store = _store(tmp_path)
+    router = LLMRouter(
+        RouterSettings(
+            profiles={
+                "deep": ModelProfile(
+                    model="mock",
+                    supports_tools=True,
+                    task_types=["proposal_generation"],
+                )
+            }
+        ),
+        store=store,
+    )
+    submit_tool = openai_tool_from_schema("submit", "", ResearchProposal)
+    query_tool = openai_tool_from_schema(
+        "query_literature",
+        "",
+        QueryArgs,
+        strip_system_owned_fields=False,
+    )
+    responses = [
+        {
+            "choices": [
+                {
+                    "message": {
+                        "tool_calls": [
+                            {
+                                "id": "call_query",
+                                "type": "function",
+                                "function": {
+                                    "name": "query_literature",
+                                    "arguments": json.dumps(
+                                        {"query": "barrier", "rationale": "private scratchpad"}
+                                    ),
+                                },
+                            }
+                        ]
+                    }
+                }
+            ],
+            "usage": {"prompt_tokens": 3, "completion_tokens": 4, "total_tokens": 7},
+        },
+        {
+            "choices": [
+                {
+                    "message": {
+                        "tool_calls": [
+                            {
+                                "id": "call_submit",
+                                "type": "function",
+                                "function": {
+                                    "name": "submit",
+                                    "arguments": json.dumps(
+                                        {"title": "Tool proposal", "precise_goal": "Use tools."}
+                                    ),
+                                },
+                            }
+                        ]
+                    }
+                }
+            ],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 6, "total_tokens": 11},
+        },
+    ]
+
+    def fake_post_chat_completion(
+        profile: ModelProfile,
+        messages: list[dict[str, object]],
+        *,
+        temperature: float,
+        max_tokens: int,
+        json_schema: dict[str, object] | None = None,
+        tools: list[dict[str, object]] | None = None,
+        tool_choice: object | None = None,
+    ) -> dict[str, object]:
+        assert tools
+        assert json_schema is None
+        assert tool_choice == "auto"
+        if len(responses) == 1:
+            assert any(message.get("role") == "tool" for message in messages)
+        return responses.pop(0)
+
+    router._post_chat_completion = fake_post_chat_completion  # type: ignore[method-assign]
+    proposal, trace = router.complete_structured_with_tools(
+        task_type="proposal_generation",
+        messages=[{"role": "user", "content": "make a proposal"}],
+        tools=[query_tool, submit_tool],
+        tool_executors={
+            "query_literature": lambda args: {"status": "ok", "answer": f"saw {args['query']}"}
+        },
+        schema=ResearchProposal,
+        final_tool_name="submit",
+    )
+
+    assert proposal.title == "Tool proposal"
+    assert trace["private_reasoning"] == "redacted_not_logged_or_replayed"
+    assert trace["tool_calls"][0]["name"] == "query_literature"
+    assert "rationale" not in trace["tool_calls"][0]["arguments"]
+    assert store.read_jsonl(ArtifactStore.MODEL_LEDGER)[-1]["completion_tokens"] == 10
 
 
 def test_llm_schema_omits_system_owned_fields() -> None:
