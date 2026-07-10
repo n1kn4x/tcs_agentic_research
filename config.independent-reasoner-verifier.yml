@@ -1,27 +1,38 @@
 # Router config for 6x NVIDIA RTX PRO 4500 Blackwell 32GB.
-# Intended serving layout:
-#   GPUs 0,1 -> deep-reasoner       (primary 32B-class reasoner)
-#   GPUs 2,3 -> verifier-reasoner   (independent 32B-class critic/verifier)
-#   GPU  4   -> routine-extractor   (7B/8B extraction + formatting)
-#   GPU  5   -> lean-prover         (Lean/code/math specialist)
+# Default launch_vllm_stack layout:
+#   GPUs 0,1,2,3 -> deep-reasoner     (Qwen3.6-35B-A3B, port 8000, tool calls enabled)
+#   GPU  4       -> routine-extractor (7B/8B extraction + formatting, non-thinking)
+#   GPU  5       -> lean-prover       (Lean/code/math specialist)
+#
+# The verifier profile is routed through the same served deep model by default but
+# has supports_tools=false at the router level. For strict hardware-independent
+# replication, point `verifier.base_url`/`verifier.model` at a second Qwen3.6 server.
 #
 # `max_tokens` is the per-request generation budget. It must fit together with
-# prompt tokens inside the vLLM server's `--max-model-len`.
+# prompt tokens inside the vLLM server's `--max-model-len`. Qwen3.6's recommended
+# default output budget is 32,768 tokens; use 81,920 only for very hard benchmarks.
 router:
   default_task: routine
-  timeout_seconds: 600
+  timeout_seconds: 900
   max_retries: 2
   profiles:
     deep:
       model: deep-reasoner
       base_url: http://localhost:8000/v1
       api_key: EMPTY
-      temperature: 0.7
-      max_tokens: 24576
+      # Qwen3.6 thinking mode for general/agentic tasks.
+      temperature: 1.0
+      max_tokens: 32768
       supports_tools: true
       extra_body:
+        top_p: 0.95
+        top_k: 20
+        min_p: 0.0
+        presence_penalty: 1.5
+        repetition_penalty: 1.0
         chat_template_kwargs:
           enable_thinking: true
+          preserve_thinking: true
       task_types:
         - initialization
         - initialization_interview
@@ -33,17 +44,44 @@ router:
       model: deep-reasoner
       base_url: http://localhost:8000/v1
       api_key: EMPTY
-      temperature: 0.35
-      max_tokens: 16384
+      # Qwen3.6 thinking mode, but no OpenAI tool calls are exposed by this profile.
+      temperature: 1.0
+      max_tokens: 32768
       supports_tools: false
       extra_body:
+        top_p: 0.95
+        top_k: 20
+        min_p: 0.0
+        presence_penalty: 1.5
+        repetition_penalty: 1.0
         chat_template_kwargs:
           enable_thinking: true
+          preserve_thinking: true
       task_types:
         - proposal_critique
         - research_critique
         - solved_check
         - independent_replication
+
+    precise:
+      model: deep-reasoner
+      base_url: http://localhost:8000/v1
+      api_key: EMPTY
+      # Qwen3.6 thinking mode for precise code/experiment-planning tasks; no tools exposed.
+      temperature: 0.6
+      max_tokens: 32768
+      supports_tools: false
+      extra_body:
+        top_p: 0.95
+        top_k: 20
+        min_p: 0.0
+        presence_penalty: 0.0
+        repetition_penalty: 1.0
+        chat_template_kwargs:
+          enable_thinking: true
+          preserve_thinking: true
+      task_types:
+        - experiment_planning
 
     proof:
       model: lean-prover
@@ -59,9 +97,18 @@ router:
       model: routine-extractor
       base_url: http://localhost:8001/v1
       api_key: EMPTY
-      temperature: 0.0
+      # Qwen instruct/non-thinking settings for extraction/formatting tasks.
+      temperature: 0.7
       max_tokens: 8192
       supports_tools: false
+      extra_body:
+        top_p: 0.80
+        top_k: 20
+        min_p: 0.0
+        presence_penalty: 1.5
+        repetition_penalty: 1.0
+        chat_template_kwargs:
+          enable_thinking: false
       task_types:
         - formatting
         - extraction

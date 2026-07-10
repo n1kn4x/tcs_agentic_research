@@ -49,23 +49,29 @@ pip install -e '.[dev]'
 
 ## vLLM serving
 
-Start one large model and optionally a smaller routine model:
+Start Qwen3.6 for the deep/agentic endpoint and optionally a smaller routine model:
 
 ```bash
 cp config.example.yml config.yml
-# edit model names if needed
+# edit model names, ports, tensor parallelism, or context lengths if needed
 docker compose -f docker-compose.vllm.yml up
 ```
 
-Or run vLLM directly:
+Or run vLLM directly (Qwen recommends vLLM >= 0.19.0 for Qwen3.6):
 
 ```bash
-vllm serve Qwen/Qwen3-32B --served-model-name deep-reasoner --port 8000 \
-  --enable-auto-tool-choice --tool-call-parser hermes
-vllm serve Qwen/Qwen3-8B  --served-model-name routine-extractor --port 8001
+vllm serve Qwen/Qwen3.6-35B-A3B --served-model-name deep-reasoner --port 8000 \
+  --tensor-parallel-size 4 --max-model-len 262144 \
+  --reasoning-parser qwen3 --enable-auto-tool-choice --tool-call-parser qwen3_coder \
+  --language-model-only \
+  --default-chat-template-kwargs '{"enable_thinking":true,"preserve_thinking":true}'
+
+vllm serve Qwen/Qwen3-8B --served-model-name routine-extractor --port 8001 \
+  --max-model-len 32768 \
+  --default-chat-template-kwargs '{"enable_thinking":false}'
 ```
 
-The router logs model choice, latency, token usage, structured-output validity, dry-run mock-output usage, and failure modes to `ModelCallLedger.jsonl`.
+The router config passes Qwen3.6 sampling parameters per profile: thinking + preserve-thinking for deep agentic/verifier tasks, lower-temperature thinking for precise Lean/code-style tasks, and non-thinking for routine extraction/formatting. The router logs model choice, latency, token usage, structured-output validity, dry-run mock-output usage, and failure modes to `ModelCallLedger.jsonl`.
 
 ## Quick start
 

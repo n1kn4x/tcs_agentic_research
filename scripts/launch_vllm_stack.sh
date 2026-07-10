@@ -2,12 +2,13 @@
 # Launch the vLLM stack in tmux.
 #
 # Default layout for 6x 32GB GPUs:
-#   GPUs 0,1,2,3 -> deep-reasoner       : primary 32B-class reasoner, port 8000
-#   GPU  4   -> routine-extractor   : 7B/8B extraction/formatting model, port 8001
-#   GPU  5   -> lean-prover         : Lean/code/math specialist, port 8003
+#   GPUs 0,1,2,3 -> deep-reasoner     : Qwen3.6-35B-A3B, port 8000, thinking + tools
+#   GPU  4       -> routine-extractor : 7B/8B extraction/formatting model, port 8001
+#   GPU  5       -> lean-prover       : Lean/code/math specialist, port 8003
 #
+# Qwen3.6 requires recent vLLM support (vllm>=0.19.0 is recommended by Qwen).
 # Override models/ports/lengths with environment variables, for example:
-#   DEEP_MODEL=Qwen/Qwen3-32B DEEP_EXTRA_ARGS='--enable-reasoning --reasoning-parser qwen3' \
+#   DEEP_MODEL=Qwen/Qwen3.6-35B-A3B DEEP_MAX_MODEL_LEN=131072 \
 #     ./scripts/launch_vllm_stack.sh
 #
 # If sessions already exist, set REPLACE=1 to kill and restart them.
@@ -32,10 +33,10 @@ LOG_DIR="${LOG_DIR:-logs/vllm}"
 REPLACE="${REPLACE:-0}"
 TRUST_REMOTE_CODE="${TRUST_REMOTE_CODE:-0}"
 
-# Model defaults are intentionally easy to override. For the 32B endpoints,
-# prefer FP8/AWQ/GPTQ checkpoints when available; BF16 32B models are tight on
-# 2x32GB once KV cache and vLLM overhead are included.
-DEEP_MODEL="${DEEP_MODEL:-Qwen/Qwen3-32B}"
+# Model defaults are intentionally easy to override. The deep endpoint now uses
+# Qwen3.6-35B-A3B (35B total / 3B activated). It is served text-only because this
+# research stack does not use image/video inputs, freeing memory for KV cache.
+DEEP_MODEL="${DEEP_MODEL:-Qwen/Qwen3.6-35B-A3B}"
 ROUTINE_MODEL="${ROUTINE_MODEL:-Qwen/Qwen3-8B}"
 PROOF_MODEL="${PROOF_MODEL:-Qwen/Qwen2.5-Coder-7B-Instruct}"
 
@@ -51,7 +52,7 @@ DEEP_TP="${DEEP_TP:-4}"
 ROUTINE_TP="${ROUTINE_TP:-1}"
 PROOF_TP="${PROOF_TP:-1}"
 
-DEEP_MAX_MODEL_LEN="${DEEP_MAX_MODEL_LEN:-131072}"
+DEEP_MAX_MODEL_LEN="${DEEP_MAX_MODEL_LEN:-262144}"
 ROUTINE_MAX_MODEL_LEN="${ROUTINE_MAX_MODEL_LEN:-32768}"
 PROOF_MAX_MODEL_LEN="${PROOF_MAX_MODEL_LEN:-32768}"
 
@@ -76,11 +77,13 @@ PROOF_DTYPE="${PROOF_DTYPE:-auto}"
 
 # Free-form additional vLLM args. Shell-style quoting is respected, so JSON
 # values containing spaces can be written as single-quoted arguments. Examples:
-#   DEEP_EXTRA_ARGS='--enable-reasoning --reasoning-parser qwen3'
-#   DEEP_EXTRA_ARGS='--hf-overrides '\''{"foo": {"bar": 1}}'\'''
-DEFAULT_DEEP_EXTRA_ARGS="--hf-overrides '{\"rope_parameters\": {\"factor\": 4.0, \"original_max_position_embeddings\": 32768, \"rope_theta\": 1000000, \"rope_type\": \"yarn\"}}' --default-chat-template-kwargs '{\"enable_thinking\": false}'"
+#   DEEP_EXTRA_ARGS='--reasoning-parser qwen3 --enable-auto-tool-choice --tool-call-parser qwen3_coder'
+#   DEEP_EXTRA_ARGS='--speculative-config '\''{"method":"qwen3_next_mtp","num_speculative_tokens":2}'\'''
+#   DEEP_EXTRA_ARGS='--hf-overrides '\''{"text_config": {"rope_parameters": {"rope_type": "yarn"}}}'\'''
+DEFAULT_DEEP_EXTRA_ARGS="--reasoning-parser qwen3 --enable-auto-tool-choice --tool-call-parser qwen3_coder --language-model-only --default-chat-template-kwargs '{\"enable_thinking\": true, \"preserve_thinking\": true}'"
+DEFAULT_ROUTINE_EXTRA_ARGS="--default-chat-template-kwargs '{\"enable_thinking\": false}'"
 DEEP_EXTRA_ARGS="${DEEP_EXTRA_ARGS:-$DEFAULT_DEEP_EXTRA_ARGS}"
-ROUTINE_EXTRA_ARGS="${ROUTINE_EXTRA_ARGS:-}"
+ROUTINE_EXTRA_ARGS="${ROUTINE_EXTRA_ARGS:-$DEFAULT_ROUTINE_EXTRA_ARGS}"
 PROOF_EXTRA_ARGS="${PROOF_EXTRA_ARGS:-}"
 
 mkdir -p "$LOG_DIR"
