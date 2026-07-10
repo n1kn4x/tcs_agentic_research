@@ -28,6 +28,7 @@ router:
           preserve_thinking: true
       task_types:
         - proposal_generation
+        - research_execution
 
     deep:
       model: deep-reasoner
@@ -48,7 +49,6 @@ router:
       task_types:
         - initialization
         - initialization_interview
-        - research_execution
         - obstruction_search
 
     precise:
@@ -70,7 +70,6 @@ router:
           preserve_thinking: true
       task_types:
         - theorem_proving
-        - experiment_planning
 
     routine:
       model: routine-extractor

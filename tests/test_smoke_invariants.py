@@ -37,7 +37,6 @@ from tcs_agentic_research.schemas import (
     ClaimType,
     EvidenceRecord,
     EvidenceType,
-    ExperimentPlan,
     InitializationBundle,
     InitializationInterviewTurn,
     LiteratureExtract,
@@ -66,7 +65,6 @@ PROMPT_SCHEMAS = {
     "leap_direct_prover": FormalProofCandidate,
     "leap_reviser": FormalProofCandidate,
     "literature_researcher": LiteratureExtract,
-    "experiment_planner": ExperimentPlan,
     "proposal_critic": ProposalCritique,
     "proposal_generator": ResearchProposal,
     "research_agent": ResearchReport,
@@ -184,13 +182,13 @@ def _expand_prompt_refs(compacted: dict[str, object]) -> object:
 def test_schema_placeholders_are_resolved_by_name_not_by_output_schema() -> None:
     rendered = _prepare_structured_messages(
         [{"role": "system", "content": "Use {{ResearchReport}}."}],
-        ExperimentPlan,
+        ProposalCritique,
     )
 
     content = rendered[0]["content"]
     assert "{{ResearchReport}}" not in content
     assert "Complete JSON Schema for `ResearchReport`." in content
-    assert "Complete JSON Schema for `ExperimentPlan`." not in content
+    assert "Complete JSON Schema for `ProposalCritique`." not in content
     assert len(rendered) == 1
 
 
@@ -462,7 +460,7 @@ def test_url_only_literature_claim_is_not_accepted(tmp_path: Path) -> None:
     assert not is_claim_acceptably_supported(claim, store)
 
 
-def test_research_loop_runs_experiment_obligation(tmp_path: Path) -> None:
+def test_research_trace_records_blocked_experiment_request(tmp_path: Path) -> None:
     store = _store(tmp_path)
     router = _router(store)
     agent = ResearchAgent(store, router)
@@ -483,16 +481,35 @@ def test_research_loop_runs_experiment_obligation(tmp_path: Path) -> None:
         claims_generated=[claim],
         proof_obligations=[obligation],
     )
-    proposal = ResearchProposal(title="experiment", precise_goal="run experiment")
+    request_ref = store.write_json(
+        "ExperimentRuns/requested_experiment/request.json",
+        {"description": "Run a deterministic smoke experiment."},
+    )
+    trace = {
+        "tool_calls": [
+            {
+                "turn": 1,
+                "call_id": "call_exp",
+                "name": "run_experiment",
+                "arguments": {"description": "Run a deterministic smoke experiment."},
+                "status": "blocked",
+                "observation": {
+                    "status": "blocked",
+                    "tool_result_id": "experiment_request_test",
+                    "description": "Run a deterministic smoke experiment.",
+                    "artifact_refs": [request_ref.model_dump(mode="json")],
+                },
+            }
+        ]
+    }
 
-    observations = agent._run_subsystem_loop(report, proposal, "context", max_rounds=1)
+    agent._reconcile_tool_trace(report, trace=trace, trace_refs=[])
 
-    assert observations
-    assert report.experimental_results
-    assert list((store.root / "ExperimentRuns").glob("*"))
-    assert report.proof_obligations[0].status == "experimentally_supported"
-    assert report.proof_obligations[0].status != "proved"
-    assert report.experimental_results[0].artifact_refs
+    assert report.unresolved_issues
+    assert "backend is configured" in report.unresolved_issues[0]
+    assert request_ref.path in {ref.path for ref in report.artifact_refs}
+    assert not report.experimental_results
+    assert report.proof_obligations[0].status == "open"
 
 
 def test_solved_requires_independent_replication(tmp_path: Path) -> None:

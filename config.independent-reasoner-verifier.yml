@@ -34,6 +34,7 @@ router:
           preserve_thinking: true
       task_types:
         - proposal_generation
+        - research_execution
 
     deep:
       model: deep-reasoner
@@ -54,7 +55,6 @@ router:
       task_types:
         - initialization
         - initialization_interview
-        - research_execution
         - obstruction_search
 
     verifier:
@@ -79,26 +79,6 @@ router:
         - research_critique
         - solved_check
         - independent_replication
-
-    precise:
-      model: deep-reasoner
-      base_url: http://localhost:8000/v1
-      api_key: EMPTY
-      # Qwen3.6 thinking mode for precise code/experiment-planning tasks; no tools exposed.
-      temperature: 0.6
-      max_tokens: 32768
-      supports_tools: false
-      extra_body:
-        top_p: 0.95
-        top_k: 20
-        min_p: 0.0
-        presence_penalty: 0.0
-        repetition_penalty: 1.0
-        chat_template_kwargs:
-          enable_thinking: true
-          preserve_thinking: true
-      task_types:
-        - experiment_planning
 
     proof:
       model: lean-prover

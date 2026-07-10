@@ -6,55 +6,25 @@ import json
 from typing import Any, Literal
 
 from ..artifact_store import ArtifactStore
-from ..llm import LLMRouter, openai_tool_from_schema
+from ..llm import LLMRouter
 from ..prompt_loader import render_prompt
 from ..prompt_serialization import compact_json_dumps
 from ..render import render_proposal_markdown
 from ..schemas import (
     ArtifactRef,
     CriticDecision,
-    LiteratureCandidate,
-    LiteratureQueryAnswer,
-    PaperMetadata,
     ProposalCritique,
     ProposalLedgerEntry,
     ProposalRisk,
     ResearchProposal,
     ResearchState,
-    StrictModel,
 )
+from ..tooling import Toolset, final_submission_tool
 from .literature import LiteratureResearcher
+from .toolsets import literature_toolset
 
 
 FINAL_PROPOSAL_TOOL_NAME = "submit_research_proposal"
-
-
-class ProposalQueryLiteratureArgs(StrictModel):
-    query: str
-
-
-class ProposalSearchPapersArgs(StrictModel):
-    query: str
-
-
-class ProposalImportUrlArgs(StrictModel):
-    url: str
-    extract_text: bool = True
-
-
-class ProposalImportArxivArgs(StrictModel):
-    arxiv_id: str
-    extract_text: bool = True
-
-
-class ProposalImportDoiArgs(StrictModel):
-    doi: str
-    extract_text: bool = True
-
-
-class ProposalImportCandidateArgs(StrictModel):
-    candidate_id: str
-    extract_text: bool = True
 
 
 class ProposalAgent:
@@ -169,11 +139,12 @@ class ProposalAgent:
             },
             {"role": "user", "content": compact_json_dumps(prompt_payload)},
         ]
+        toolset = self._proposal_toolset()
         proposal, trace = self.router.complete_structured_with_tools(
             task_type="proposal_generation",
             messages=messages,
-            tools=self._proposal_tools(),
-            tool_executors=self._proposal_tool_executors(),
+            tools=toolset.openai_tools(),
+            tool_executors=toolset.executors(),
             schema=ResearchProposal,
             final_tool_name=FINAL_PROPOSAL_TOOL_NAME,
             mock_output=dry_run_seed if self.router.dry_run else None,
@@ -186,114 +157,23 @@ class ProposalAgent:
         )
         return proposal
 
-    def _proposal_tools(self) -> list[dict[str, Any]]:
-        return [
-            openai_tool_from_schema(
-                "query_literature",
-                (
-                    "Query the local LiteratureDB in canonical notation. Use this before "
-                    "relying on prior work, barriers, or known results."
-                ),
-                ProposalQueryLiteratureArgs,
-                strip_system_owned_fields=False,
-            ),
-            openai_tool_from_schema(
-                "search_papers",
-                (
-                    "Search external paper metadata and queue candidate papers for possible "
-                    "import. This does not certify claims."
-                ),
-                ProposalSearchPapersArgs,
-                strip_system_owned_fields=False,
-            ),
-            openai_tool_from_schema(
-                "import_url",
-                "Import a useful paper from a URL or PDF URL into LiteratureDB.",
-                ProposalImportUrlArgs,
-                strip_system_owned_fields=False,
-            ),
-            openai_tool_from_schema(
-                "import_arxiv",
-                "Import an arXiv paper into LiteratureDB.",
-                ProposalImportArxivArgs,
-                strip_system_owned_fields=False,
-            ),
-            openai_tool_from_schema(
-                "import_doi",
-                "Import a DOI into LiteratureDB.",
-                ProposalImportDoiArgs,
-                strip_system_owned_fields=False,
-            ),
-            openai_tool_from_schema(
-                "import_candidate",
-                "Import a previously queued literature candidate into LiteratureDB.",
-                ProposalImportCandidateArgs,
-                strip_system_owned_fields=False,
-            ),
-            openai_tool_from_schema(
-                FINAL_PROPOSAL_TOOL_NAME,
-                (
-                    "Commit the final concrete research proposal. The arguments must be the "
-                    "ResearchProposal object itself, not wrapped under another key."
-                ),
-                ResearchProposal,
-            ),
-        ]
-
-    def _proposal_tool_executors(self) -> dict[str, Any]:
-        return {
-            "query_literature": self._tool_query_literature,
-            "search_papers": self._tool_search_papers,
-            "import_url": self._tool_import_url,
-            "import_arxiv": self._tool_import_arxiv,
-            "import_doi": self._tool_import_doi,
-            "import_candidate": self._tool_import_candidate,
-        }
-
-    def _tool_query_literature(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        args = ProposalQueryLiteratureArgs.model_validate(arguments)
-        answer = self.literature.answer_query(args.query, limit=5)
-        return _compact_literature_answer(
-            answer,
-            ledger_ref=self.store.artifact_ref("LiteratureDB/query_answers.jsonl"),
+    def _proposal_toolset(self) -> Toolset:
+        return literature_toolset(
+            store=self.store,
+            literature=self.literature,
+            include_discovery_tools=True,
+        ) + Toolset(
+            [
+                final_submission_tool(
+                    FINAL_PROPOSAL_TOOL_NAME,
+                    (
+                        "Commit the final concrete research proposal. The arguments must be the "
+                        "ResearchProposal object itself, not wrapped under another key."
+                    ),
+                    ResearchProposal,
+                )
+            ]
         )
-
-    def _tool_search_papers(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        args = ProposalSearchPapersArgs.model_validate(arguments)
-        candidates = self.literature.search_papers(args.query, limit=8)
-        return {
-            "status": "ok",
-            "tool": "search_papers",
-            "query": args.query,
-            "candidate_count": len(candidates),
-            "candidates": [_compact_candidate(candidate) for candidate in candidates],
-            "ledger_ref": self.store.artifact_ref("LiteratureDB/candidates.jsonl").model_dump(
-                mode="json"
-            ),
-        }
-
-    def _tool_import_url(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        args = ProposalImportUrlArgs.model_validate(arguments)
-        paper = self.literature.import_url(args.url, extract_text=args.extract_text)
-        return _compact_imported_paper("import_url", paper)
-
-    def _tool_import_arxiv(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        args = ProposalImportArxivArgs.model_validate(arguments)
-        paper = self.literature.import_arxiv(args.arxiv_id, extract_text=args.extract_text)
-        return _compact_imported_paper("import_arxiv", paper)
-
-    def _tool_import_doi(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        args = ProposalImportDoiArgs.model_validate(arguments)
-        paper = self.literature.import_doi(args.doi, extract_text=args.extract_text)
-        return _compact_imported_paper("import_doi", paper)
-
-    def _tool_import_candidate(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        args = ProposalImportCandidateArgs.model_validate(arguments)
-        paper = self.literature.import_candidate(
-            args.candidate_id,
-            extract_text=args.extract_text,
-        )
-        return _compact_imported_paper("import_candidate", paper)
 
     def _review_proposal(self, context: Any, proposal: ResearchProposal) -> ProposalCritique:
         prompt_payload = {
@@ -523,90 +403,3 @@ class ProposalAgent:
             required_revisions=[],
             confidence=0.7,
         )
-
-
-def _compact_literature_answer(
-    answer: LiteratureQueryAnswer, *, ledger_ref: ArtifactRef
-) -> dict[str, Any]:
-    return {
-        "status": "ok",
-        "tool": "query_literature",
-        "query": answer.query,
-        "answer_id": answer.answer_id,
-        "answer": _compact_text(answer.answer, 2500),
-        "result_count": len(answer.results),
-        "results": [
-            {
-                "citation_key": result.citation_key,
-                "paper_id": result.paper_id,
-                "title": result.title,
-                "year": result.year,
-                "kind": result.kind,
-                "label": result.label,
-                "mapped_statement": _compact_text(result.mapped_statement, 1200),
-                "summary": _compact_text(result.summary, 800),
-                "score": result.score,
-                "duplicate_of": result.duplicate_of,
-                "provenance": [
-                    {
-                        "locator": quote.locator,
-                        "quote_excerpt": _compact_text(quote.quote, 500),
-                    }
-                    for quote in result.provenance[:2]
-                ],
-            }
-            for result in answer.results[:5]
-        ],
-        "duplicate_results": [group.model_dump(mode="json") for group in answer.duplicate_results[:5]],
-        "limitations": answer.limitations[:5],
-        "ledger_ref": ledger_ref.model_dump(mode="json"),
-    }
-
-
-def _compact_candidate(candidate: LiteratureCandidate) -> dict[str, Any]:
-    return {
-        "candidate_id": candidate.candidate_id,
-        "title": candidate.title,
-        "authors": candidate.authors[:6],
-        "year": candidate.year,
-        "venue": candidate.venue,
-        "doi": candidate.doi,
-        "arxiv_id": candidate.arxiv_id,
-        "landing_url": candidate.landing_url,
-        "pdf_url": candidate.pdf_url,
-        "abstract": _compact_text(candidate.abstract, 1200),
-        "cited_by_count": candidate.cited_by_count,
-        "discovery_reason": candidate.discovery_reason,
-        "status": candidate.status,
-        "score": candidate.score,
-    }
-
-
-def _compact_imported_paper(tool: str, paper: PaperMetadata) -> dict[str, Any]:
-    return {
-        "status": "ok",
-        "tool": tool,
-        "paper": {
-            "paper_id": paper.paper_id,
-            "citation_key": paper.citation_key,
-            "title": paper.title,
-            "authors": paper.authors[:10],
-            "year": paper.year,
-            "venue": paper.venue,
-            "url": paper.url,
-            "arxiv_id": paper.arxiv_id,
-            "doi": paper.doi,
-            "abstract": _compact_text(paper.abstract, 1200),
-            "pdf_path": paper.pdf_path,
-            "text_path": paper.text_path,
-            "metadata_path": paper.metadata_path,
-            "artifact_refs": [ref.model_dump(mode="json") for ref in paper.artifact_refs],
-        },
-    }
-
-
-def _compact_text(text: str, limit: int) -> str:
-    if len(text) <= limit:
-        return text
-    omitted = len(text) - limit
-    return f"{text[:limit]}\n...[truncated {omitted} characters]"

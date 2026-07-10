@@ -260,7 +260,9 @@ class LLMRouter:
         The model may use ordinary tools for external observations and must finish by calling
         ``final_tool_name`` with arguments that validate against ``schema``. Raw assistant
         content/reasoning is intentionally not preserved in the returned trace; the trace contains
-        only tool names, arguments, observations, validation errors, and finalization metadata.
+        only tool call IDs, tool names, arguments, observations, validation errors, and
+        finalization metadata. Assistant content JSON is not accepted as a fallback here; agents
+        using this method have a single finalization protocol: the final tool call.
         """
         profile_name, profile = self.select_profile(task_type)
         started = time.perf_counter()
@@ -393,6 +395,7 @@ class LLMRouter:
                             trace["tool_calls"].append(
                                 {
                                     "turn": turn_index,
+                                    "call_id": call_id,
                                     "name": tool_name,
                                     "arguments": raw_arguments,
                                     "status": "argument_error",
@@ -408,6 +411,7 @@ class LLMRouter:
                                 result = schema.model_validate(payload)
                                 trace["finalization"] = {
                                     "turn": turn_index,
+                                    "call_id": call_id,
                                     "mode": "final_tool_call",
                                     "tool_name": final_tool_name,
                                 }
@@ -439,6 +443,7 @@ class LLMRouter:
                                 trace["tool_calls"].append(
                                     {
                                         "turn": turn_index,
+                                        "call_id": call_id,
                                         "name": tool_name,
                                         "arguments": to_plain(arguments),
                                         "status": "validation_error",
@@ -452,6 +457,7 @@ class LLMRouter:
                         trace["tool_calls"].append(
                             {
                                 "turn": turn_index,
+                                "call_id": call_id,
                                 "name": tool_name,
                                 "arguments": to_plain(arguments),
                                 "status": observation.get("status", "ok")
@@ -464,27 +470,9 @@ class LLMRouter:
 
                 content = _strip_reasoning_blocks(str(message.get("content") or "")).strip()
                 if content:
-                    try:
-                        payload = _extract_json(content)
-                        _strip_system_owned_payload_fields(payload)
-                        result = schema.model_validate(payload)
-                        trace["finalization"] = {
-                            "turn": turn_index,
-                            "mode": "assistant_content_json",
-                        }
-                        self._log_call(
-                            task_type,
-                            profile_name,
-                            profile,
-                            started,
-                            True,
-                            schema.__name__,
-                            failures,
-                            _usage_payload(usage_totals),
-                        )
-                        return result, trace
-                    except (ValidationError, json.JSONDecodeError, TypeError, ValueError) as exc:
-                        failures.append(f"turn_{turn_index}: no_valid_final_tool_or_json: {exc}")
+                    failures.append(
+                        f"turn_{turn_index}: assistant_content_ignored_until_final_tool"
+                    )
 
                 history.append(
                     {

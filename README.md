@@ -154,7 +154,7 @@ Nodes durably write artifacts before returning. Solved verdicts are computed det
 
 - `InitializationAgent`: LLM-guided adaptive interview and synthesis of `ResearchTask.md`, `Nomenclature.yml`, initial state, and ledgers.
 - `ProposalAgent`: proposal generator using native OpenAI/vLLM tool calls plus proposal critic with revision/rejection logic. Private model reasoning is not replayed into future contexts; only committed proposal artifacts are.
-- `ResearchAgent`: executes a selected proposal and writes a structured `ResearchReport`.
+- `ResearchAgent`: executes a selected proposal in a native OpenAI/vLLM tool-call loop and finishes by calling `submit_research_report`; deterministic critics/evidence gates still decide which claims are accepted.
 - `ResearchCriticAgent`: distinguishes proofs, citations, experiments, informal arguments, conjectures, refutations, and forced verification obligations.
 - `LiteratureResearcher`: modular literature pipeline for OpenAlex search/citation candidate discovery, arXiv/DOI/PDF import, PDF text extraction, theorem/algorithm extraction, nomenclature updates, duplicate detection, and quote-provenance query answers in mapped notation.
 - `TheoremProverAgent` / `LEAPHarness`: Lean proof search with local Lean declaration retrieval, direct formalization, revision, blueprint decomposition, AND-OR proof DAGs, and strict `sorry` discipline.
@@ -184,7 +184,8 @@ schema is also sent to vLLM through `guided_json`/`response_format` when support
 Returned JSON is validated with the same Pydantic model.
 
 All state-changing agent outputs use Pydantic models in `src/tcs_agentic_research/schemas.py` and
-are serialized as JSON/JSONL/YAML artifacts.
+are serialized as JSON/JSONL/YAML artifacts. Native tool-call agents can use different toolsets 
+of the same underlying tools.
 
 ## Extending the system
 

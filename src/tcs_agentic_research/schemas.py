@@ -65,6 +65,7 @@ class EvidenceRecord(StrictModel):
     summary: str
     artifact_refs: list[ArtifactRef] = Field(default_factory=list)
     citation_keys: list[str] = Field(default_factory=list)
+    tool_result_ids: list[str] = Field(default_factory=list)
     verifier: str | None = None
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
     created_at: str = Field(default_factory=utc_now)
@@ -261,21 +262,6 @@ class ExperimentResult(StrictModel):
     seeds: list[int] = Field(default_factory=list)
     supports_claim_ids: list[str] = Field(default_factory=list)
     caveats: list[str] = Field(default_factory=list)
-
-
-class ExperimentPlan(StrictModel):
-    """Executable experiment plan generated inside the private research loop."""
-
-    should_run: bool = True
-    name: str = "research_loop_experiment"
-    execution_mode: Literal["python", "command"] = "python"
-    code: str = ""
-    command: list[str] = Field(default_factory=list)
-    config: dict[str, Any] = Field(default_factory=dict)
-    seeds: list[int] = Field(default_factory=list)
-    timeout_seconds: int = 3600
-    rationale: str = ""
-    expected_interpretation: str = ""
 
 
 class ProofObligation(StrictModel):

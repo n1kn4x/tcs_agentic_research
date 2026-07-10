@@ -9,12 +9,33 @@ from pathlib import Path
 from typing import Any
 
 from ..artifact_store import ArtifactStore
-from ..schemas import ExperimentResult, new_id
+from ..schemas import ArtifactRef, ExperimentResult, new_id, utc_now
 
 
 class ExperimentAgent:
     def __init__(self, store: ArtifactStore):
         self.store = store
+
+    def record_request(self, *, description: str) -> tuple[str, list[ArtifactRef]]:
+        """Record a natural-language experiment request for a future coding backend.
+
+        This deliberately does not create an ``ExperimentResult`` and does not certify evidence.
+        The native research tool can expose this as a clean description-only interface now, while
+        a later coding-agent implementation can replace the executor behind the same tool name.
+        """
+        request_id = new_id("experiment_request")
+        safe_name = "requested_experiment"
+        rel_dir = f"ExperimentRuns/{safe_name}_{request_id}"
+        run_dir = self.store.resolve(rel_dir)
+        run_dir.mkdir(parents=True, exist_ok=True)
+        request = {
+            "request_id": request_id,
+            "description": description,
+            "status": "backend_not_configured",
+            "created_at": utc_now(),
+        }
+        ref = self.store.write_json(Path(rel_dir) / "request.json", request)
+        return request_id, [ref]
 
     def run_python(
         self,

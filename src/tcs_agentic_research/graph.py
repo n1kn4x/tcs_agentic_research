@@ -39,14 +39,12 @@ class ResearchGraph:
         config_path: str | Path | None = None,
         dry_run: bool = False,
         prompt_dir: str | None = None,
-        max_research_thinking_loop_rounds: int = 3,
         max_proposal_revisions: int = 2,
     ):
         self.store = ArtifactStore(workspace)
         self.store.initialize_layout()
         self.router = LLMRouter.from_config_file(config_path, store=self.store, dry_run=dry_run)
         self.prompt_dir = prompt_dir
-        self.max_research_thinking_loop_rounds = max_research_thinking_loop_rounds
         self.max_proposal_revisions = max_proposal_revisions
 
     def build(self):  # LangGraph is an optional runtime dependency until graph execution.
@@ -154,11 +152,7 @@ class ResearchGraph:
             raise RuntimeError("No current proposal path in graph state")
         proposal = ResearchProposal.model_validate(self.store.read_json(proposal_path))
         research_agent = ResearchAgent(self.store, self.router, prompt_dir=self.prompt_dir)
-        report, report_path = research_agent.run(
-            proposal,
-            state,
-            max_loop_rounds=self.max_research_thinking_loop_rounds,
-        )
+        report, report_path = research_agent.run(proposal, state)
         return {"current_report_path": report_path, "current_proposal_id": report.proposal_id}
 
     def _node_update_state(self, graph_state: GraphState) -> dict[str, Any]:

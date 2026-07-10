@@ -1,12 +1,11 @@
-"""Research execution agent and durable report writer."""
+"""Research execution agent using native OpenAI/vLLM tool calls."""
 
 from __future__ import annotations
 
-import re
-from dataclasses import asdict, dataclass
+import json
 from typing import Any
 
-from ..artifact_store import ArtifactStore
+from ..artifact_store import ArtifactStore, to_plain
 from ..llm import LLMRouter
 from ..prompt_loader import render_prompt
 from ..prompt_serialization import compact_json_dumps
@@ -18,9 +17,6 @@ from ..schemas import (
     ClaimType,
     EvidenceRecord,
     EvidenceType,
-    ExperimentPlan,
-    ExperimentResult,
-    LeanStatement,
     LiteratureDependency,
     ProofObligation,
     ReportOutcome,
@@ -28,22 +24,16 @@ from ..schemas import (
     ResearchProposal,
     ResearchReport,
     ResearchState,
-    TheoremProverResult,
     utc_now,
 )
 from .critics import ResearchCriticAgent
 from .experiment import ExperimentAgent
 from .literature import LiteratureResearcher
 from .theorem_prover import TheoremProverAgent
+from .toolsets import artifact_refs_from_observation, research_execution_toolset
 
 
-@dataclass(frozen=True)
-class _ResearchLoopAction:
-    action_type: str
-    rationale: str = ""
-    query: str = ""
-    proof_obligation_id: str = ""
-    expected_evidence: str = ""
+FINAL_RESEARCH_REPORT_TOOL_NAME = "submit_research_report"
 
 
 class ResearchAgent:
@@ -60,34 +50,28 @@ class ResearchAgent:
         self,
         proposal: ResearchProposal,
         state: ResearchState,
-        *,
-        max_loop_rounds: int = 3,
     ) -> tuple[ResearchReport, str]:
         task = self.store.read_text(ArtifactStore.RESEARCH_TASK)
-        literature_answers = self._initial_literature_answers(proposal)
         context = self._build_research_context(
             task=task,
             state=state,
             proposal=proposal,
-            literature_answers=literature_answers,
+            literature_answers=self._initial_literature_answers(proposal),
         )
-        report = self._generate_report(proposal, context)
+
+        report, trace = self._generate_report_with_tools(proposal, context)
         report = self._normalize_report(report, proposal)
         report = self._add_complexity_verification_requirements(report)
 
-        loop_observations = self._run_subsystem_loop(
-            report,
-            proposal,
-            context,
-            max_rounds=max_loop_rounds,
-        )
+        iteration_dir = self.store.create_iteration_dir(state.iteration)
+        trace_refs = self._write_research_tool_trace(iteration_dir, report=report, trace=trace)
+        report = self._reconcile_tool_trace(report, trace=trace, trace_refs=trace_refs)
 
-        final_context = self._final_critic_context(context, report, loop_observations)
+        final_context = self._final_critic_context(context, report, trace)
         report, critique = self.critic.review(report, context=final_context)
         self._add_forced_obligations(report, critique)
         report = self.critic.enforce_evidence_statuses(report)
 
-        iteration_dir = self.store.create_iteration_dir(state.iteration)
         critique_ref = self.store.write_json(
             f"{iteration_dir}/research_critique_{report.report_id}.json", critique
         )
@@ -104,14 +88,11 @@ class ResearchAgent:
         return report, report_ref.path
 
     def _initial_literature_answers(self, proposal: ResearchProposal) -> list[dict[str, object]]:
-        literature_answers: list[dict[str, object]] = []
+        answers: list[dict[str, object]] = []
         for query in proposal.literature_queries[:5]:
-            if not query.strip():
-                continue
-            literature_answers.append(
-                self.literature.answer_query(query, limit=3).model_dump(mode="json")
-            )
-        return literature_answers
+            if query.strip():
+                answers.append(self.literature.answer_query(query, limit=3).model_dump(mode="json"))
+        return answers
 
     def _build_research_context(
         self,
@@ -125,14 +106,21 @@ class ResearchAgent:
             "research_task_md": task,
             "research_state": state.model_dump(mode="json"),
             "proposal": proposal.model_dump(mode="json"),
-            # Literature context is only supplied through mapped-nomenclature answers,
-            # with quote-level provenance and duplicate-result flags.
             "local_literature_answers": literature_answers,
             "recent_claims": self.store.read_jsonl(ArtifactStore.CLAIM_LEDGER, limit=30),
         }
 
-    def _generate_report(self, proposal: ResearchProposal, context: Any) -> ResearchReport:
-        mock_output = self._mock_report(proposal)
+    def _generate_report_with_tools(
+        self, proposal: ResearchProposal, context: Any
+    ) -> tuple[ResearchReport, dict[str, Any]]:
+        prompt_payload = {
+            "instruction": (
+                "Think privately. Use native tool calls for literature checks, Lean attempts, "
+                "or experiment requests when they materially affect the report. Finish only by "
+                f"calling `{FINAL_RESEARCH_REPORT_TOOL_NAME}`."
+            ),
+            "context": context,
+        }
         messages = [
             {
                 "role": "system",
@@ -141,70 +129,286 @@ class ResearchAgent:
             {
                 "role": "user",
                 "content": (
-                    "Execute the selected proposal using only evidence that can be "
-                    "referenced by durable artifacts. The research subagent will run "
-                    "a bounded observe-plan-act loop after this draft to invoke "
-                    "verification/literature subsystems for explicit obligations.\n"
-                    "Context:\n" + compact_json_dumps(context)
+                    "Execute the selected proposal using durable, auditable evidence. "
+                    "Use tool_result_ids from observations in final EvidenceRecord.tool_result_ids "
+                    "when a claim depends on a tool result.\nContext:\n"
+                    + compact_json_dumps(prompt_payload)
                 ),
             },
         ]
-        return self.router.complete_structured(
+        toolset = research_execution_toolset(
+            store=self.store,
+            literature=self.literature,
+            theorem_prover=self.theorem_prover,
+            experiment=self.experiment,
+        )
+        return self.router.complete_structured_with_tools(
             task_type="research_execution",
             messages=messages,
+            tools=toolset.openai_tools(),
+            tool_executors=toolset.executors(),
             schema=ResearchReport,
-            mock_output=mock_output if self.router.dry_run else None,
+            final_tool_name=FINAL_RESEARCH_REPORT_TOOL_NAME,
+            mock_output=self._mock_report(proposal) if self.router.dry_run else None,
         )
 
-    def _run_subsystem_loop(
+    def _write_research_tool_trace(
+        self,
+        iteration_dir: str,
+        *,
+        report: ResearchReport,
+        trace: dict[str, Any],
+    ) -> list[ArtifactRef]:
+        payload = {
+            "report_id": report.report_id,
+            "proposal_id": report.proposal_id,
+            "private_reasoning": "redacted_not_logged_or_replayed",
+            "trace": trace,
+        }
+        json_ref = self.store.write_json(
+            f"{iteration_dir}/research_tool_trace_{report.report_id}.json", payload
+        )
+        lines = [f"# Research Tool Trace `{report.report_id}`", ""]
+        lines.extend(
+            [
+                "Private chain-of-thought/reasoning is intentionally not logged.",
+                "Only external tool calls, arguments, observations, and finalization metadata appear here.",
+                "",
+            ]
+        )
+        for item in trace.get("tool_calls", []):
+            lines.append(
+                f"## Turn {item.get('turn', '?')}: `{item.get('name', '')}` "
+                f"({item.get('call_id', '')})"
+            )
+            lines.extend(
+                [
+                    "",
+                    "Arguments:",
+                    "",
+                    "```json",
+                    json.dumps(item.get("arguments", {}), indent=2, sort_keys=True),
+                    "```",
+                    "",
+                    "Observation:",
+                    "",
+                    "```json",
+                    json.dumps(item.get("observation", {}), indent=2, sort_keys=True),
+                    "```",
+                    "",
+                ]
+            )
+        if trace.get("finalization"):
+            lines.extend(
+                [
+                    "## Finalization",
+                    "",
+                    "```json",
+                    json.dumps(trace["finalization"], indent=2, sort_keys=True),
+                    "```",
+                    "",
+                ]
+            )
+        md_ref = self.store.write_text(
+            f"{iteration_dir}/research_tool_trace_{report.report_id}.md",
+            "\n".join(lines).rstrip() + "\n",
+        )
+        return [json_ref, md_ref]
+
+    def _reconcile_tool_trace(
         self,
         report: ResearchReport,
-        proposal: ResearchProposal,
-        base_context: Any,
         *,
-        max_rounds: int,
-    ) -> list[str]:
-        """Run a private bounded tool loop before the final critic audit.
+        trace: dict[str, Any],
+        trace_refs: list[ArtifactRef],
+    ) -> ResearchReport:
+        """Deterministically attach only real tool-produced artifacts to the report."""
+        for ref in trace_refs:
+            self._append_report_ref(report, ref)
 
-        This loop is intentionally owned by the research agent, not by the critic. It uses the
-        draft report's explicit obligations and verification needs to call subsystems, mutates the
-        in-memory report with observed evidence, and leaves final acceptance/downgrade decisions to
-        one critic pass at the end.
-        """
-        observations: list[str] = []
-        attempted_lean_obligation_ids: set[str] = set()
-        attempted_experiment_obligation_ids: set[str] = set()
-        asked_literature_queries = {q.strip() for q in proposal.literature_queries[:5] if q.strip()}
+        tool_results = self._tool_results_by_id(trace)
+        self._attach_explicit_tool_evidence(report, tool_results)
+        for tool_result in tool_results.values():
+            name = str(tool_result.get("name") or "")
+            observation = tool_result.get("observation") or {}
+            if name == "query_literature":
+                self._record_literature_observation(report, observation)
+            elif name == "attempt_lean_proof":
+                self._record_lean_observation(report, tool_result)
+            elif name == "run_experiment":
+                self._record_experiment_request(report, observation)
+        return report
 
-        for round_index in range(1, max(0, max_rounds) + 1):
-            actions = self._plan_subsystem_actions(
-                report,
-                proposal,
-                attempted_lean_obligation_ids=attempted_lean_obligation_ids,
-                attempted_experiment_obligation_ids=attempted_experiment_obligation_ids,
-                asked_literature_queries=asked_literature_queries,
+    def _tool_results_by_id(self, trace: dict[str, Any]) -> dict[str, dict[str, Any]]:
+        results: dict[str, dict[str, Any]] = {}
+        for item in trace.get("tool_calls", []):
+            if not isinstance(item, dict):
+                continue
+            observation = item.get("observation")
+            if not isinstance(observation, dict):
+                continue
+            result_id = observation.get("tool_result_id") or observation.get("answer_id")
+            if not result_id:
+                continue
+            results[str(result_id)] = item
+        return results
+
+    def _attach_explicit_tool_evidence(
+        self, report: ResearchReport, tool_results: dict[str, dict[str, Any]]
+    ) -> None:
+        for evidence in self._all_evidence_records(report):
+            for result_id in evidence.tool_result_ids:
+                tool_result = tool_results.get(result_id)
+                if tool_result is None:
+                    continue
+                observation = tool_result.get("observation") or {}
+                name = str(tool_result.get("name") or "")
+                refs = artifact_refs_from_observation(observation)
+                if name == "attempt_lean_proof":
+                    if observation.get("proof_status") != "proved":
+                        continue
+                    if evidence.evidence_type != EvidenceType.lean_proof:
+                        continue
+                    for ref in refs:
+                        self._append_evidence_ref(evidence, ref)
+                        self._append_report_ref(report, ref)
+                    evidence.verifier = evidence.verifier or "LEAPHarness"
+                    evidence.confidence = max(evidence.confidence, 1.0)
+                elif name == "query_literature":
+                    if evidence.evidence_type != EvidenceType.citation:
+                        continue
+                    ledger_ref = _artifact_ref_from_plain(observation.get("ledger_ref"))
+                    if ledger_ref is not None:
+                        self._append_evidence_ref(evidence, ledger_ref)
+                        self._append_report_ref(report, ledger_ref)
+                    for key in _citation_keys_from_literature_observation(observation):
+                        if key not in evidence.citation_keys:
+                            evidence.citation_keys.append(key)
+                    evidence.verifier = evidence.verifier or "LiteratureResearcher"
+                    evidence.confidence = max(evidence.confidence, 0.5)
+                elif name == "run_experiment":
+                    # The current description-only experiment backend records requests only.
+                    # It does not produce certifying experimental evidence.
+                    continue
+
+    def _record_literature_observation(self, report: ResearchReport, observation: dict[str, Any]) -> None:
+        query = str(observation.get("query") or "")
+        result_count = int(observation.get("result_count") or 0)
+        ledger_ref = _artifact_ref_from_plain(observation.get("ledger_ref"))
+        if ledger_ref is not None:
+            self._append_report_ref(report, ledger_ref)
+        if result_count <= 0:
+            issue = f"Local LiteratureDB query `{query}` returned no results."
+            if query and issue not in report.unresolved_issues:
+                report.unresolved_issues.append(issue)
+            return
+        citation_keys = _citation_keys_from_literature_observation(observation)
+        evidence = EvidenceRecord(
+            evidence_type=EvidenceType.citation,
+            summary=(
+                f"Native research tool LiteratureDB query `{query}` returned {result_count} "
+                "mapped result(s). Claim-local citation evidence is still required before "
+                "accepting literature claims."
+            ),
+            artifact_refs=[ledger_ref] if ledger_ref is not None else [],
+            citation_keys=citation_keys,
+            tool_result_ids=[str(observation.get("tool_result_id"))]
+            if observation.get("tool_result_id")
+            else [],
+            verifier="LiteratureResearcher",
+            confidence=0.5,
+        )
+        if not _same_evidence_present(report.evidence, evidence):
+            report.evidence.append(evidence)
+        self._add_literature_dependencies(report, observation)
+
+    def _add_literature_dependencies(self, report: ResearchReport, observation: dict[str, Any]) -> None:
+        query = str(observation.get("query") or "")
+        used_for = f"Native research tool query: {query}"
+        existing = {(dep.citation_key, dep.used_for) for dep in report.literature_dependencies}
+        for result in observation.get("results") or []:
+            if not isinstance(result, dict):
+                continue
+            citation_key = str(result.get("citation_key") or "")
+            if not citation_key or (citation_key, used_for) in existing:
+                continue
+            report.literature_dependencies.append(
+                LiteratureDependency(
+                    citation_key=citation_key,
+                    title=str(result.get("title") or ""),
+                    used_for=used_for,
+                    provenance=(
+                        f"LiteratureDB answer {observation.get('answer_id')}; "
+                        f"label={result.get('label', '')}"
+                    ),
+                )
             )
-            if not actions:
-                observations.append(
-                    f"Round {round_index}: no actionable subsystem calls remained."
-                )
-                break
+            existing.add((citation_key, used_for))
 
-            for action in actions:
-                observation, _refs = self._execute_loop_action(
-                    action,
-                    report,
-                    context=self._loop_context(base_context, report, observations),
-                )
-                observations.append(f"Round {round_index}: {observation}")
-                if action.action_type == "lean_proof" and action.proof_obligation_id:
-                    attempted_lean_obligation_ids.add(action.proof_obligation_id)
-                if action.action_type == "experiment" and action.proof_obligation_id:
-                    attempted_experiment_obligation_ids.add(action.proof_obligation_id)
-                if action.action_type == "literature_query" and action.query.strip():
-                    asked_literature_queries.add(action.query.strip())
+    def _record_lean_observation(self, report: ResearchReport, tool_result: dict[str, Any]) -> None:
+        observation = tool_result.get("observation") or {}
+        if not isinstance(observation, dict):
+            return
+        refs = artifact_refs_from_observation(observation)
+        for ref in refs:
+            self._append_report_ref(report, ref)
+        result_id = str(observation.get("tool_result_id") or "")
+        proof_status = str(observation.get("proof_status") or "")
+        statement = _tool_lean_statement(tool_result)
+        matched = False
+        for obligation in report.proof_obligations:
+            if _statements_match(obligation.statement, statement):
+                matched = True
+                for ref in refs:
+                    if ref.path not in {existing.path for existing in obligation.artifact_refs}:
+                        obligation.artifact_refs.append(ref)
+                if proof_status == "proved":
+                    obligation.status = "proved"
+                elif proof_status == "partially_proved":
+                    obligation.status = "in_progress"
+                else:
+                    obligation.status = "blocked"
+        if proof_status == "proved":
+            evidence = EvidenceRecord(
+                evidence_type=EvidenceType.lean_proof,
+                summary=f"LEAP returned proved for native tool result `{result_id}`.",
+                artifact_refs=refs,
+                tool_result_ids=[result_id] if result_id else [],
+                verifier="LEAPHarness",
+                confidence=1.0,
+            )
+            if not _same_evidence_present(report.evidence, evidence):
+                report.evidence.append(evidence)
+            self._attach_matching_claim_evidence(report, statement, evidence)
+        elif not matched:
+            issue = (
+                f"LEAP native tool result `{result_id}` for `{statement}` returned "
+                f"status `{proof_status or 'unknown'}` without a matching final proof obligation."
+            )
+            if issue not in report.unresolved_issues:
+                report.unresolved_issues.append(issue)
 
-        return observations
+    def _attach_matching_claim_evidence(
+        self, report: ResearchReport, statement: str, evidence: EvidenceRecord
+    ) -> None:
+        for claim in report.claims_generated:
+            if not _statements_match(claim.statement, statement):
+                continue
+            claim.evidence.append(evidence.model_copy(deep=True))
+            claim.status = ClaimStatus.proved_by_lean
+
+    def _record_experiment_request(self, report: ResearchReport, observation: dict[str, Any]) -> None:
+        refs = artifact_refs_from_observation(observation)
+        for ref in refs:
+            self._append_report_ref(report, ref)
+        result_id = str(observation.get("tool_result_id") or "")
+        description = str(observation.get("description") or "")
+        issue = (
+            f"Experiment request `{result_id}` was recorded but no coding-agent experiment "
+            f"backend is configured. Request: {description}"
+        )
+        if issue not in report.unresolved_issues:
+            report.unresolved_issues.append(issue)
 
     def _normalize_report(
         self, report: ResearchReport, proposal: ResearchProposal
@@ -227,446 +431,17 @@ class ResearchAgent:
                     report.required_verifications.append(message)
         return report
 
-    def _loop_context(
-        self,
-        base_context: Any,
-        report: ResearchReport,
-        observations: list[str],
-    ) -> dict[str, object]:
-        return {
-            "base_context": base_context,
-            "research_subagent_private_loop_state": {
-                "current_report": report.model_dump(mode="json"),
-                "private_loop_observations": observations,
-            },
-        }
-
     def _final_critic_context(
         self,
         base_context: Any,
         report: ResearchReport,
-        observations: list[str],
+        trace: dict[str, Any],
     ) -> dict[str, object]:
-        return self._loop_context(base_context, report, observations)
-
-    def _plan_subsystem_actions(
-        self,
-        report: ResearchReport,
-        proposal: ResearchProposal,
-        *,
-        attempted_lean_obligation_ids: set[str],
-        attempted_experiment_obligation_ids: set[str],
-        asked_literature_queries: set[str],
-    ) -> list[_ResearchLoopAction]:
-        """Choose deterministic subsystem calls from open report obligations."""
-        return [
-            *self._obligation_actions(
-                report,
-                tool="lean",
-                attempted_ids=attempted_lean_obligation_ids,
-                action_type="lean_proof",
-                rationale=(
-                    "Open Lean proof obligation appears in the draft report; invoke "
-                    "LEAP before the report can treat the claim as established."
-                ),
-                expected_evidence="Lean compiler logs, proof DAG, and any verified Lean file.",
-            ),
-            *self._obligation_actions(
-                report,
-                tool="experiment",
-                attempted_ids=attempted_experiment_obligation_ids,
-                action_type="experiment",
-                rationale=(
-                    "Open experimental verification obligation appears in the draft report; "
-                    "generate and run an experiment through ExperimentAgent."
-                ),
-                expected_evidence="ExperimentRuns artifacts with command/config/logs/seeds.",
-            ),
-            *self._literature_query_actions(report, proposal, asked_literature_queries),
-        ]
-
-    def _obligation_actions(
-        self,
-        report: ResearchReport,
-        *,
-        tool: str,
-        attempted_ids: set[str],
-        action_type: str,
-        rationale: str,
-        expected_evidence: str,
-    ) -> list[_ResearchLoopAction]:
-        actions: list[_ResearchLoopAction] = []
-        for obligation in report.proof_obligations:
-            if obligation.suggested_tool != tool:
-                continue
-            if obligation.status not in {"open", "in_progress"}:
-                continue
-            if obligation.obligation_id in attempted_ids:
-                continue
-            actions.append(
-                _ResearchLoopAction(
-                    action_type=action_type,
-                    proof_obligation_id=obligation.obligation_id,
-                    rationale=rationale,
-                    expected_evidence=expected_evidence,
-                )
-            )
-        return actions
-
-    def _literature_query_actions(
-        self,
-        report: ResearchReport,
-        proposal: ResearchProposal,
-        asked_literature_queries: set[str],
-    ) -> list[_ResearchLoopAction]:
-        actions: list[_ResearchLoopAction] = []
-        for query in self._candidate_literature_queries(report, proposal):
-            normalized = query.strip()
-            if not normalized or normalized in asked_literature_queries:
-                continue
-            actions.append(
-                _ResearchLoopAction(
-                    action_type="literature_query",
-                    query=normalized,
-                    rationale=(
-                        "A literature/novelty/citation verification need remains; query the "
-                        "local LiteratureDB in canonical notation before making or rejecting claims."
-                    ),
-                    expected_evidence="Mapped LiteratureDB query answer with quote-level provenance.",
-                )
-            )
-        return actions
-
-    def _candidate_literature_queries(
-        self, report: ResearchReport, proposal: ResearchProposal
-    ) -> list[str]:
-        queries: list[str] = []
-        for obligation in report.proof_obligations:
-            if obligation.suggested_tool == "literature" and obligation.status in {
-                "open",
-                "in_progress",
-                "blocked",
-            }:
-                queries.append(obligation.statement)
-        for item in report.required_verifications:
-            if _looks_like_literature_need(item):
-                queries.append(item)
-        for item in report.unresolved_issues:
-            if item.startswith("Local LiteratureDB query `"):
-                continue
-            if _looks_like_literature_need(item):
-                queries.append(item)
-        for dependency in report.literature_dependencies:
-            if dependency.used_for.startswith("Research loop query:"):
-                continue
-            query = " ".join(
-                part
-                for part in [dependency.citation_key, dependency.title, dependency.used_for]
-                if part
-            )
-            if query:
-                queries.append(query)
-        for claim in report.claims_generated:
-            if claim.claim_type not in {ClaimType.literature, ClaimType.novelty}:
-                continue
-            if claim.status in {ClaimStatus.cited, ClaimStatus.proved_by_lean}:
-                continue
-            queries.append(claim.normalized_statement or claim.statement)
-        queries.extend(proposal.literature_queries)
-        return list(dict.fromkeys(query.strip() for query in queries if query.strip()))
-
-    def _execute_loop_action(
-        self,
-        action: _ResearchLoopAction,
-        report: ResearchReport,
-        *,
-        context: Any,
-    ) -> tuple[str, list[ArtifactRef]]:
-        if action.action_type == "literature_query":
-            return self._run_literature_action(action, report)
-        if action.action_type == "lean_proof":
-            return self._run_lean_action(action, report, context=context)
-        if action.action_type == "experiment":
-            return self._run_experiment_action(action, report, context=context)
-        return f"Stop action recorded: {action.rationale or 'no rationale supplied'}", []
-
-    def _run_literature_action(
-        self,
-        action: _ResearchLoopAction,
-        report: ResearchReport,
-    ) -> tuple[str, list[ArtifactRef]]:
-        query = action.query.strip()
-        if not query:
-            return "Skipped literature query action because the query was empty.", []
-        answer = self.literature.answer_query(query, limit=5)
-        query_ledger_ref = self.store.artifact_ref("LiteratureDB/query_answers.jsonl")
-        self._append_report_ref(report, query_ledger_ref)
-        citation_keys = list(
-            dict.fromkeys(result.citation_key for result in answer.results if result.citation_key)
-        )
-        if answer.results:
-            report.evidence.append(
-                EvidenceRecord(
-                    evidence_type=EvidenceType.citation,
-                    summary=(
-                        f"Research loop LiteratureDB query `{query}` returned "
-                        f"{len(answer.results)} mapped result(s). This is report-level context; "
-                        "claim-local citation evidence is still required before accepting claims."
-                    ),
-                    artifact_refs=[query_ledger_ref],
-                    citation_keys=citation_keys,
-                    verifier="LiteratureResearcher",
-                    confidence=0.5,
-                )
-            )
-            existing = {(dep.citation_key, dep.used_for) for dep in report.literature_dependencies}
-            used_for = f"Research loop query: {query}"
-            for result in answer.results:
-                if not result.citation_key or (result.citation_key, used_for) in existing:
-                    continue
-                locator = result.provenance[0].locator if result.provenance else result.label
-                report.literature_dependencies.append(
-                    LiteratureDependency(
-                        citation_key=result.citation_key,
-                        title=result.title,
-                        used_for=used_for,
-                        provenance=(
-                            f"LiteratureQueryAnswer {answer.answer_id}; locator={locator}; "
-                            f"result_id={result.result_id}"
-                        ),
-                        notation_mappings=result.notation_mappings,
-                    )
-                )
-                existing.add((result.citation_key, used_for))
-        else:
-            issue = (
-                f"Local LiteratureDB query `{query}` returned no results; import and extract "
-                "relevant papers if this blocks the proposal."
-            )
-            if issue not in report.unresolved_issues:
-                report.unresolved_issues.append(issue)
-        return (
-            f"LiteratureDB query `{query}` returned {len(answer.results)} result(s); "
-            f"answer ledger: {query_ledger_ref.path}.",
-            [query_ledger_ref],
-        )
-
-    def _run_lean_action(
-        self,
-        action: _ResearchLoopAction,
-        report: ResearchReport,
-        *,
-        context: Any,
-    ) -> tuple[str, list[ArtifactRef]]:
-        obligation = self._find_obligation(report, action.proof_obligation_id)
-        if obligation is None:
-            return (
-                "Skipped LEAP action because obligation "
-                f"`{action.proof_obligation_id}` was absent.",
-                [],
-            )
-        goal = self._lean_goal_from_obligation(obligation)
-        leap_context = {
-            "context": context,
-            "selected_research_loop_action": asdict(action),
-            "current_report_before_leap_verification": report.model_dump(mode="json"),
+        return {
+            "base_context": base_context,
+            "current_report_after_native_tool_loop": report.model_dump(mode="json"),
+            "native_tool_trace_summary": _trace_summary(trace),
         }
-        result = self.theorem_prover.prove(goal, context=compact_json_dumps(leap_context))
-        self._record_theorem_prover_result(report, obligation, result)
-        refs = _unique_refs([*result.proved_artifacts, *result.artifact_refs])
-        return (
-            f"LEAP returned status `{result.status}` for obligation "
-            f"`{obligation.obligation_id}`; result_id={result.result_id}.",
-            refs,
-        )
-
-    def _run_experiment_action(
-        self,
-        action: _ResearchLoopAction,
-        report: ResearchReport,
-        *,
-        context: Any,
-    ) -> tuple[str, list[ArtifactRef]]:
-        obligation = self._find_obligation(report, action.proof_obligation_id)
-        if obligation is None:
-            return (
-                "Skipped experiment action because obligation "
-                f"`{action.proof_obligation_id}` was absent.",
-                [],
-            )
-        plan = self._plan_experiment(action, obligation, report, context=context)
-        if not plan.should_run:
-            obligation.status = "blocked"
-            message = (
-                f"Experiment planner declined to run obligation `{obligation.obligation_id}`: "
-                f"{plan.rationale or 'no rationale supplied'}"
-            )
-            if message not in report.unresolved_issues:
-                report.unresolved_issues.append(message)
-            return message, []
-
-        try:
-            result = self._execute_experiment_plan(plan, obligation)
-        except Exception as exc:  # noqa: BLE001 - record execution failure in report
-            obligation.status = "blocked"
-            message = (
-                f"Experiment `{plan.name}` failed for obligation "
-                f"`{obligation.obligation_id}`: {type(exc).__name__}: {exc}"
-            )
-            if message not in report.unresolved_issues:
-                report.unresolved_issues.append(message)
-            return message, []
-        self._record_experiment_result(report, obligation, result, plan)
-        refs = _unique_refs(result.artifact_refs)
-        return (
-            f"ExperimentAgent ran `{plan.name}` for obligation "
-            f"`{obligation.obligation_id}`; {result.summary}",
-            refs,
-        )
-
-    def _plan_experiment(
-        self,
-        action: _ResearchLoopAction,
-        obligation: ProofObligation,
-        report: ResearchReport,
-        *,
-        context: Any,
-    ) -> ExperimentPlan:
-        mock_output = self._mock_experiment_plan(obligation)
-        prompt_payload = {
-            "action": asdict(action),
-            "obligation": obligation.model_dump(mode="json"),
-            "current_report": report.model_dump(mode="json"),
-            "context": context,
-        }
-        messages = [
-            {
-                "role": "system",
-                "content": render_prompt("experiment_planner", override_dir=self.prompt_dir),
-            },
-            {
-                "role": "user",
-                "content": "Create an executable experiment for this research-loop action.\n"
-                + compact_json_dumps(prompt_payload),
-            },
-        ]
-        return self.router.complete_structured(
-            task_type="experiment_planning",
-            messages=messages,
-            schema=ExperimentPlan,
-            mock_output=mock_output if self.router.dry_run else None,
-        )
-
-    def _mock_experiment_plan(self, obligation: ProofObligation) -> ExperimentPlan:
-        payload = {
-            "obligation_id": obligation.obligation_id,
-            "status": "dry_run_experiment_executed",
-            "note": "Mock experiment exercises ExperimentAgent plumbing only.",
-        }
-        code = (
-            "import json\n"
-            f"data = {payload!r}\n"
-            "print(json.dumps(data, sort_keys=True))\n"
-        )
-        return ExperimentPlan(
-            name=_experiment_safe_name(obligation.obligation_id),
-            execution_mode="python",
-            code=code,
-            config={"obligation_statement": obligation.statement},
-            seeds=[0],
-            timeout_seconds=60,
-            rationale="Dry-run mock experiment plan.",
-            expected_interpretation=(
-                "This verifies only that the experiment subsystem can run and record artifacts."
-            ),
-        )
-
-    def _execute_experiment_plan(
-        self, plan: ExperimentPlan, obligation: ProofObligation
-    ) -> ExperimentResult:
-        config = {
-            "experiment_plan": plan.model_dump(mode="json"),
-            "obligation": obligation.model_dump(mode="json"),
-            "user_config": plan.config,
-        }
-        if plan.execution_mode == "command":
-            if not plan.command:
-                raise RuntimeError("Experiment plan selected command mode with empty command")
-            return self.experiment.run_command(
-                name=plan.name,
-                command=plan.command,
-                config=config,
-                seeds=plan.seeds,
-                timeout_seconds=plan.timeout_seconds,
-            )
-        if not plan.code.strip():
-            raise RuntimeError("Experiment plan selected python mode with empty code")
-        return self.experiment.run_python(
-            name=plan.name,
-            code=plan.code,
-            config=config,
-            seeds=plan.seeds,
-            timeout_seconds=plan.timeout_seconds,
-        )
-
-    def _record_experiment_result(
-        self,
-        report: ResearchReport,
-        obligation: ProofObligation,
-        result: ExperimentResult,
-        plan: ExperimentPlan,
-    ) -> None:
-        result.supports_claim_ids = list(
-            dict.fromkeys([*result.supports_claim_ids, *obligation.claim_ids])
-        )
-        if result.run_id not in {existing.run_id for existing in report.experimental_results}:
-            report.experimental_results.append(result)
-        refs = _unique_refs(result.artifact_refs)
-        for ref in refs:
-            if ref.path not in {existing.path for existing in obligation.artifact_refs}:
-                obligation.artifact_refs.append(ref)
-            self._append_report_ref(report, ref)
-        succeeded = _experiment_succeeded(result)
-        obligation.status = "experimentally_supported" if succeeded else "blocked"
-        evidence = EvidenceRecord(
-            evidence_type=EvidenceType.experiment,
-            summary=(
-                f"Experiment `{plan.name}` run_id={result.run_id} for obligation "
-                f"`{obligation.obligation_id}`. {result.summary}"
-            ),
-            artifact_refs=refs,
-            verifier="ExperimentAgent",
-            confidence=0.4 if succeeded else 0.1,
-        )
-        report.evidence.append(evidence)
-        for claim in report.claims_generated:
-            if claim.claim_id not in obligation.claim_ids:
-                continue
-            claim.evidence.append(evidence.model_copy(deep=True))
-            if claim.claim_type in {
-                ClaimType.mathematical,
-                ClaimType.algorithmic,
-                ClaimType.complexity,
-                ClaimType.theorem_statement,
-            }:
-                message = (
-                    f"Experimental evidence for claim `{claim.claim_id}` is not a proof; "
-                    "proof or derivation review remains required."
-                )
-                if message not in report.required_verifications:
-                    report.required_verifications.append(message)
-
-    def _find_obligation(
-        self, report: ResearchReport, obligation_id: str
-    ) -> ProofObligation | None:
-        return next(
-            (
-                candidate
-                for candidate in report.proof_obligations
-                if candidate.obligation_id == obligation_id
-            ),
-            None,
-        )
 
     def _add_forced_obligations(
         self, report: ResearchReport, critique: ResearchCritique
@@ -687,64 +462,15 @@ class ResearchAgent:
         if ref.path not in {existing.path for existing in report.artifact_refs}:
             report.artifact_refs.append(ref)
 
-    def _record_theorem_prover_result(
-        self,
-        report: ResearchReport,
-        obligation: ProofObligation,
-        result: TheoremProverResult,
-    ) -> None:
-        result_refs = _unique_refs([*result.proved_artifacts, *result.artifact_refs])
-        for ref in result_refs:
-            if ref.path not in {existing.path for existing in obligation.artifact_refs}:
-                obligation.artifact_refs.append(ref)
-            self._append_report_ref(report, ref)
-        if result.status == "proved":
-            obligation.status = "proved"
-            self._drop_resolved_verification_items(report, obligation)
-            for claim in report.claims_generated:
-                if claim.claim_id not in obligation.claim_ids:
-                    continue
-                claim.evidence.append(
-                    EvidenceRecord(
-                        evidence_type=EvidenceType.lean_proof,
-                        summary=(
-                            f"LEAP verified proof obligation `{obligation.obligation_id}` "
-                            f"for Lean goal `{result.root_goal.name}`."
-                        ),
-                        artifact_refs=result_refs,
-                        verifier="LEAPHarness",
-                        confidence=1.0,
-                    )
-                )
-                claim.status = ClaimStatus.proved_by_lean
-        elif result.status == "partially_proved":
-            obligation.status = "in_progress"
-        else:
-            obligation.status = "blocked"
-        if result.recommended_next_steps:
-            for step in result.recommended_next_steps:
-                if step not in report.required_verifications and obligation.status != "proved":
-                    report.required_verifications.append(step)
+    def _append_evidence_ref(self, evidence: EvidenceRecord, ref: ArtifactRef) -> None:
+        if ref.path not in {existing.path for existing in evidence.artifact_refs}:
+            evidence.artifact_refs.append(ref)
 
-    def _drop_resolved_verification_items(
-        self, report: ResearchReport, obligation: ProofObligation
-    ) -> None:
-        markers = [obligation.obligation_id, obligation.statement, *obligation.claim_ids]
-        markers = [marker for marker in markers if marker]
-        report.required_verifications = [
-            item
-            for item in report.required_verifications
-            if not any(marker in item for marker in markers)
-        ]
-
-    def _lean_goal_from_obligation(self, obligation: ProofObligation) -> LeanStatement:
-        statement = obligation.statement.strip()
-        for prefix in ["lean:", "Lean:", "LEAN:"]:
-            if statement.startswith(prefix):
-                statement = statement[len(prefix) :].strip()
-                break
-        name = _lean_safe_name(obligation.obligation_id)
-        return LeanStatement(name=name, statement=statement)
+    def _all_evidence_records(self, report: ResearchReport) -> list[EvidenceRecord]:
+        records = list(report.evidence)
+        for claim in report.claims_generated:
+            records.extend(claim.evidence)
+        return records
 
     def _attach_report_refs_to_claims(
         self,
@@ -826,44 +552,84 @@ class ResearchAgent:
         )
 
 
-def _experiment_succeeded(result: ExperimentResult) -> bool:
-    return bool(re.search(r"\bcode\s+0\b", result.summary.lower()))
+def _artifact_ref_from_plain(value: Any) -> ArtifactRef | None:
+    try:
+        return ArtifactRef.model_validate(value)
+    except Exception:
+        return None
 
 
-def _experiment_safe_name(value: str) -> str:
-    name = re.sub(r"[^A-Za-z0-9_-]+", "_", value).strip("_")
-    return name[:80] or "research_loop_experiment"
+def _citation_keys_from_literature_observation(observation: dict[str, Any]) -> list[str]:
+    keys: list[str] = []
+    for result in observation.get("results") or []:
+        if isinstance(result, dict) and result.get("citation_key"):
+            keys.append(str(result["citation_key"]))
+    return list(dict.fromkeys(keys))
 
 
-def _looks_like_literature_need(text: str) -> bool:
-    lowered = text.lower()
-    return any(
-        marker in lowered
-        for marker in [
-            "citation",
-            "cited",
-            "literature",
-            "novelty",
-            "prior work",
-            "paper",
-            "provenance",
-        ]
-    )
+def _same_evidence_present(existing: list[EvidenceRecord], candidate: EvidenceRecord) -> bool:
+    candidate_ids = set(candidate.tool_result_ids)
+    candidate_refs = {ref.path for ref in candidate.artifact_refs}
+    for evidence in existing:
+        if candidate_ids and candidate_ids.intersection(evidence.tool_result_ids):
+            return True
+        if candidate_refs and candidate_refs == {ref.path for ref in evidence.artifact_refs}:
+            return True
+    return False
 
 
-def _lean_safe_name(value: str) -> str:
-    name = re.sub(r"[^A-Za-z0-9_']+", "_", value).strip("_")
-    if not name or not re.match(r"[A-Za-z_]", name):
-        name = "goal_" + name
-    return name[:80]
+def _tool_lean_statement(tool_result: dict[str, Any]) -> str:
+    observation = tool_result.get("observation") if isinstance(tool_result, dict) else None
+    if isinstance(observation, dict):
+        root_goal = observation.get("root_goal")
+        if isinstance(root_goal, dict) and root_goal.get("statement"):
+            return str(root_goal["statement"])
+    arguments = tool_result.get("arguments") if isinstance(tool_result, dict) else None
+    if isinstance(arguments, dict) and arguments.get("statement"):
+        return str(arguments["statement"])
+    return ""
 
 
-def _unique_refs(refs: list[ArtifactRef]) -> list[ArtifactRef]:
-    unique: list[ArtifactRef] = []
-    seen: set[str] = set()
-    for ref in refs:
-        if ref.path in seen:
+def _statements_match(left: str, right: str) -> bool:
+    if not left or not right:
+        return False
+    return _normalize_statement(left) == _normalize_statement(right)
+
+
+def _normalize_statement(statement: str) -> str:
+    text = statement.strip()
+    for prefix in ["lean:", "Lean:", "LEAN:"]:
+        if text.startswith(prefix):
+            text = text[len(prefix) :].strip()
+            break
+    return " ".join(text.split())
+
+
+def _trace_summary(trace: dict[str, Any]) -> dict[str, Any]:
+    calls = []
+    for item in trace.get("tool_calls", []):
+        if not isinstance(item, dict):
             continue
-        seen.add(ref.path)
-        unique.append(ref)
-    return unique
+        observation = item.get("observation")
+        calls.append(
+            {
+                "turn": item.get("turn"),
+                "call_id": item.get("call_id"),
+                "name": item.get("name"),
+                "status": item.get("status"),
+                "tool_result_id": observation.get("tool_result_id")
+                if isinstance(observation, dict)
+                else None,
+                "proof_status": observation.get("proof_status")
+                if isinstance(observation, dict)
+                else None,
+                "result_count": observation.get("result_count")
+                if isinstance(observation, dict)
+                else None,
+            }
+        )
+    return {
+        "private_reasoning": "redacted_not_logged_or_replayed",
+        "tool_calls": calls,
+        "finalization": to_plain(trace.get("finalization")),
+    }
