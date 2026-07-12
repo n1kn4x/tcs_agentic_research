@@ -47,6 +47,8 @@ Optional development tools:
 pip install -e '.[dev]'
 ```
 
+Docker must be installed and running if you want to use the experiment subsystem. The experimenter builds and runs a project-level Docker container with internet access and shell access, and fails fast if Docker or `experimenter:` configuration is missing.
+
 ## vLLM serving
 
 Start Qwen3.6 for the deep/agentic endpoint and optionally a smaller routine model:
@@ -100,6 +102,38 @@ tcs-research prove --workspace workspaces/demo --dry-run \
   --name nat_id --statement "∀ n : Nat, n = n"
 ```
 Install Lean via `elan` for actual verification. The generated project is under `LeanProject/`.
+
+### Subsystem Experimenter
+
+The experiment subsystem runs simulations, numerical checks, plotting jobs, data gathering, and small-instance searches through an existing coding agent (`pi`) inside Docker.
+
+Key properties:
+
+- one persistent Docker container per research workspace/project;
+- the canonical workspace is mounted read-only at `/research` inside the container;
+- portable writable experimenter state lives under `.experimenter/workspace` in the research workspace and is mounted at `/workspace` for scripts, package caches, pi sessions, and run outputs;
+- copying the research workspace to another machine copies experimenter state; the Docker image is rebuilt from the bundled Dockerfile if absent on the new machine;
+- completed run artifacts are imported back into `ExperimentRuns/`;
+- the bundled image includes `pi`, Python, NumPy, pandas, SciPy, SymPy, matplotlib, seaborn, scikit-learn, statsmodels, NetworkX, IPython/Jupyter, git, curl, and build tools;
+- no placeholder fallback is used: if the experimenter is invoked without working Docker/configuration, the command fails.
+
+The Docker image is global to the local Docker daemon and is intentionally not stored in the workspace. The portable unit is the workspace itself: canonical artifacts, `ExperimentRuns/`, and `.experimenter/workspace/`. If you delete a workspace, its portable experimenter state is deleted with it; stopped/running Docker containers should still be cleaned up with `tcs-research experiment reset` or Docker tooling because a plain filesystem delete cannot notify the Docker daemon. The Dockerfile is available in `src/experimenter/Dockerfile` and packaged as `src/tcs_agentic_research/experimenter/Dockerfile`.
+
+Configure the `experimenter:` block in `config.yml`, then manage it with:
+
+```bash
+# Build/start the project container
+tcs-research experiment start --workspace workspaces/demo --config config.yml
+
+# Run a one-off experiment through Dockerized pi
+tcs-research experiment run --workspace workspaces/demo --config config.yml \
+  --name smoke --description "Create a Python script that prints 2+2 and record the result."
+
+# Inspect/stop/reset the project container
+tcs-research experiment status --workspace workspaces/demo --config config.yml
+tcs-research experiment stop --workspace workspaces/demo --config config.yml
+tcs-research experiment reset --workspace workspaces/demo --config config.yml
+```
 
 ### Subsystem Literature Researcher
 Import and query literature with canonical notation and quote-level provenance:
@@ -158,7 +192,7 @@ Nodes durably write artifacts before returning. Solved verdicts are computed det
 - `ResearchCriticAgent`: distinguishes proofs, citations, experiments, informal arguments, conjectures, refutations, and forced verification obligations.
 - `LiteratureResearcher`: modular literature pipeline for OpenAlex search/citation candidate discovery, arXiv/DOI/PDF import, PDF text extraction, theorem/algorithm extraction, nomenclature updates, duplicate detection, and quote-provenance query answers in mapped notation.
 - `TheoremProverAgent` / `LEAPHarness`: Lean proof search with local Lean declaration retrieval, direct formalization, revision, blueprint decomposition, AND-OR proof DAGs, and strict `sorry` discipline.
-- `ExperimentAgent`: reproducible command runner for simulations, brute-force searches, and numerical checks.
+- `ExperimentAgent`: Dockerized pi-backed experiment runner for simulations, brute-force searches, numerical checks, plots, and data-gathering tasks. It mounts canonical artifacts read-only and imports run artifacts into `ExperimentRuns/`.
 - `IndependentReplicationAgent`: verifies possible breakthroughs from minimized context.
 
 ## LEAP proof discipline

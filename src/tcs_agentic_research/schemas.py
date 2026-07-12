@@ -545,8 +545,52 @@ class RouterSettings(StrictModel):
     profiles: dict[str, ModelProfile]
 
 
+class ExperimenterPiSettings(StrictModel):
+    """Configuration for the Dockerized pi coding agent used by experiments."""
+
+    provider: str = "experimenter-vllm"
+    model: str
+    base_url: str = "http://host.docker.internal:8000/v1"
+    api_key: str = "EMPTY"
+    api: Literal[
+        "openai-completions",
+        "openai-responses",
+        "anthropic-messages",
+        "google-generative-ai",
+    ] = "openai-completions"
+    thinking: str = "high"
+    reasoning: bool = True
+    context_window: int = 128000
+    max_tokens: int = 32768
+    compat: dict[str, Any] = Field(
+        default_factory=lambda: {
+            "supportsDeveloperRole": False,
+            "supportsReasoningEffort": False,
+        }
+    )
+    extra_args: list[str] = Field(default_factory=list)
+
+
+class ExperimenterSettings(StrictModel):
+    """Docker sandbox settings for the project-level experimenter container."""
+
+    enabled: bool = True
+    image: str = "tcs-agentic-research-experimenter:latest"
+    dockerfile: str = ""
+    network: str = "bridge"
+    memory: str = "8g"
+    cpus: float = 4.0
+    timeout_seconds: int = 1800
+    max_output_bytes: int = 2_000_000
+    container_name_prefix: str = "tcs-exp"
+    add_host_gateway: bool = True
+    environment: dict[str, str] = Field(default_factory=dict)
+    pi: ExperimenterPiSettings
+
+
 class AppConfig(StrictModel):
     router: RouterSettings
+    experimenter: ExperimenterSettings | None = None
 
 
 class ModelCallRecord(StrictModel):

@@ -17,6 +17,7 @@ from ..schemas import (
     ClaimType,
     EvidenceRecord,
     EvidenceType,
+    ExperimentResult,
     LiteratureDependency,
     ProofObligation,
     ReportOutcome,
@@ -42,7 +43,7 @@ class ResearchAgent:
         self.router = router
         self.prompt_dir = prompt_dir
         self.literature = LiteratureResearcher(store, router, prompt_dir=prompt_dir)
-        self.experiment = ExperimentAgent(store)
+        self.experiment = ExperimentAgent(store, router.experimenter)
         self.critic = ResearchCriticAgent(store, router, prompt_dir=prompt_dir)
         self.theorem_prover = TheoremProverAgent(store, router, prompt_dir=prompt_dir)
 
@@ -236,7 +237,7 @@ class ResearchAgent:
             elif name == "attempt_lean_proof":
                 self._record_lean_observation(report, tool_result)
             elif name == "run_experiment":
-                self._record_experiment_request(report, observation)
+                self._record_experiment_observation(report, observation)
         return report
 
     def _tool_results_by_id(self, trace: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -287,9 +288,13 @@ class ResearchAgent:
                     evidence.verifier = evidence.verifier or "LiteratureResearcher"
                     evidence.confidence = max(evidence.confidence, 0.5)
                 elif name == "run_experiment":
-                    # The current description-only experiment backend records requests only.
-                    # It does not produce certifying experimental evidence.
-                    continue
+                    if evidence.evidence_type != EvidenceType.experiment:
+                        continue
+                    for ref in refs:
+                        self._append_evidence_ref(evidence, ref)
+                        self._append_report_ref(report, ref)
+                    evidence.verifier = evidence.verifier or "DockerPiExperimenter"
+                    evidence.confidence = max(evidence.confidence, 0.7)
 
     def _record_literature_observation(self, report: ResearchReport, observation: dict[str, Any]) -> None:
         query = str(observation.get("query") or "")
@@ -397,18 +402,37 @@ class ResearchAgent:
             claim.evidence.append(evidence.model_copy(deep=True))
             claim.status = ClaimStatus.proved_by_lean
 
-    def _record_experiment_request(self, report: ResearchReport, observation: dict[str, Any]) -> None:
+    def _record_experiment_observation(self, report: ResearchReport, observation: dict[str, Any]) -> None:
         refs = artifact_refs_from_observation(observation)
         for ref in refs:
             self._append_report_ref(report, ref)
         result_id = str(observation.get("tool_result_id") or "")
-        description = str(observation.get("description") or "")
-        issue = (
-            f"Experiment request `{result_id}` was recorded but no coding-agent experiment "
-            f"backend is configured. Request: {description}"
+        payload = observation.get("experiment_result")
+        if not isinstance(payload, dict):
+            issue = f"Experiment tool result `{result_id}` did not include a structured ExperimentResult."
+            if issue not in report.unresolved_issues:
+                report.unresolved_issues.append(issue)
+            return
+        try:
+            result = ExperimentResult.model_validate(payload)
+        except Exception as exc:  # noqa: BLE001 - preserve report generation with issue marker
+            issue = f"Experiment tool result `{result_id}` failed ExperimentResult validation: {exc}"
+            if issue not in report.unresolved_issues:
+                report.unresolved_issues.append(issue)
+            return
+        existing_ids = {existing.run_id for existing in report.experimental_results}
+        if result.run_id not in existing_ids:
+            report.experimental_results.append(result)
+        evidence = EvidenceRecord(
+            evidence_type=EvidenceType.experiment,
+            summary=f"Dockerized pi experiment `{result.run_id}` completed: {result.summary}",
+            artifact_refs=result.artifact_refs,
+            tool_result_ids=[result_id] if result_id else [],
+            verifier="DockerPiExperimenter",
+            confidence=0.7,
         )
-        if issue not in report.unresolved_issues:
-            report.unresolved_issues.append(issue)
+        if not _same_evidence_present(report.evidence, evidence):
+            report.evidence.append(evidence)
 
     def _normalize_report(
         self, report: ResearchReport, proposal: ResearchProposal

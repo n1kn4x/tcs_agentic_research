@@ -19,6 +19,7 @@ from tcs_agentic_research.leap.harness import (
     DecompositionReview,
     FormalProofCandidate,
 )
+from tcs_agentic_research.experimenter.errors import ExperimenterConfigurationError
 from tcs_agentic_research.llm import (
     LLMRouter,
     StructuredLLMError,
@@ -43,7 +44,6 @@ from tcs_agentic_research.schemas import (
     LiteratureSource,
     ModelProfile,
     PaperMetadata,
-    ProofObligation,
     ProposalCritique,
     ReplicationResult,
     ReportOutcome,
@@ -460,56 +460,13 @@ def test_url_only_literature_claim_is_not_accepted(tmp_path: Path) -> None:
     assert not is_claim_acceptably_supported(claim, store)
 
 
-def test_research_trace_records_blocked_experiment_request(tmp_path: Path) -> None:
+def test_experiment_agent_requires_configuration_when_used(tmp_path: Path) -> None:
     store = _store(tmp_path)
     router = _router(store)
     agent = ResearchAgent(store, router)
-    claim = ClaimRecord(
-        claim_type=ClaimType.experimental,
-        statement="A small executable experiment can run for this obligation.",
-        status=ClaimStatus.conjecture,
-    )
-    obligation = ProofObligation(
-        statement="Run a deterministic smoke experiment.",
-        claim_ids=[claim.claim_id],
-        suggested_tool="experiment",
-    )
-    report = ResearchReport(
-        proposal_id="proposal_exp",
-        outcome=ReportOutcome.partially_succeeded,
-        executive_summary="Draft report with an experiment obligation.",
-        claims_generated=[claim],
-        proof_obligations=[obligation],
-    )
-    request_ref = store.write_json(
-        "ExperimentRuns/requested_experiment/request.json",
-        {"description": "Run a deterministic smoke experiment."},
-    )
-    trace = {
-        "tool_calls": [
-            {
-                "turn": 1,
-                "call_id": "call_exp",
-                "name": "run_experiment",
-                "arguments": {"description": "Run a deterministic smoke experiment."},
-                "status": "blocked",
-                "observation": {
-                    "status": "blocked",
-                    "tool_result_id": "experiment_request_test",
-                    "description": "Run a deterministic smoke experiment.",
-                    "artifact_refs": [request_ref.model_dump(mode="json")],
-                },
-            }
-        ]
-    }
 
-    agent._reconcile_tool_trace(report, trace=trace, trace_refs=[])
-
-    assert report.unresolved_issues
-    assert "backend is configured" in report.unresolved_issues[0]
-    assert request_ref.path in {ref.path for ref in report.artifact_refs}
-    assert not report.experimental_results
-    assert report.proof_obligations[0].status == "open"
+    with pytest.raises(ExperimenterConfigurationError, match="no `experimenter:` block"):
+        agent.experiment.run_experiment(description="Run a deterministic smoke experiment.")
 
 
 def test_solved_requires_independent_replication(tmp_path: Path) -> None:

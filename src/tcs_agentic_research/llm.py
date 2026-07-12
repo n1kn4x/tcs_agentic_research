@@ -15,7 +15,7 @@ import yaml
 from pydantic import BaseModel, ValidationError
 
 from .artifact_store import ArtifactStore, to_plain
-from .schemas import AppConfig, ModelCallRecord, ModelProfile, RouterSettings
+from .schemas import AppConfig, ExperimenterSettings, ModelCallRecord, ModelProfile, RouterSettings
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -29,10 +29,18 @@ class StructuredLLMError(RuntimeError):
 class LLMRouter:
     """Route tasks to local vLLM servers and validate structured outputs."""
 
-    def __init__(self, settings: RouterSettings, *, store: ArtifactStore | None = None, dry_run: bool = False):
+    def __init__(
+        self,
+        settings: RouterSettings,
+        *,
+        store: ArtifactStore | None = None,
+        dry_run: bool = False,
+        experimenter: ExperimenterSettings | None = None,
+    ):
         self.settings = settings
         self.store = store
         self.dry_run = dry_run
+        self.experimenter = experimenter
 
     @classmethod
     def from_config_file(
@@ -52,10 +60,10 @@ class LLMRouter:
                     )
                 },
             )
-            return cls(settings, store=store, dry_run=dry_run)
+            return cls(settings, store=store, dry_run=dry_run, experimenter=None)
         data = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
         config = AppConfig.model_validate(data)
-        return cls(config.router, store=store, dry_run=dry_run)
+        return cls(config.router, store=store, dry_run=dry_run, experimenter=config.experimenter)
 
     def select_profile(self, task_type: str) -> tuple[str, ModelProfile]:
         for name, profile in self.settings.profiles.items():
@@ -681,6 +689,8 @@ def _execute_openai_tool(
             return result
         return {"status": "ok", "result": result}
     except Exception as exc:  # noqa: BLE001 - tool failures are observations for the model
+        if getattr(exc, "fatal_tool_error", False):
+            raise
         return {"status": "error", "error_type": type(exc).__name__, "error": str(exc)}
 
 

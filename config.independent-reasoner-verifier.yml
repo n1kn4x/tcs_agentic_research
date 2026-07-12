@@ -11,6 +11,31 @@
 # `max_tokens` is the per-request generation budget. It must fit together with
 # prompt tokens inside the vLLM server's `--max-model-len`. Qwen3.6's recommended
 # default output budget is 32,768 tokens; use 81,920 only for very hard benchmarks.
+experimenter:
+  enabled: true
+  image: tcs-agentic-research-experimenter:latest
+  dockerfile: ""
+  network: bridge
+  memory: 8g
+  cpus: 4
+  timeout_seconds: 1800
+  max_output_bytes: 2000000
+  add_host_gateway: true
+  environment: {}
+  pi:
+    provider: experimenter-vllm
+    model: deep-reasoner
+    base_url: http://host.docker.internal:8000/v1
+    api_key: EMPTY
+    api: openai-completions
+    thinking: high
+    reasoning: true
+    context_window: 128000
+    max_tokens: 32768
+    compat:
+      supportsDeveloperRole: false
+      supportsReasoningEffort: false
+
 router:
   default_task: routine
   timeout_seconds: 900

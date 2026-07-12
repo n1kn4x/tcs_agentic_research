@@ -5,6 +5,32 @@
 # with `--reasoning-parser qwen3 --enable-auto-tool-choice --tool-call-parser qwen3_coder`.
 # Qwen3.6 thinks by default. Deep/precise profiles enable thinking and preserve
 # historical thinking when present; routine extraction uses non-thinking mode.
+experimenter:
+  enabled: true
+  image: tcs-agentic-research-experimenter:latest
+  # Empty means: use the Dockerfile shipped in src/tcs_agentic_research/experimenter/Dockerfile.
+  dockerfile: ""
+  network: bridge
+  memory: 8g
+  cpus: 4
+  timeout_seconds: 1800
+  max_output_bytes: 2000000
+  add_host_gateway: true
+  environment: {}
+  pi:
+    provider: experimenter-vllm
+    model: deep-reasoner
+    base_url: http://host.docker.internal:8000/v1
+    api_key: EMPTY
+    api: openai-completions
+    thinking: high
+    reasoning: true
+    context_window: 128000
+    max_tokens: 32768
+    compat:
+      supportsDeveloperRole: false
+      supportsReasoningEffort: false
+
 router:
   default_task: routine
   timeout_seconds: 600

@@ -6,6 +6,7 @@ import argparse
 import json
 import sys
 
+from .agents.experiment import ExperimentAgent
 from .agents.initialization import InitializationAgent
 from .agents.literature import LiteratureResearcher
 from .agents.theorem_prover import TheoremProverAgent
@@ -113,6 +114,31 @@ def main(argv: list[str] | None = None) -> int:
     lit_test.add_argument("--query", default="sample theorem equality algorithm")
     lit_test.add_argument("--citation-key", default="literature_smoke_test")
 
+    exp_p = sub.add_parser("experiment", help="Manage and run Dockerized pi experiments")
+    exp_sub = exp_p.add_subparsers(dest="experiment_command", required=True)
+
+    exp_start = exp_sub.add_parser("start", help="Build/start the project experimenter container")
+    _add_common(exp_start)
+
+    exp_status = exp_sub.add_parser("status", help="Show project experimenter container status")
+    _add_common(exp_status)
+
+    exp_stop = exp_sub.add_parser("stop", help="Stop the project experimenter container")
+    _add_common(exp_stop)
+    exp_stop.add_argument("--remove", action="store_true", help="Remove the stopped container")
+
+    exp_reset = exp_sub.add_parser(
+        "reset", help="Remove the project experimenter container and .experimenter writable state"
+    )
+    _add_common(exp_reset)
+
+    exp_run = exp_sub.add_parser("run", help="Run an experiment with Dockerized pi")
+    _add_common(exp_run)
+    exp_run.add_argument("--description", required=True)
+    exp_run.add_argument("--name", default="experiment")
+    exp_run.add_argument("--supports-claim-id", action="append", default=[])
+    exp_run.add_argument("--timeout-seconds", type=int)
+
     args = parser.parse_args(argv)
     try:
         if args.command == "init":
@@ -125,6 +151,8 @@ def main(argv: list[str] | None = None) -> int:
             return _cmd_prove(args)
         if args.command == "literature":
             return _cmd_literature(args)
+        if args.command == "experiment":
+            return _cmd_experiment(args)
     except Exception as exc:  # noqa: BLE001 - CLI should surface actionable errors
         print(f"error: {exc}", file=sys.stderr)
         return 2
@@ -275,6 +303,38 @@ def _cmd_literature(args: argparse.Namespace) -> int:
         print(json.dumps(payload, indent=2, sort_keys=True))
         return 0
     raise RuntimeError(f"Unknown literature subcommand: {args.literature_command}")
+
+
+def _cmd_experiment(args: argparse.Namespace) -> int:
+    store = ArtifactStore(args.workspace)
+    store.initialize_layout()
+    router = LLMRouter.from_config_file(args.config, store=store, dry_run=args.dry_run)
+    agent = ExperimentAgent(store, router.experimenter)
+
+    if args.experiment_command == "start":
+        print(json.dumps(agent.ensure_container(), indent=2, sort_keys=True))
+        return 0
+    if args.experiment_command == "status":
+        print(json.dumps(agent.status(), indent=2, sort_keys=True))
+        return 0
+    if args.experiment_command == "stop":
+        agent.stop_container(remove=args.remove)
+        print(json.dumps({"status": "stopped", "removed": bool(args.remove)}, indent=2))
+        return 0
+    if args.experiment_command == "reset":
+        agent.reset_container()
+        print(json.dumps({"status": "reset"}, indent=2))
+        return 0
+    if args.experiment_command == "run":
+        result = agent.run_experiment(
+            description=args.description,
+            name=args.name,
+            supports_claim_ids=args.supports_claim_id,
+            timeout_seconds=args.timeout_seconds,
+        )
+        print(result.model_dump_json(indent=2))
+        return 0
+    raise RuntimeError(f"Unknown experiment subcommand: {args.experiment_command}")
 
 
 def _run_literature_smoke_test(

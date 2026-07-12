@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from pydantic import Field
+
 from ..artifact_store import ArtifactStore, to_plain
 from ..prompt_serialization import compact_json_dumps
 from ..schemas import (
@@ -64,6 +66,9 @@ class AttemptLeanProofArgs(StrictModel):
 
 class RunExperimentArgs(StrictModel):
     description: str
+    name: str = "experiment"
+    supports_claim_ids: list[str] = Field(default_factory=list)
+    timeout_seconds: int | None = None
 
 
 def literature_toolset(
@@ -229,20 +234,25 @@ def research_execution_toolset(
 
     def run_experiment(arguments: dict[str, Any]) -> dict[str, Any]:
         args = RunExperimentArgs.model_validate(arguments)
-        request_id, refs = experiment.record_request(description=args.description)
+        result = experiment.run_experiment(
+            description=args.description,
+            name=args.name,
+            supports_claim_ids=args.supports_claim_ids,
+            timeout_seconds=args.timeout_seconds,
+        )
         return {
-            "status": "blocked",
+            "status": "ok",
             "tool": "run_experiment",
-            "tool_result_id": request_id,
-            "summary": (
-                "Experiment request recorded, but no coding-agent experiment backend is "
-                "configured yet. This observation does not certify any experimental claim."
-            ),
+            "tool_result_id": result.run_id,
+            "summary": result.summary,
             "description": args.description,
-            "artifact_refs": [ref.model_dump(mode="json") for ref in refs],
+            "experiment_result": result.model_dump(mode="json"),
+            "artifact_refs": [ref.model_dump(mode="json") for ref in result.artifact_refs],
             "instruction": (
-                "Report this as a blocked experiment/unresolved issue unless a future backend "
-                "returns executable run artifacts."
+                "If you use this result in the final report, include this ExperimentResult in "
+                "ResearchReport.experimental_results and put the tool_result_id in supporting "
+                "EvidenceRecord.tool_result_ids. Experiments support empirical claims only; "
+                "they do not prove mathematical claims."
             ),
         }
 
@@ -269,9 +279,14 @@ def research_execution_toolset(
             AgentTool(
                 "run_experiment",
                 (
-                    "Request a simulation, numerical experiment, or small-instance search by "
-                    "natural-language description. The current backend records the request; a "
-                    "future coding-agent backend will execute it behind the same tool."
+                    "Run a simulation, numerical experiment, or small-instance search in the "
+                    "project experimenter: a persistent Docker container running the pi coding "
+                    "agent with shell and internet access. The research workspace is mounted "
+                    "read-only at /research; /workspace is a writable bind mount backed by "
+                    ".experimenter/workspace inside the research workspace, so it is portable "
+                    "when the workspace is copied. The system imports completed run artifacts "
+                    "into ExperimentRuns/. Missing Docker or experimenter "
+                    "configuration is a fatal error, not a blocked placeholder."
                 ),
                 RunExperimentArgs,
                 run_experiment,

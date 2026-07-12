@@ -28,3 +28,4 @@ When a proposal names an unresolved issue, prefer requiring it to be tracked as 
 Do not demand an end-to-end final path towards the research goal. Part of the system is that the path will be discovered iteratively. The details will be filled
 by the researcher who will execute the proposal. Your job is to make sure that the proposal is not completely misleading and an utter waste of resources.
 Your goal should also be to not shut down any interesting reseach, but to make sure that it is steered in the right direction.
+Often times, a proposal will face obstructions. Then the goal (ordered by priority) is to either overcome this obstruction, or attempt another route, or add an assumption that the obstruction is surmountable and analyze this case, or show a general negative result.
