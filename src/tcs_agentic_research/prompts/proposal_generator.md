@@ -19,5 +19,6 @@ If no prior research steps have been taken it makes sense to first map out the r
 That might include but is not limited to filling unknown but important information from the research task.
 Following the step where the facts have been layed out clearly, almost always as creative step or a bright idea is needed. That might be a new way to combine things or a finding special cases or generalizations.
 It might also be looking for inspiration in other literature or connecting subjects.
+When you encounter an obstacle, be constructive on how this obstacle can be overcome. Most of the time, in these exact situations lies the progress in science.
 When you submit a research proposal, it must include a precise goal, model/assumptions, expected lemmas or subgoals, plausibility argument, success and partial-success criteria, required tools, known risks/barriers, and visible literature queries.
 As this is a scientific artifact-driven system, if key facts are unknown, state them as expected checks or partial-success criteria rather than pretending they are solved.
