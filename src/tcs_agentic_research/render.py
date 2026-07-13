@@ -12,7 +12,8 @@ def render_proposal_markdown(proposal: ResearchProposal) -> str:
     ) or "- None recorded."
     return f"""# Research Proposal: {proposal.title}
 
-**Proposal ID:** `{proposal.proposal_id}`
+**Proposal ID:** `{proposal.proposal_id}`  
+**Kind:** `{proposal.proposal_kind.value}`
 
 ## Precise goal
 {proposal.precise_goal}
@@ -25,6 +26,21 @@ def render_proposal_markdown(proposal: ResearchProposal) -> str:
 
 ## Algorithmic subgoals
 {_bullets(proposal.algorithmic_subgoals)}
+
+## Hypotheses to test
+{_bullets(proposal.hypotheses_to_test)}
+
+## Questions to answer
+{_bullets(proposal.questions_to_answer)}
+
+## Assertions used as assumptions
+{_bullets(proposal.assertions_used_as_assumptions)}
+
+## Must not assume
+{_bullets(proposal.must_not_assume)}
+
+## Critic constraints
+{_bullets(proposal.critic_constraints)}
 
 ## Plausibility argument
 {proposal.plausibility_argument}

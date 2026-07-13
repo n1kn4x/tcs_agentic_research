@@ -12,6 +12,7 @@ from tcs_agentic_research.agents.critics import (
     is_claim_acceptably_supported,
 )
 from tcs_agentic_research.agents.initialization import InitializationAgent
+from tcs_agentic_research.agents.proposal import ProposalAgent
 from tcs_agentic_research.agents.research import ResearchAgent
 from tcs_agentic_research.agents.toolsets import artifact_retrieval_toolset
 from tcs_agentic_research.artifact_store import ArtifactStore
@@ -43,9 +44,11 @@ from tcs_agentic_research.schemas import (
     InitializationInterviewTurn,
     LiteratureExtract,
     LiteratureSource,
+    CriticDecision,
     ModelProfile,
     PaperMetadata,
     ProposalCritique,
+    ProposalKind,
     ReplicationResult,
     ReportOutcome,
     ResearchCritique,
@@ -326,6 +329,92 @@ def test_structured_tool_completion_uses_openai_tool_calls(tmp_path: Path) -> No
     assert trace["tool_calls"][0]["name"] == "query_literature"
     assert "rationale" not in trace["tool_calls"][0]["arguments"]
     assert store.read_jsonl(ArtifactStore.MODEL_LEDGER)[-1]["completion_tokens"] == 10
+
+
+def test_structured_tool_completion_has_bounded_turns(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    router = LLMRouter(
+        RouterSettings(
+            max_tool_turns=1,
+            max_assistant_content_reminders=2,
+            profiles={
+                "deep": ModelProfile(
+                    model="mock",
+                    supports_tools=True,
+                    task_types=["proposal_generation"],
+                )
+            },
+        ),
+        store=store,
+    )
+    responses = [
+        {
+            "choices": [{"message": {"content": "I will explain instead of calling a tool."}}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3},
+        }
+    ]
+
+    def fake_post_chat_completion(
+        profile: ModelProfile,
+        messages: list[dict[str, object]],
+        *,
+        temperature: float,
+        max_tokens: int,
+        json_schema: dict[str, object] | None = None,
+        tools: list[dict[str, object]] | None = None,
+        tool_choice: object | None = None,
+    ) -> dict[str, object]:
+        assert tools
+        return responses.pop(0)
+
+    router._post_chat_completion = fake_post_chat_completion  # type: ignore[method-assign]
+
+    with pytest.raises(StructuredLLMError, match="max_tool_turns_exceeded"):
+        router.complete_structured_with_tools(
+            task_type="proposal_generation",
+            messages=[{"role": "user", "content": "make a proposal"}],
+            tools=[openai_tool_from_schema("submit", "", ResearchProposal)],
+            tool_executors={},
+            schema=ResearchProposal,
+            final_tool_name="submit",
+        )
+
+
+def test_failed_proposal_revisions_convert_to_barrier_analysis(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    store.write_text(ArtifactStore.RESEARCH_TASK, "# Task\nNo hidden oracle shortcuts.")
+    state = ResearchState()
+    store.save_state(state)
+    router = LLMRouter(RouterSettings(profiles={"deep": ModelProfile(model="mock")}), store=store)
+    agent = ProposalAgent(store, router)
+
+    def fake_generate_proposal(**kwargs: object) -> ResearchProposal:
+        return ResearchProposal(
+            title="Risky positive route",
+            proposal_kind=ProposalKind.positive_algorithm_attempt,
+            precise_goal="Assume a disputed shortcut and solve the task.",
+            assertions_used_as_assumptions=["A disputed shortcut is available."],
+        )
+
+    def fake_review_proposal(context: object, proposal: ResearchProposal) -> ProposalCritique:
+        return ProposalCritique(
+            decision=CriticDecision.revise,
+            summary="The shortcut is unsupported and must be analyzed, not assumed.",
+            consistency_with_task="The route risks violating the task model.",
+            plausibility="It may become useful as a barrier analysis.",
+            required_revisions=["Move the shortcut claim to a hypothesis and analyze whether it is necessary."],
+        )
+
+    agent._generate_proposal = fake_generate_proposal  # type: ignore[method-assign]
+    agent._review_proposal = fake_review_proposal  # type: ignore[method-assign]
+
+    proposal, critique, proposal_path = agent.generate_and_review(state, max_revisions=0)
+
+    assert proposal.proposal_kind == ProposalKind.barrier_analysis
+    assert "shortcut" in " ".join(proposal.critic_constraints).lower()
+    assert critique.decision == CriticDecision.accept
+    assert store.exists(proposal_path)
+    assert store.load_state().current_proposal_id == proposal.proposal_id  # type: ignore[union-attr]
 
 
 def test_llm_schema_omits_system_owned_fields() -> None:

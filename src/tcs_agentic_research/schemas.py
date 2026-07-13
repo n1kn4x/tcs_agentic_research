@@ -174,6 +174,15 @@ class ResearchState(StrictModel):
     updated_at: str = Field(default_factory=utc_now)
 
 
+class ProposalKind(str, Enum):
+    literature_audit = "literature_audit"
+    positive_algorithm_attempt = "positive_algorithm_attempt"
+    barrier_analysis = "barrier_analysis"
+    lemma_derivation = "lemma_derivation"
+    counterexample_search = "counterexample_search"
+    formalization = "formalization"
+
+
 class ProposalRisk(StrictModel):
     risk: str
     mitigation: str = ""
@@ -183,10 +192,34 @@ class ProposalRisk(StrictModel):
 class ResearchProposal(StrictModel):
     proposal_id: str = Field(default_factory=lambda: new_id("proposal"))
     title: str
+    proposal_kind: ProposalKind = Field(
+        default=ProposalKind.literature_audit,
+        description="Type of bounded research step; use barrier/lemma/counterexample kinds for disputed routes.",
+    )
     precise_goal: str
     relevant_assumptions_and_model: list[str] = Field(default_factory=list)
     expected_intermediate_lemmas: list[str] = Field(default_factory=list)
     algorithmic_subgoals: list[str] = Field(default_factory=list)
+    hypotheses_to_test: list[str] = Field(
+        default_factory=list,
+        description="Unproved or doubtful statements the research agent should verify/refute, not assume.",
+    )
+    questions_to_answer: list[str] = Field(
+        default_factory=list,
+        description="Concrete questions whose answers would count as progress for this iteration.",
+    )
+    assertions_used_as_assumptions: list[str] = Field(
+        default_factory=list,
+        description="Statements the research agent may rely on as premises; should be supported or explicit task assumptions.",
+    )
+    must_not_assume: list[str] = Field(
+        default_factory=list,
+        description="Forbidden shortcuts, hidden assumptions, or uncosted resources that would invalidate the step.",
+    )
+    critic_constraints: list[str] = Field(
+        default_factory=list,
+        description="Constraints or objections from prior critiques that execution must address.",
+    )
     plausibility_argument: str = ""
     success_criteria: list[str] = Field(default_factory=list)
     partial_success_criteria: list[str] = Field(default_factory=list)
@@ -546,6 +579,9 @@ class RouterSettings(StrictModel):
     default_task: str = "routine"
     timeout_seconds: float = 120.0
     max_retries: int = 1
+    max_tool_turns: int = Field(default=16, ge=1)
+    max_final_tool_repairs: int = Field(default=2, ge=0)
+    max_assistant_content_reminders: int = Field(default=1, ge=0)
     profiles: dict[str, ModelProfile]
 
 
