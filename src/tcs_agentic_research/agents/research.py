@@ -57,7 +57,6 @@ class ResearchAgent:
             task=task,
             state=state,
             proposal=proposal,
-            literature_answers=self._initial_literature_answers(proposal),
         )
 
         report, trace = self._generate_report_with_tools(proposal, context)
@@ -88,27 +87,25 @@ class ResearchAgent:
         self.store.append_claims(report.claims_generated)
         return report, report_ref.path
 
-    def _initial_literature_answers(self, proposal: ResearchProposal) -> list[dict[str, object]]:
-        answers: list[dict[str, object]] = []
-        for query in proposal.literature_queries[:5]:
-            if query.strip():
-                answers.append(self.literature.answer_query(query, limit=3).model_dump(mode="json"))
-        return answers
-
     def _build_research_context(
         self,
         *,
         task: str,
         state: ResearchState,
         proposal: ResearchProposal,
-        literature_answers: list[dict[str, object]],
     ) -> dict[str, object]:
         return {
             "research_task_md": task,
             "research_state": state.model_dump(mode="json"),
             "proposal": proposal.model_dump(mode="json"),
-            "local_literature_answers": literature_answers,
-            "recent_claims": self.store.read_jsonl(ArtifactStore.CLAIM_LEDGER, limit=30),
+            "artifact_manifest": self.store.artifact_manifest(max_items=200),
+            "workspace_memory_instructions": (
+                "The artifact_manifest is a compact index of durable workspace memory. "
+                "Do not assume artifact contents that are not included in this prompt. "
+                "Use read_artifact or read_jsonl_records when details from prior claims, "
+                "literature answers, reports, or traces materially affect the research report. "
+                "Use query_literature for new literature lookups rather than relying on stale summaries."
+            ),
         }
 
     def _generate_report_with_tools(

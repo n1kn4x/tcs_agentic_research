@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -220,6 +221,107 @@ class ArtifactStore:
             if self.exists(path):
                 refs.append(self.artifact_ref(path))
         return refs
+
+    def artifact_manifest(self, *, max_items: int = 200) -> list[dict[str, Any]]:
+        """Return a compact model-facing manifest of workspace artifacts.
+
+        The manifest is an index into durable workspace memory, not the memory itself:
+        agents should use artifact retrieval tools to inspect contents. It intentionally
+        excludes implementation caches and hidden runtime directories that are not part of
+        the canonical research record.
+        """
+        if not self.root.exists():
+            return []
+        max_items = max(1, max_items)
+        paths = [path for path in self.root.rglob("*") if path.is_file()]
+        entries: list[dict[str, Any]] = []
+        for path in sorted(paths, key=lambda candidate: _manifest_sort_key(self, candidate)):
+            rel = self.relpath(path)
+            if _manifest_path_is_hidden_or_cache(rel):
+                continue
+            stat = path.stat()
+            entries.append(
+                {
+                    "path": rel,
+                    "kind": infer_kind(path).value,
+                    "size_bytes": stat.st_size,
+                    "modified_at": datetime.fromtimestamp(stat.st_mtime, UTC).isoformat(),
+                    "summary": _manifest_summary(self, rel, path),
+                }
+            )
+            if len(entries) >= max_items:
+                break
+        return entries
+
+
+_MANIFEST_CORE_PRIORITY = {
+    ArtifactStore.RESEARCH_TASK: 0,
+    ArtifactStore.RESEARCH_STATE: 1,
+    ArtifactStore.CLAIM_LEDGER: 2,
+    ArtifactStore.PROPOSAL_LEDGER: 3,
+    ArtifactStore.NOMENCLATURE: 4,
+    "LiteratureDB/papers.jsonl": 5,
+    "LiteratureDB/extracted_claims.jsonl": 6,
+    "LiteratureDB/query_answers.jsonl": 7,
+}
+
+
+_MANIFEST_EXCLUDED_PARTS = {
+    ".git",
+    ".venv",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".experimenter",
+    "__pycache__",
+}
+
+
+def _manifest_sort_key(store: ArtifactStore, path: Path) -> tuple[int, str]:
+    rel = store.relpath(path)
+    return (_MANIFEST_CORE_PRIORITY.get(rel, 100), rel)
+
+
+def _manifest_path_is_hidden_or_cache(rel: str) -> bool:
+    parts = Path(rel).parts
+    return any(part in _MANIFEST_EXCLUDED_PARTS for part in parts)
+
+
+def _manifest_summary(store: ArtifactStore, rel: str, path: Path) -> str:
+    if rel == ArtifactStore.RESEARCH_TASK:
+        return "Canonical research task, assumptions, constraints, and success criteria."
+    if rel == ArtifactStore.RESEARCH_STATE:
+        return "Compact machine state for the current research workspace."
+    if rel == ArtifactStore.CLAIM_LEDGER:
+        return "Append-only ledger of mathematical, algorithmic, literature, and resource claims."
+    if rel == ArtifactStore.PROPOSAL_LEDGER:
+        return "Append-only ledger of generated proposals, critic reviews, revisions, and decisions."
+    if rel == ArtifactStore.NOMENCLATURE:
+        return "Canonical notation, aliases, conventions, and notes."
+    if rel == ArtifactStore.MODEL_LEDGER:
+        return "Model-call latency, token usage, validation, and failure-mode log."
+    if rel.startswith("LiteratureDB/papers/") and path.name == "paper.txt":
+        return "Extracted text of an imported paper."
+    if rel.startswith("LiteratureDB/papers/") and path.name == "metadata.json":
+        return "Metadata for an imported paper."
+    if rel == "LiteratureDB/papers.jsonl":
+        return "Imported literature metadata index."
+    if rel == "LiteratureDB/query_answers.jsonl":
+        return "Literature query-answer ledger with quote provenance; use JSONL retrieval by answer_id."
+    if rel.startswith("Reports/iterations/") and path.name.startswith("proposal_"):
+        return "Proposal artifact for a research iteration."
+    if rel.startswith("Reports/iterations/") and "critique" in path.name:
+        return "Critic artifact for a research iteration."
+    if rel.startswith("Reports/iterations/") and "tool_trace" in path.name:
+        return "Tool-call trace artifact; audit record, usually verbose."
+    if path.suffix == ".jsonl":
+        try:
+            with path.open("r", encoding="utf-8") as fh:
+                count = sum(1 for line in fh if line.strip())
+        except UnicodeDecodeError:
+            return "JSONL artifact."
+        return f"JSONL artifact with {count} non-empty record(s)."
+    return f"{infer_kind(path).value} artifact."
 
 
 def to_plain(payload: Any) -> Any:

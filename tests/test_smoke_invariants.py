@@ -13,6 +13,7 @@ from tcs_agentic_research.agents.critics import (
 )
 from tcs_agentic_research.agents.initialization import InitializationAgent
 from tcs_agentic_research.agents.research import ResearchAgent
+from tcs_agentic_research.agents.toolsets import artifact_retrieval_toolset
 from tcs_agentic_research.artifact_store import ArtifactStore
 from tcs_agentic_research.leap.harness import (
     BlueprintCandidate,
@@ -499,3 +500,45 @@ def test_solved_requires_independent_replication(tmp_path: Path) -> None:
     assert not checked.confirmed_solved
     assert checked.possible_breakthrough
     assert checked.next_action == "independent_replication"
+
+
+def test_artifact_manifest_lists_canonical_memory_without_contents(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    store.write_text(ArtifactStore.RESEARCH_TASK, "# Task\nImportant details.\n")
+    store.append_jsonl(ArtifactStore.PROPOSAL_LEDGER, {"proposal_id": "proposal_x"})
+
+    manifest = store.artifact_manifest(max_items=20)
+    by_path = {entry["path"]: entry for entry in manifest}
+
+    assert ArtifactStore.RESEARCH_TASK in by_path
+    assert ArtifactStore.PROPOSAL_LEDGER in by_path
+    assert by_path[ArtifactStore.RESEARCH_TASK]["kind"] == "markdown"
+    assert "Important details" not in json.dumps(manifest)
+
+
+def test_artifact_retrieval_tools_read_text_and_jsonl(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    store.write_text("Notes.md", "abcdef")
+    store.append_jsonl("Events.jsonl", {"event_id": "a", "value": 1})
+    store.append_jsonl("Events.jsonl", {"event_id": "b", "value": 2})
+    tools = artifact_retrieval_toolset(store=store).executors()
+
+    text_observation = tools["read_artifact"](
+        {"path": "Notes.md", "offset": 2, "max_chars": 3}
+    )
+    jsonl_observation = tools["read_jsonl_records"](
+        {
+            "path": "Events.jsonl",
+            "id_field": "event_id",
+            "id_value": "b",
+            "limit": 5,
+            "max_chars": 1000,
+        }
+    )
+
+    assert text_observation["status"] == "ok"
+    assert text_observation["content"] == "cde"
+    assert jsonl_observation["status"] == "ok"
+    assert jsonl_observation["matching_record_count"] == 1
+    assert '"event_id": "b"' in jsonl_observation["content"]
+    assert '"event_id": "a"' not in jsonl_observation["content"]

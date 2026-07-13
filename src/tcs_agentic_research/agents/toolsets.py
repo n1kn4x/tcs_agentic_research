@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from typing import Any
 
@@ -69,6 +70,171 @@ class RunExperimentArgs(StrictModel):
     name: str = "experiment"
     supports_claim_ids: list[str] = Field(default_factory=list)
     timeout_seconds: int | None = None
+
+
+class ReadArtifactArgs(StrictModel):
+    path: str
+    offset: int = Field(default=0, ge=0)
+    max_chars: int = Field(default=8000, ge=1, le=30000)
+
+
+class ReadJsonlRecordsArgs(StrictModel):
+    path: str
+    limit: int = Field(default=10, ge=1, le=50)
+    id_field: str | None = None
+    id_value: str | None = None
+    offset: int = Field(default=0, ge=0)
+    max_chars: int = Field(default=8000, ge=1, le=30000)
+
+
+# ---------------------------------------------------------------------------
+# Shared artifact retrieval tools
+# ---------------------------------------------------------------------------
+
+
+def artifact_retrieval_toolset(*, store: ArtifactStore) -> Toolset:
+    """Build simple workspace-memory tools backed by canonical artifacts."""
+
+    def read_artifact(arguments: dict[str, Any]) -> dict[str, Any]:
+        args = ReadArtifactArgs.model_validate(arguments)
+        try:
+            target = store.resolve(args.path)
+        except Exception as exc:  # noqa: BLE001 - return as tool observation
+            return {
+                "status": "error",
+                "tool": "read_artifact",
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+            }
+        if not target.exists():
+            return {
+                "status": "error",
+                "tool": "read_artifact",
+                "path": args.path,
+                "error_type": "FileNotFoundError",
+                "error": "Artifact does not exist.",
+            }
+        if not target.is_file():
+            return {
+                "status": "error",
+                "tool": "read_artifact",
+                "path": store.relpath(target),
+                "error_type": "IsADirectoryError",
+                "error": "Artifact path is not a file.",
+            }
+        try:
+            text = target.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            return {
+                "status": "error",
+                "tool": "read_artifact",
+                "path": store.relpath(target),
+                "error_type": "UnicodeDecodeError",
+                "error": "Artifact is not UTF-8 text; inspect metadata or a text extraction artifact instead.",
+                "artifact_ref": store.artifact_ref(target).model_dump(mode="json"),
+            }
+        start = min(args.offset, len(text))
+        end = min(start + args.max_chars, len(text))
+        return {
+            "status": "ok",
+            "tool": "read_artifact",
+            "path": store.relpath(target),
+            "offset": start,
+            "max_chars": args.max_chars,
+            "size_chars": len(text),
+            "content": text[start:end],
+            "truncated": end < len(text),
+            "next_offset": end if end < len(text) else None,
+            "artifact_ref": store.artifact_ref(target).model_dump(mode="json"),
+            "instruction": "Use next_offset to continue reading this artifact if truncated.",
+        }
+
+    def read_jsonl_records(arguments: dict[str, Any]) -> dict[str, Any]:
+        args = ReadJsonlRecordsArgs.model_validate(arguments)
+        try:
+            target = store.resolve(args.path)
+        except Exception as exc:  # noqa: BLE001 - return as tool observation
+            return {
+                "status": "error",
+                "tool": "read_jsonl_records",
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+            }
+        if not target.exists() or not target.is_file():
+            return {
+                "status": "error",
+                "tool": "read_jsonl_records",
+                "path": args.path,
+                "error_type": "FileNotFoundError",
+                "error": "JSONL artifact does not exist or is not a file.",
+            }
+        matches: list[dict[str, Any]] = []
+        malformed_lines: list[int] = []
+        for line_number, line in enumerate(target.read_text(encoding="utf-8").splitlines(), 1):
+            if not line.strip():
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                malformed_lines.append(line_number)
+                continue
+            if args.id_field and args.id_value is not None:
+                if str(record.get(args.id_field)) != args.id_value:
+                    continue
+            matches.append({"line_number": line_number, "record": record})
+        selected = matches[: args.limit] if args.id_field and args.id_value is not None else matches[-args.limit :]
+        serialized = json.dumps(selected, indent=2, sort_keys=True, ensure_ascii=False)
+        start = min(args.offset, len(serialized))
+        end = min(start + args.max_chars, len(serialized))
+        return {
+            "status": "ok",
+            "tool": "read_jsonl_records",
+            "path": store.relpath(target),
+            "id_filter": {"field": args.id_field, "value": args.id_value}
+            if args.id_field and args.id_value is not None
+            else None,
+            "matching_record_count": len(matches),
+            "returned_record_count": len(selected),
+            "malformed_line_numbers": malformed_lines[:20],
+            "offset": start,
+            "max_chars": args.max_chars,
+            "size_chars": len(serialized),
+            "content": serialized[start:end],
+            "truncated": end < len(serialized),
+            "next_offset": end if end < len(serialized) else None,
+            "artifact_ref": store.artifact_ref(target).model_dump(mode="json"),
+            "instruction": "Use next_offset to continue reading the selected JSONL records if truncated.",
+        }
+
+    return Toolset(
+        [
+            AgentTool(
+                "read_artifact",
+                (
+                    "Read a UTF-8 text artifact from the research workspace by path. "
+                    "Use this to inspect durable workspace memory listed in artifact_manifest."
+                ),
+                ReadArtifactArgs,
+                read_artifact,
+                strip_system_owned_fields=False,
+            ),
+            AgentTool(
+                "read_jsonl_records",
+                (
+                    "Read selected records from a JSONL artifact by path. Without an id filter, "
+                    "returns the last records. With id_field/id_value, returns matching records."
+                ),
+                ReadJsonlRecordsArgs,
+                read_jsonl_records,
+                strip_system_owned_fields=False,
+            ),
+        ]
+    )
+
+
+# ---------------------------------------------------------------------------
+# Shared literature tools
+# ---------------------------------------------------------------------------
 
 
 def literature_toolset(
@@ -256,6 +422,7 @@ def research_execution_toolset(
             ),
         }
 
+    artifact_tools = list(artifact_retrieval_toolset(store=store))
     literature_tools = list(
         literature_toolset(
             store=store,
@@ -265,6 +432,7 @@ def research_execution_toolset(
     )
     return Toolset(
         [
+            *artifact_tools,
             *literature_tools,
             AgentTool(
                 "attempt_lean_proof",

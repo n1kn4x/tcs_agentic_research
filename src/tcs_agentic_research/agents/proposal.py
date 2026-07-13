@@ -21,7 +21,7 @@ from ..schemas import (
 )
 from ..tooling import Toolset, final_submission_tool
 from .literature import LiteratureResearcher
-from .toolsets import literature_toolset
+from .toolsets import artifact_retrieval_toolset, literature_toolset
 
 
 FINAL_PROPOSAL_TOOL_NAME = "submit_research_proposal"
@@ -158,7 +158,7 @@ class ProposalAgent:
         return proposal
 
     def _proposal_toolset(self) -> Toolset:
-        return literature_toolset(
+        return artifact_retrieval_toolset(store=self.store) + literature_toolset(
             store=self.store,
             literature=self.literature,
             include_discovery_tools=True,
@@ -319,19 +319,15 @@ class ProposalAgent:
         return proposal, critique, proposal_ref.path
 
     def _context_payload(self, state: ResearchState, task: str) -> dict[str, object]:
-        claim_tail = self.store.read_jsonl(ArtifactStore.CLAIM_LEDGER, limit=20)
-        proposal_tail = self.store.read_jsonl(ArtifactStore.PROPOSAL_LEDGER, limit=20)
         return {
             "research_task_md": task,
             "research_state": state.model_dump(mode="json"),
-            "recent_claim_ledger_entries": claim_tail,
-            "recent_proposal_ledger_entries": proposal_tail,
-            "literature_papers": self.store.read_jsonl("LiteratureDB/papers.jsonl", limit=20),
-            "literature_candidates": self.store.read_jsonl(
-                "LiteratureDB/candidates.jsonl", limit=20
-            ),
-            "recent_literature_query_answers": self.store.read_jsonl(
-                "LiteratureDB/query_answers.jsonl", limit=20
+            "artifact_manifest": self.store.artifact_manifest(max_items=200),
+            "workspace_memory_instructions": (
+                "The artifact_manifest is a compact index of durable workspace memory. "
+                "Do not assume artifact contents that are not included in this prompt. "
+                "Use read_artifact or read_jsonl_records when details from prior proposals, "
+                "claims, literature answers, reports, or traces materially affect the proposal."
             ),
         }
 
