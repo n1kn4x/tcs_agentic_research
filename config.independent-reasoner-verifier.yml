@@ -59,6 +59,8 @@ router:
       temperature: 0.2
       max_tokens: 32768
       supports_tools: true
+      structured_output_mode: json_schema
+      strict_json_schema: true
       extra_body:
         top_p: 0.9
         top_k: 20
@@ -76,12 +78,14 @@ router:
       model: deep-reasoner
       base_url: http://localhost:8000/v1
       api_key: EMPTY
-      # Initialization/interview calls are structured guided-json calls.  They
-      # benefit from enough reasoning to ask good clarifying questions, but not
+      # Initialization/interview calls are structured strict-json-schema calls.
+      # They benefit from enough reasoning to ask good clarifying questions, but not
       # from high-entropy decoding.
       temperature: 0.2
       max_tokens: 32768
       supports_tools: false
+      structured_output_mode: json_schema
+      strict_json_schema: true
       extra_body:
         top_p: 0.9
         top_k: 20
@@ -101,11 +105,13 @@ router:
       base_url: http://localhost:8000/v1
       api_key: EMPTY
       # Critics and independent replication should be deterministic auditors,
-      # not creative co-authors.  They use guided_json and should either emit a
-      # valid critique/verdict or fail for repair.
+      # not creative co-authors.  They use strict JSON schema output and should
+      # either emit a valid critique/verdict or fail for repair.
       temperature: 0.0
       max_tokens: 32768
       supports_tools: false
+      structured_output_mode: json_schema
+      strict_json_schema: true
       extra_body:
         top_p: 1.0
         top_k: 20
@@ -128,6 +134,8 @@ router:
       temperature: 0.0
       max_tokens: 24576
       supports_tools: false
+      structured_output_mode: json_schema
+      strict_json_schema: true
       extra_body:
         top_p: 1.0
         presence_penalty: 0.0
@@ -144,6 +152,8 @@ router:
       temperature: 0.0
       max_tokens: 8192
       supports_tools: false
+      structured_output_mode: json_schema
+      strict_json_schema: true
       extra_body:
         top_p: 1.0
         top_k: 20

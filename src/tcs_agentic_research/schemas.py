@@ -535,6 +535,10 @@ class ModelProfile(StrictModel):
     max_tokens: int = 4096
     task_types: list[str] = Field(default_factory=list)
     supports_tools: bool = False
+    structured_output_mode: Literal[
+        "guided_json", "json_schema", "json_schema_guided_json", "json_object"
+    ] = "guided_json"
+    strict_json_schema: bool = True
     extra_body: dict[str, Any] = Field(default_factory=dict)
 
 

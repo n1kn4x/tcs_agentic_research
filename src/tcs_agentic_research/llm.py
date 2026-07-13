@@ -399,7 +399,13 @@ class LLMRouter:
                                 "error_type": type(exc).__name__,
                                 "error": str(exc),
                             }
-                            history.append(_tool_result_message(call_id, tool_name, observation))
+                            history.append(
+                                _tool_result_message(
+                                    call_id,
+                                    tool_name,
+                                    _model_visible_tool_observation(observation),
+                                )
+                            )
                             trace["tool_calls"].append(
                                 {
                                     "turn": turn_index,
@@ -447,7 +453,13 @@ class LLMRouter:
                                         f"that validate as `{schema.__name__}`."
                                     ),
                                 }
-                                history.append(_tool_result_message(call_id, tool_name, observation))
+                                history.append(
+                                    _tool_result_message(
+                                        call_id,
+                                        tool_name,
+                                        _model_visible_tool_observation(observation),
+                                    )
+                                )
                                 trace["tool_calls"].append(
                                     {
                                         "turn": turn_index,
@@ -461,7 +473,13 @@ class LLMRouter:
                                 continue
 
                         observation = _execute_openai_tool(tool_name, arguments, tool_executors)
-                        history.append(_tool_result_message(call_id, tool_name, observation))
+                        history.append(
+                            _tool_result_message(
+                                call_id,
+                                tool_name,
+                                _model_visible_tool_observation(observation),
+                            )
+                        )
                         trace["tool_calls"].append(
                             {
                                 "turn": turn_index,
@@ -526,11 +544,7 @@ class LLMRouter:
         }
         body.update(profile.extra_body)
         if json_schema is not None:
-            body["response_format"] = {"type": "json_object"}
-            # vLLM supports guided decoding through guided_json in recent versions.
-            # In-prompt schema placeholders remain useful because backend support and
-            # adherence vary across vLLM/model versions.
-            body["guided_json"] = json_schema
+            _apply_structured_response_format(body, profile, json_schema)
         if tools is not None:
             body["tools"] = tools
         if tool_choice is not None:
@@ -539,6 +553,14 @@ class LLMRouter:
         url = profile.base_url.rstrip("/") + "/chat/completions"
         with httpx.Client(timeout=self.settings.timeout_seconds) as client:
             response = client.post(url, headers=headers, json=body)
+            if json_schema is not None and _should_retry_with_guided_json(response, profile):
+                fallback_body = dict(body)
+                _apply_guided_json_response_format(fallback_body, json_schema)
+                response = client.post(url, headers=headers, json=fallback_body)
+            if tools is not None and _should_retry_without_strict_tools(response):
+                fallback_body = dict(body)
+                fallback_body["tools"] = _tools_without_strict(tools)
+                response = client.post(url, headers=headers, json=fallback_body)
             _raise_for_status_with_body(response)
             return response.json()
 
@@ -580,17 +602,20 @@ def openai_tool_from_schema(
     schema: type[BaseModel],
     *,
     strip_system_owned_fields: bool = True,
+    strict: bool = True,
 ) -> dict[str, Any]:
     """Build an OpenAI-compatible function tool from a Pydantic schema."""
     parameters = _llm_json_schema(schema) if strip_system_owned_fields else schema.model_json_schema()
-    return {
-        "type": "function",
-        "function": {
-            "name": name,
-            "description": description,
-            "parameters": parameters,
-        },
+    function: dict[str, Any] = {
+        "name": name,
+        "description": description,
+        "parameters": parameters,
     }
+    if strict:
+        # OpenAI-compatible structured tools may enforce this; vLLM versions that
+        # do not support strict tools generally ignore the field.
+        function["strict"] = True
+    return {"type": "function", "function": function}
 
 
 def _find_tool(tools: list[dict[str, Any]], name: str) -> dict[str, Any] | None:
@@ -703,6 +728,148 @@ def _tool_result_message(call_id: str, tool_name: str, observation: Any) -> dict
     }
 
 
+_MODEL_OBSERVATION_MAX_JSON_CHARS = 12_000
+_MODEL_OBSERVATION_STRING_CHARS = 4_000
+_MODEL_OBSERVATION_AGGRESSIVE_STRING_CHARS = 1_200
+_MODEL_OBSERVATION_LIST_ITEMS = 12
+_MODEL_OBSERVATION_AGGRESSIVE_LIST_ITEMS = 5
+_MODEL_OBSERVATION_SUMMARY_STRING_CHARS = 800
+_MODEL_OBSERVATION_NOTE_KEY = "_model_visible_observation_note"
+
+
+def _model_visible_tool_observation(observation: Any) -> Any:
+    """Return a compact observation for replay to the model.
+
+    The operational trace keeps the full observation.  Model-visible tool messages should be
+    concise because every observation is replayed on subsequent tool turns.  This function keeps
+    the original JSON shape when practical, truncating long strings/lists and falling back to a
+    handle-rich summary if the observation is still too large.
+    """
+    plain = to_plain(observation)
+    original_json = _json_for_size(plain)
+    compact = _compact_model_value(
+        plain,
+        string_limit=_MODEL_OBSERVATION_STRING_CHARS,
+        list_limit=_MODEL_OBSERVATION_LIST_ITEMS,
+    )
+    compact_json = _json_for_size(compact)
+    if len(compact_json) > _MODEL_OBSERVATION_MAX_JSON_CHARS:
+        compact = _compact_model_value(
+            plain,
+            string_limit=_MODEL_OBSERVATION_AGGRESSIVE_STRING_CHARS,
+            list_limit=_MODEL_OBSERVATION_AGGRESSIVE_LIST_ITEMS,
+        )
+        compact_json = _json_for_size(compact)
+    if len(compact_json) > _MODEL_OBSERVATION_MAX_JSON_CHARS:
+        compact = _minimal_model_observation(plain)
+        compact_json = _json_for_size(compact)
+
+    if compact_json != original_json:
+        note = (
+            "Compacted for model context; the full tool observation is stored in the "
+            "tool trace artifact. Re-read a smaller range or use returned handles if more "
+            "detail is needed."
+        )
+        if isinstance(compact, dict):
+            compact = dict(compact)
+            compact.setdefault(_MODEL_OBSERVATION_NOTE_KEY, note)
+            compact.setdefault("_model_visible_original_json_chars", len(original_json))
+            compact.setdefault("_model_visible_json_chars", len(compact_json))
+        else:
+            compact = {
+                "status": "ok",
+                _MODEL_OBSERVATION_NOTE_KEY: note,
+                "value": compact,
+                "_model_visible_original_json_chars": len(original_json),
+                "_model_visible_json_chars": len(compact_json),
+            }
+    return compact
+
+
+def _compact_model_value(value: Any, *, string_limit: int, list_limit: int, key: str = "") -> Any:
+    if isinstance(value, str):
+        return _truncate(value, _string_limit_for_model_key(key, string_limit))
+    if isinstance(value, list):
+        selected = [
+            _compact_model_value(item, string_limit=string_limit, list_limit=list_limit)
+            for item in value[:list_limit]
+        ]
+        omitted = len(value) - len(selected)
+        if omitted > 0:
+            selected.append({"_omitted_items_for_model_context": omitted})
+        return selected
+    if isinstance(value, dict):
+        return {
+            str(child_key): _compact_model_value(
+                child,
+                string_limit=string_limit,
+                list_limit=list_limit,
+                key=str(child_key),
+            )
+            for child_key, child in value.items()
+        }
+    return value
+
+
+def _string_limit_for_model_key(key: str, default_limit: int) -> int:
+    lowered = key.lower()
+    if lowered in {"content", "paper_text", "text", "quote", "quote_excerpt"}:
+        return min(default_limit, 3_000)
+    if lowered in {"answer", "mapped_statement", "summary", "abstract"}:
+        return min(default_limit, 2_000)
+    if lowered in {"error", "arguments"}:
+        return min(default_limit, 2_500)
+    return default_limit
+
+
+def _minimal_model_observation(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {
+            "status": "ok",
+            "summary": _truncate(str(value), _MODEL_OBSERVATION_SUMMARY_STRING_CHARS),
+            "_model_visible_observation_truncated": True,
+        }
+    keep_keys = [
+        "status",
+        "tool",
+        "tool_result_id",
+        "answer_id",
+        "run_id",
+        "proof_status",
+        "query",
+        "path",
+        "offset",
+        "next_offset",
+        "size_chars",
+        "truncated",
+        "result_count",
+        "returned_record_count",
+        "matching_record_count",
+        "summary",
+        "instruction",
+        "error_type",
+        "error",
+    ]
+    summary: dict[str, Any] = {}
+    for key in keep_keys:
+        if key in value:
+            summary[key] = _compact_model_value(
+                value[key],
+                string_limit=_MODEL_OBSERVATION_SUMMARY_STRING_CHARS,
+                list_limit=_MODEL_OBSERVATION_AGGRESSIVE_LIST_ITEMS,
+                key=key,
+            )
+    summary["_model_visible_observation_truncated"] = True
+    summary["_model_visible_original_keys"] = list(value.keys())[:40]
+    if len(value) > 40:
+        summary["_model_visible_omitted_key_count"] = len(value) - 40
+    return summary
+
+
+def _json_for_size(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+
+
 def _accumulate_usage(totals: dict[str, int], response_payload: dict[str, Any] | None) -> None:
     usage = (response_payload or {}).get("usage", {})
     for key in ["prompt_tokens", "completion_tokens", "total_tokens"]:
@@ -738,6 +905,84 @@ def _format_http_error_body(response: httpx.Response, *, limit: int = 5000) -> s
     except ValueError:
         return _truncate(text, limit)
     return _truncate(json.dumps(payload, ensure_ascii=False, sort_keys=True), limit)
+
+
+def _apply_structured_response_format(
+    body: dict[str, Any], profile: ModelProfile, json_schema: dict[str, Any]
+) -> None:
+    mode = profile.structured_output_mode
+    if mode == "json_schema":
+        body.pop("guided_json", None)
+        body["response_format"] = _strict_json_schema_response_format(
+            json_schema, strict=profile.strict_json_schema
+        )
+    elif mode == "json_schema_guided_json":
+        body["response_format"] = _strict_json_schema_response_format(
+            json_schema, strict=profile.strict_json_schema
+        )
+        body["guided_json"] = json_schema
+    elif mode == "json_object":
+        body.pop("guided_json", None)
+        body["response_format"] = {"type": "json_object"}
+    else:
+        _apply_guided_json_response_format(body, json_schema)
+
+
+def _apply_guided_json_response_format(body: dict[str, Any], json_schema: dict[str, Any]) -> None:
+    body["response_format"] = {"type": "json_object"}
+    # vLLM supports guided decoding through guided_json in recent versions.
+    # This remains the compatibility fallback when strict JSON-schema response_format
+    # is unavailable on an OpenAI-compatible backend.
+    body["guided_json"] = json_schema
+
+
+def _strict_json_schema_response_format(json_schema: dict[str, Any], *, strict: bool) -> dict[str, Any]:
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            "name": _safe_response_schema_name(str(json_schema.get("title") or "StructuredOutput")),
+            "strict": strict,
+            "schema": json_schema,
+        },
+    }
+
+
+def _safe_response_schema_name(name: str) -> str:
+    safe = re.sub(r"[^A-Za-z0-9_-]+", "_", name).strip("_") or "StructuredOutput"
+    if safe[0].isdigit():
+        safe = "Schema_" + safe
+    return safe[:64]
+
+
+def _should_retry_with_guided_json(response: httpx.Response, profile: ModelProfile) -> bool:
+    if response.status_code < 400:
+        return False
+    if profile.structured_output_mode not in {"json_schema", "json_schema_guided_json"}:
+        return False
+    text = response.text.lower()
+    # Fallback only for likely structured-output capability/schema-format errors.
+    # Do not hide unrelated failures such as context length, authentication, or server crashes.
+    return "response_format" in text or "json_schema" in text or "json schema" in text
+
+
+def _should_retry_without_strict_tools(response: httpx.Response) -> bool:
+    if response.status_code < 400:
+        return False
+    text = response.text.lower()
+    return "strict" in text and ("tool" in text or "function" in text or "extra" in text)
+
+
+def _tools_without_strict(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    cleaned = to_plain(tools)
+    if not isinstance(cleaned, list):
+        return tools
+    for tool in cleaned:
+        if not isinstance(tool, dict):
+            continue
+        function = tool.get("function")
+        if isinstance(function, dict):
+            function.pop("strict", None)
+    return cleaned
 
 
 def schema_placeholder(schema: type[BaseModel] | str) -> str:
