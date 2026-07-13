@@ -331,55 +331,6 @@ def test_structured_tool_completion_uses_openai_tool_calls(tmp_path: Path) -> No
     assert store.read_jsonl(ArtifactStore.MODEL_LEDGER)[-1]["completion_tokens"] == 10
 
 
-def test_structured_tool_completion_has_bounded_turns(tmp_path: Path) -> None:
-    store = _store(tmp_path)
-    router = LLMRouter(
-        RouterSettings(
-            max_tool_turns=1,
-            max_assistant_content_reminders=2,
-            profiles={
-                "deep": ModelProfile(
-                    model="mock",
-                    supports_tools=True,
-                    task_types=["proposal_generation"],
-                )
-            },
-        ),
-        store=store,
-    )
-    responses = [
-        {
-            "choices": [{"message": {"content": "I will explain instead of calling a tool."}}],
-            "usage": {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3},
-        }
-    ]
-
-    def fake_post_chat_completion(
-        profile: ModelProfile,
-        messages: list[dict[str, object]],
-        *,
-        temperature: float,
-        max_tokens: int,
-        json_schema: dict[str, object] | None = None,
-        tools: list[dict[str, object]] | None = None,
-        tool_choice: object | None = None,
-    ) -> dict[str, object]:
-        assert tools
-        return responses.pop(0)
-
-    router._post_chat_completion = fake_post_chat_completion  # type: ignore[method-assign]
-
-    with pytest.raises(StructuredLLMError, match="max_tool_turns_exceeded"):
-        router.complete_structured_with_tools(
-            task_type="proposal_generation",
-            messages=[{"role": "user", "content": "make a proposal"}],
-            tools=[openai_tool_from_schema("submit", "", ResearchProposal)],
-            tool_executors={},
-            schema=ResearchProposal,
-            final_tool_name="submit",
-        )
-
-
 def test_failed_proposal_revisions_convert_to_barrier_analysis(tmp_path: Path) -> None:
     store = _store(tmp_path)
     store.write_text(ArtifactStore.RESEARCH_TASK, "# Task\nNo hidden oracle shortcuts.")

@@ -579,9 +579,6 @@ class RouterSettings(StrictModel):
     default_task: str = "routine"
     timeout_seconds: float = 120.0
     max_retries: int = 1
-    max_tool_turns: int = Field(default=16, ge=1)
-    max_final_tool_repairs: int = Field(default=2, ge=0)
-    max_assistant_content_reminders: int = Field(default=1, ge=0)
     profiles: dict[str, ModelProfile]
 
 

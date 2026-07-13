@@ -35,9 +35,6 @@ router:
   default_task: routine
   timeout_seconds: 600
   max_retries: 2
-  max_tool_turns: 8
-  max_final_tool_repairs: 2
-  max_assistant_content_reminders: 1
   profiles:
     deep-think-tools:
       model: deep-reasoner

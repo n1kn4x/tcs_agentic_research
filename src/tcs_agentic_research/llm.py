@@ -365,10 +365,8 @@ class LLMRouter:
 
         history = [dict(message) for message in messages]
         turn_index = 0
-        final_tool_validation_errors = 0
-        assistant_content_reminders = 0
 
-        while turn_index < self.settings.max_tool_turns:
+        while True:
             turn_index += 1
             try:
                 response_payload = self._post_chat_completion(
@@ -443,7 +441,6 @@ class LLMRouter:
                                 )
                                 return result, trace
                             except (ValidationError, TypeError, ValueError) as exc:
-                                final_tool_validation_errors += 1
                                 failures.append(
                                     f"turn_{turn_index}: final_tool_payload_invalid: {exc}"
                                 )
@@ -455,8 +452,6 @@ class LLMRouter:
                                         f"Retry by calling `{final_tool_name}` with arguments "
                                         f"that validate as `{schema.__name__}`."
                                     ),
-                                    "repair_attempt": final_tool_validation_errors,
-                                    "max_repairs": self.settings.max_final_tool_repairs,
                                 }
                                 history.append(
                                     _tool_result_message(
@@ -475,12 +470,6 @@ class LLMRouter:
                                         "observation": observation,
                                     }
                                 )
-                                if final_tool_validation_errors > self.settings.max_final_tool_repairs:
-                                    failures.append(
-                                        "max_final_tool_repairs_exceeded: "
-                                        f"{final_tool_validation_errors} invalid final tool payloads"
-                                    )
-                                    raise StructuredLLMError("; ".join(failures))
                                 continue
 
                         observation = _execute_openai_tool(tool_name, arguments, tool_executors)
@@ -507,16 +496,9 @@ class LLMRouter:
 
                 content = _strip_reasoning_blocks(str(message.get("content") or "")).strip()
                 if content:
-                    assistant_content_reminders += 1
                     failures.append(
                         f"turn_{turn_index}: assistant_content_ignored_until_final_tool"
                     )
-                    if assistant_content_reminders > self.settings.max_assistant_content_reminders:
-                        failures.append(
-                            "max_assistant_content_reminders_exceeded: "
-                            f"{assistant_content_reminders} assistant-content turns without final tool"
-                        )
-                        raise StructuredLLMError("; ".join(failures))
 
                 history.append(
                     {
@@ -542,23 +524,6 @@ class LLMRouter:
                 )
                 _log_structured_failure(task_type, schema.__name__, failures)
                 raise StructuredLLMError("; ".join(failures)) from exc
-
-        failures.append(
-            "max_tool_turns_exceeded: "
-            f"tool loop reached {self.settings.max_tool_turns} turns without `{final_tool_name}`"
-        )
-        self._log_call(
-            task_type,
-            profile_name,
-            profile,
-            started,
-            False,
-            schema.__name__,
-            failures,
-            _usage_payload(usage_totals, fallback=response_payload),
-        )
-        _log_structured_failure(task_type, schema.__name__, failures)
-        raise StructuredLLMError("; ".join(failures))
 
     def _post_chat_completion(
         self,
