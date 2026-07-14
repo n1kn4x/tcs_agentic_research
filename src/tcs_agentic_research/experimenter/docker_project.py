@@ -359,8 +359,11 @@ def _project_slug(root: Path) -> str:
     return f"{safe_name[:38]}-{digest}"
 
 
-def _diagnostic(completed: subprocess.CompletedProcess[str], *, limit: int = 4000) -> str:
+def _diagnostic(completed: subprocess.CompletedProcess[str], *, limit: int = 8000) -> str:
     text = f"exit_code={completed.returncode}\nSTDOUT:\n{completed.stdout}\nSTDERR:\n{completed.stderr}"
     if len(text) <= limit:
         return text
-    return text[:limit] + f"\n...[truncated {len(text) - limit} characters]"
+    marker = f"\n...[truncated {len(text) - limit} characters; preserving final lines]...\n"
+    tail_limit = max(limit - len(marker) - 2000, limit // 2)
+    head_limit = max(limit - len(marker) - tail_limit, 0)
+    return text[:head_limit] + marker + text[-tail_limit:]

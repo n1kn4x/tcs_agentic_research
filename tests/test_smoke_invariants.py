@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import subprocess
 from pathlib import Path
 
 import httpx
@@ -26,6 +27,7 @@ from tcs_agentic_research.leap.harness import (
     DecompositionReview,
     FormalProofCandidate,
 )
+from tcs_agentic_research.experimenter.docker_project import _diagnostic
 from tcs_agentic_research.experimenter.errors import ExperimenterConfigurationError
 from tcs_agentic_research.llm import (
     LLMRouter,
@@ -518,6 +520,21 @@ def test_experiment_agent_requires_configuration_when_used(tmp_path: Path) -> No
 
     with pytest.raises(ExperimenterConfigurationError, match="no `experimenter:` block"):
         agent.experiment.run_experiment(description="Run a deterministic smoke experiment.")
+
+
+def test_docker_diagnostic_preserves_tail_for_long_output() -> None:
+    completed = subprocess.CompletedProcess(
+        ["docker", "build"],
+        1,
+        stdout="build started\n" + ("x" * 9000),
+        stderr="step logs\n" + ("y" * 9000) + "\nFINAL BUILD ERROR",
+    )
+
+    diagnostic = _diagnostic(completed, limit=1000)
+
+    assert "exit_code=1" in diagnostic
+    assert "preserving final lines" in diagnostic
+    assert "FINAL BUILD ERROR" in diagnostic
 
 
 def test_solved_requires_independent_replication(tmp_path: Path) -> None:
