@@ -35,11 +35,13 @@ RUN python3 -m pip install \
         ipython \
         jupyter
 
-RUN useradd -m -u 1000 experimenter \
-    && mkdir -p /workspace \
-    && chown -R experimenter:experimenter /workspace
+# The upstream node image already defines UID 1000 as `node` on some tags.
+# Use numeric UID/GID 1000 directly so the experimenter workspace stays writable
+# on typical host bind mounts without assuming the username is available.
+RUN mkdir -p /workspace \
+    && chown -R 1000:1000 /workspace
 
 WORKDIR /workspace
-USER experimenter
+USER 1000:1000
 
 CMD ["sleep", "infinity"]
