@@ -70,6 +70,16 @@ def derive_claim_status_from_evidence(claim: ClaimRecord, store: ArtifactStore) 
             return ClaimStatus.experimentally_supported
         _add_tag(claim, "experiment_missing_reproducible_artifact")
         return ClaimStatus.needs_review
+    if EvidenceType.external_tool in evidence_types:
+        if any(
+            ev.artifact_refs
+            and ev.verifier in {"ObligationRunValidator", "CommitManager"}
+            for ev in claim.evidence
+            if ev.evidence_type == EvidenceType.external_tool
+        ):
+            return ClaimStatus.proved_informally
+        _add_tag(claim, "external_tool_missing_validator_artifact")
+        return ClaimStatus.needs_review
     if EvidenceType.informal_argument in evidence_types:
         return ClaimStatus.informal_argument
     if claim.claim_type == ClaimType.definition:
@@ -87,6 +97,8 @@ def is_claim_acceptably_supported(claim: ClaimRecord, store: ArtifactStore) -> b
         return False
     status = derive_claim_status_from_evidence(claim.model_copy(deep=True), store)
     if status == ClaimStatus.proved_by_lean:
+        return True
+    if status == ClaimStatus.proved_informally:
         return True
     if status == ClaimStatus.cited and claim.claim_type == ClaimType.literature:
         return True

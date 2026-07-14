@@ -203,11 +203,14 @@ class InitializationAgent:
             )
         ]
         claims = self._sanitize_initial_claims(claims)
-        self.store.append_claims(claims)
+        # Initialization may record task context and hypotheses, but it must not seed the
+        # canonical claim ledger with unproven candidate claims.  New scientific claims are
+        # now introduced through proposals as candidate claims on ObligationBoard.json and are
+        # appended to ClaimLedger.jsonl only after linked obligations pass deterministic gates.
         extra_refs = extra_refs or []
         state = ResearchState(
             task_summary=_task_summary(bundle.research_task_markdown),
-            active_claim_ids=[claim.claim_id for claim in claims],
+            active_claim_ids=[],
             artifact_refs=[
                 task_ref,
                 nomenclature_ref,

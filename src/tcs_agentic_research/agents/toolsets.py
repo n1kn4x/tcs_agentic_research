@@ -6,7 +6,7 @@ import json
 import re
 from typing import Any
 
-from pydantic import Field
+from pydantic import BaseModel, Field
 
 from ..artifact_store import ArtifactStore, to_plain
 from ..prompt_serialization import compact_json_dumps
@@ -364,6 +364,9 @@ def research_execution_toolset(
     literature: LiteratureResearcher,
     theorem_prover: TheoremProverAgent,
     experiment: ExperimentAgent,
+    final_tool_name: str = "submit_research_report",
+    final_schema: type[BaseModel] = ResearchReport,
+    final_tool_description: str | None = None,
 ) -> Toolset:
     """Toolset visible to the research agent's native thinking loop."""
 
@@ -461,13 +464,14 @@ def research_execution_toolset(
                 strip_system_owned_fields=False,
             ),
             final_submission_tool(
-                "submit_research_report",
-                (
+                final_tool_name,
+                final_tool_description
+                or (
                     "Commit the final structured ResearchReport. The arguments must be the "
                     "ResearchReport object itself, not wrapped under another key. Reference any "
                     "used tool_result_id values in EvidenceRecord.tool_result_ids."
                 ),
-                ResearchReport,
+                final_schema,
             ),
         ]
     )

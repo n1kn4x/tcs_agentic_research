@@ -16,6 +16,7 @@ from .schemas import (
     ArtifactKind,
     ArtifactRef,
     ClaimRecord,
+    ObligationBoard,
     ProposalLedgerEntry,
     ResearchState,
     utc_now,
@@ -35,6 +36,7 @@ class ArtifactStore:
     CLAIM_LEDGER = "ClaimLedger.jsonl"
     PROPOSAL_LEDGER = "ProposalLedger.jsonl"
     MODEL_LEDGER = "ModelCallLedger.jsonl"
+    OBLIGATION_BOARD = "ObligationBoard.json"
 
     CORE_DIRECTORIES = (
         "LiteratureDB",
@@ -66,6 +68,9 @@ class ArtifactStore:
             path = self.root / jsonl
             if not path.exists():
                 path.write_text("", encoding="utf-8")
+        board = self.root / self.OBLIGATION_BOARD
+        if not board.exists():
+            self.write_json(self.OBLIGATION_BOARD, ObligationBoard())
         nomenclature = self.root / self.NOMENCLATURE
         if not nomenclature.exists():
             self.write_yaml(
@@ -182,6 +187,17 @@ class ArtifactStore:
     def append_model_call(self, payload: Any) -> None:
         self.append_jsonl(self.MODEL_LEDGER, payload)
 
+    def load_obligation_board(self) -> ObligationBoard:
+        if not self.exists(self.OBLIGATION_BOARD):
+            board = ObligationBoard()
+            self.save_obligation_board(board)
+            return board
+        return ObligationBoard.model_validate(self.read_json(self.OBLIGATION_BOARD))
+
+    def save_obligation_board(self, board: ObligationBoard) -> ArtifactRef:
+        board.updated_at = utc_now()
+        return self.write_json(self.OBLIGATION_BOARD, board)
+
     def load_state(self) -> ResearchState | None:
         if not self.exists(self.RESEARCH_STATE):
             return None
@@ -215,6 +231,7 @@ class ArtifactStore:
             self.RESEARCH_TASK,
             self.NOMENCLATURE,
             self.RESEARCH_STATE,
+            self.OBLIGATION_BOARD,
             self.CLAIM_LEDGER,
             self.PROPOSAL_LEDGER,
         ]:
@@ -258,11 +275,12 @@ _MANIFEST_CORE_PRIORITY = {
     ArtifactStore.RESEARCH_TASK: 0,
     ArtifactStore.RESEARCH_STATE: 1,
     ArtifactStore.CLAIM_LEDGER: 2,
-    ArtifactStore.PROPOSAL_LEDGER: 3,
-    ArtifactStore.NOMENCLATURE: 4,
-    "LiteratureDB/papers.jsonl": 5,
-    "LiteratureDB/extracted_claims.jsonl": 6,
-    "LiteratureDB/query_answers.jsonl": 7,
+    ArtifactStore.OBLIGATION_BOARD: 3,
+    ArtifactStore.PROPOSAL_LEDGER: 4,
+    ArtifactStore.NOMENCLATURE: 5,
+    "LiteratureDB/papers.jsonl": 6,
+    "LiteratureDB/extracted_claims.jsonl": 7,
+    "LiteratureDB/query_answers.jsonl": 8,
 }
 
 
@@ -294,6 +312,8 @@ def _manifest_summary(store: ArtifactStore, rel: str, path: Path) -> str:
         return "Compact machine state for the current research workspace."
     if rel == ArtifactStore.CLAIM_LEDGER:
         return "Append-only ledger of mathematical, algorithmic, literature, and resource claims."
+    if rel == ArtifactStore.OBLIGATION_BOARD:
+        return "Canonical board of candidate claims, linked obligations, obligation runs, and blocked reasons."
     if rel == ArtifactStore.PROPOSAL_LEDGER:
         return "Append-only ledger of generated proposals, critic reviews, revisions, and decisions."
     if rel == ArtifactStore.NOMENCLATURE:

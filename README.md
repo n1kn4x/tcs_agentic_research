@@ -21,7 +21,8 @@ ResearchTask.md                 human-readable task, assumptions, criteria
 InitializationInterview.md      transcript of the adaptive initialization conversation
 Nomenclature.yml                canonical symbols and aliases
 ResearchState.json              compact machine state summary
-ClaimLedger.jsonl               mathematical/algorithmic/literature/resource claims
+ObligationBoard.json            candidate claims, linked obligations, runs, and blocked reasons
+ClaimLedger.jsonl               accepted/proven mathematical/algorithmic/literature/resource claims
 ProposalLedger.jsonl            proposal events and critic decisions
 ModelCallLedger.jsonl           model routing, latency, token, validation logs
 LiteratureDB/                   papers, discovery candidates, extracted statements/claims, query answers
@@ -169,20 +170,25 @@ The LangGraph implements:
 ```python
 state = LoadInitializedTask()  # run `tcs-research init` first
 while not state.solved:
-    proposal = GenerateResearchProposal(state)
-    report = RunTCSResearchSubagent(proposal, state)
-    state = UpdateResearchState(state, report)
-    solved_verdict = ComputeSolvedVerdict(state, report)  # deterministic evidence gates
+    if no open obligation exists:
+        proposal = GenerateResearchProposal(state, blocked_claims_and_failed_obligations)
+        candidate_claim, obligations = CreateCandidateClaimAndObligations(proposal)
+
+    obligation = SelectNextOpenObligation()
+    run = RunTCSResearchSubagentOnOneObligation(obligation)
+    validation = DeterministicObligationGates(run)  # scope/provenance, evidence, consistency
+    state = CommitOnlyIfValidated(run, validation)
+    solved_verdict = ComputeSolvedVerdict(state, derived_summary_report)
 
     if solved_verdict.possible_breakthrough:
-        replication = IndependentReplicationAgent.verify(state, report)
+        replication = IndependentReplicationAgent.verify(state, derived_summary_report)
         state = UpdateResearchState(state, replication)
 
     if solved_verdict.confirmed_solved:
         break
 ```
 
-Nodes durably write artifacts before returning. Solved verdicts are computed deterministically from evidence gates. The graph is resumable through `GraphCheckpoints.sqlite` using a LangGraph `thread_id`.
+Nodes durably write artifacts before returning. Reports are derived summaries; they are not the canonical path for accepting claims. Candidate claims live on `ObligationBoard.json` until every linked obligation is fulfilled and passes deterministic gates. Only the deterministic commit manager appends accepted claims to `ClaimLedger.jsonl`. The graph is resumable through `GraphCheckpoints.sqlite` using a LangGraph `thread_id`.
 
 ## Agents
 

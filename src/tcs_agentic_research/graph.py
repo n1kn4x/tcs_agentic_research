@@ -15,11 +15,14 @@ from .agents.replication import IndependentReplicationAgent
 from .agents.research import ResearchAgent
 from .artifact_store import ArtifactStore
 from .llm import LLMRouter
-from .render import render_verdict_markdown
+from .obligations import CommitManager, ObligationBoardManager, ObligationRunValidator
+from .render import render_report_markdown, render_verdict_markdown
 from .schemas import (
+    CandidateClaim,
     GraphState,
+    ObligationRun,
     ReplicationResult,
-    ResearchProposal,
+    ReportOutcome,
     ResearchReport,
     ResearchState,
 )
@@ -133,38 +136,108 @@ class ResearchGraph:
 
     def _node_generate_proposal(self, graph_state: GraphState) -> dict[str, Any]:
         state = self._require_state()
-        proposal, _critique, proposal_path = ProposalAgent(
-            self.store, self.router, prompt_dir=self.prompt_dir
-        ).generate_and_review(
-            state,
-            max_revisions=self.max_proposal_revisions,
-        )
+        board_manager = ObligationBoardManager(self.store)
+        board = board_manager.load()
+        obligation = board_manager.next_open_obligation(board)
+        proposal_path: str | None = None
+        candidate: CandidateClaim | None = None
+
+        if obligation is None:
+            proposal, _critique, proposal_path = ProposalAgent(
+                self.store, self.router, prompt_dir=self.prompt_dir
+            ).generate_and_review(
+                state,
+                max_revisions=self.max_proposal_revisions,
+            )
+            candidate, _obligations, _created = board_manager.ensure_candidate_from_proposal(proposal)
+            board = board_manager.load()
+            obligation = board_manager.next_open_obligation(board)
+            if obligation is None:
+                raise RuntimeError("Proposal did not produce any open obligations")
+            state = self._require_state()
+        else:
+            # Count each obligation run as a graph iteration, even when it continues an
+            # existing proposal/candidate claim.
+            state.iteration += 1
+            self.store.save_state(state)
+            found_candidate = board_manager.get_claim(board, obligation.claim_id)
+            if found_candidate is None:
+                raise RuntimeError(f"Open obligation `{obligation.obligation_id}` has no candidate claim")
+            candidate = found_candidate
+
+        if candidate is None:
+            raise RuntimeError(f"Open obligation `{obligation.obligation_id}` has no candidate claim")
+
         return {
             "iteration": state.iteration,
-            "current_proposal_id": proposal.proposal_id,
+            "current_proposal_id": state.current_proposal_id,
             "current_proposal_path": proposal_path,
+            "current_claim_id": candidate.claim_id,
+            "current_obligation_id": obligation.obligation_id,
         }
 
     def _node_run_research(self, graph_state: GraphState) -> dict[str, Any]:
         state = self._require_state()
-        proposal_path = graph_state.get("current_proposal_path")
-        if not proposal_path:
-            raise RuntimeError("No current proposal path in graph state")
-        proposal = ResearchProposal.model_validate(self.store.read_json(proposal_path))
+        obligation_id = graph_state.get("current_obligation_id")
+        if not obligation_id:
+            raise RuntimeError("No current obligation id in graph state")
+        board_manager = ObligationBoardManager(self.store)
+        board = board_manager.load()
+        obligation = board_manager.get_obligation(board, obligation_id)
+        if obligation is None:
+            raise RuntimeError(f"No obligation `{obligation_id}` in ObligationBoard")
+        candidate = board_manager.get_claim(board, obligation.claim_id)
+        if candidate is None:
+            raise RuntimeError(f"No candidate claim `{obligation.claim_id}` in ObligationBoard")
         research_agent = ResearchAgent(self.store, self.router, prompt_dir=self.prompt_dir)
-        report, report_path = research_agent.run(proposal, state)
-        return {"current_report_path": report_path, "current_proposal_id": report.proposal_id}
+        run, run_path, trace_path = research_agent.run_obligation(
+            obligation=obligation,
+            candidate_claim=candidate,
+            state=state,
+        )
+        return {
+            "current_obligation_run_path": run_path,
+            "current_obligation_trace_path": trace_path,
+            "current_obligation_id": run.obligation_id,
+            "current_claim_id": run.claim_id,
+        }
 
     def _node_update_state(self, graph_state: GraphState) -> dict[str, Any]:
         state = self._require_state()
-        report_path = graph_state.get("current_report_path")
-        if not report_path:
-            raise RuntimeError("No current report path in graph state")
-        report = ResearchReport.model_validate(self.store.read_json(report_path))
-        self._apply_report_to_state(state, report, report_path)
+        run_path = graph_state.get("current_obligation_run_path")
+        trace_path = graph_state.get("current_obligation_trace_path")
+        if not run_path:
+            raise RuntimeError("No current obligation run path in graph state")
+        run = ObligationRun.model_validate(self.store.read_json(run_path))
+        board_manager = ObligationBoardManager(self.store)
+        board = board_manager.load()
+        obligation = board_manager.get_obligation(board, run.obligation_id)
+        if obligation is None:
+            raise RuntimeError(f"No obligation `{run.obligation_id}` in ObligationBoard")
+        candidate = board_manager.get_claim(board, obligation.claim_id)
+        if candidate is None:
+            raise RuntimeError(f"No candidate claim `{obligation.claim_id}` in ObligationBoard")
+        trace_payload = self.store.read_json(trace_path) if trace_path else {}
+        trace = trace_payload.get("trace", trace_payload) if isinstance(trace_payload, dict) else {}
+        validation = ObligationRunValidator(self.store).validate(
+            run=run,
+            obligation=obligation,
+            candidate_claim=candidate,
+            trace=trace,
+        )
+        run.validation = validation
+        self.store.write_json(run_path, run)
+        commit_result = CommitManager(self.store).apply_obligation_run(
+            run=run,
+            validation=validation,
+            run_ref=self.store.artifact_ref(run_path),
+        )
+        state = self._require_state()
+        report_path = self._write_obligation_summary_report(state, run, validation, commit_result)
         return {
             "iteration": state.iteration,
             "current_report_path": report_path,
+            "current_obligation_run_path": run_path,
             "solved": state.solved,
         }
 
@@ -225,6 +298,42 @@ class ResearchGraph:
             raise RuntimeError("ResearchState.json is missing; run initialization first")
         return state
 
+    def _write_obligation_summary_report(
+        self,
+        state: ResearchState,
+        run: ObligationRun,
+        validation: Any,
+        commit_result: dict[str, Any],
+    ) -> str:
+        rel_dir = self.store.create_iteration_dir(state.iteration)
+        outcome = ReportOutcome.partially_succeeded if validation.ok else ReportOutcome.needs_more_work
+        summary_lines = [
+            f"Obligation run `{run.run_id}` processed for obligation `{run.obligation_id}`.",
+            f"Commit outcome: {commit_result.get('outcome')}",
+        ]
+        if validation.blocking_issues:
+            summary_lines.append("Blocking issues: " + "; ".join(validation.blocking_issues))
+        report = ResearchReport(
+            proposal_id=state.current_proposal_id or "",
+            outcome=outcome,
+            executive_summary="\n".join(summary_lines),
+            evidence=list(run.evidence),
+            unresolved_issues=list(validation.blocking_issues),
+            artifact_refs=[self.store.artifact_ref(ArtifactStore.OBLIGATION_BOARD)],
+        )
+        report_ref = self.store.write_json(
+            f"{rel_dir}/obligation_summary_report_{report.report_id}.json", report
+        )
+        self.store.write_text(
+            f"{rel_dir}/obligation_summary_report_{report.report_id}.md",
+            render_report_markdown(report),
+        )
+        state.last_report_ref = report_ref
+        if report_ref.path not in {ref.path for ref in state.artifact_refs}:
+            state.artifact_refs.append(report_ref)
+        self.store.save_state(state)
+        return report_ref.path
+
     def _apply_report_to_state(self, state: ResearchState, report: ResearchReport, report_path: str) -> None:
         report_ref = self.store.artifact_ref(report_path)
         state.last_report_ref = report_ref
@@ -252,16 +361,15 @@ class ResearchGraph:
         self, state: ResearchState, *, open_obligations: list[str] | None = None
     ) -> None:
         latest_claims = self.store.latest_claims_by_id()
-        state.active_claim_ids = [
-            claim_id
-            for claim_id, claim in latest_claims.items()
-            if not is_claim_rejected(claim)
-        ]
-        state.accepted_claim_ids = [
+        accepted_claim_ids = [
             claim_id
             for claim_id, claim in latest_claims.items()
             if is_claim_acceptably_supported(claim, self.store)
         ]
+        # Keep ResearchState focused on accepted/proven claims. Draft, contradictory, or
+        # blocked candidate claims live on ObligationBoard.json, not in active_claim_ids.
+        state.active_claim_ids = list(accepted_claim_ids)
+        state.accepted_claim_ids = accepted_claim_ids
         state.rejected_claim_ids = [
             claim_id for claim_id, claim in latest_claims.items() if is_claim_rejected(claim)
         ]

@@ -9,6 +9,7 @@ from ..artifact_store import ArtifactStore
 from ..llm import LLMRouter, StructuredLLMError
 from ..prompt_loader import render_prompt
 from ..prompt_serialization import compact_json_dumps
+from ..obligations import ObligationBoardManager
 from ..render import render_proposal_markdown
 from ..schemas import (
     ArtifactRef,
@@ -364,15 +365,19 @@ class ProposalAgent:
         return proposal, critique, proposal_ref.path
 
     def _context_payload(self, state: ResearchState, task: str) -> dict[str, object]:
+        obligation_context = ObligationBoardManager(self.store).context_for_proposal()
         return {
             "research_task_md": task,
             "research_state": state.model_dump(mode="json"),
+            "obligation_board_context": obligation_context,
             "artifact_manifest": self.store.artifact_manifest(max_items=200),
             "workspace_memory_instructions": (
                 "The artifact_manifest is a compact index of durable workspace memory. "
                 "Do not assume artifact contents that are not included in this prompt. "
                 "Use read_artifact or read_jsonl_records when details from prior proposals, "
-                "claims, literature answers, reports, or traces materially affect the proposal."
+                "claims, literature answers, reports, obligation runs, or traces materially "
+                "affect the proposal. Accepted claims are established; blocked candidate "
+                "claims and failed obligations are diagnostic input only."
             ),
         }
 

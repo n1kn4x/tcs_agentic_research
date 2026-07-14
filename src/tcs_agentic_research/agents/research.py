@@ -12,6 +12,7 @@ from ..prompt_serialization import compact_json_dumps
 from ..render import render_report_markdown
 from ..schemas import (
     ArtifactRef,
+    CandidateClaim,
     ClaimRecord,
     ClaimStatus,
     ClaimType,
@@ -19,9 +20,11 @@ from ..schemas import (
     EvidenceType,
     ExperimentResult,
     LiteratureDependency,
+    ObligationRun,
     ProofObligation,
     ReportOutcome,
     ResearchCritique,
+    ResearchObligation,
     ResearchProposal,
     ResearchReport,
     ResearchState,
@@ -35,6 +38,7 @@ from .toolsets import artifact_refs_from_observation, research_execution_toolset
 
 
 FINAL_RESEARCH_REPORT_TOOL_NAME = "submit_research_report"
+FINAL_OBLIGATION_RUN_TOOL_NAME = "submit_obligation_run"
 
 
 class ResearchAgent:
@@ -84,8 +88,56 @@ class ResearchAgent:
         )
 
         self._attach_report_refs_to_claims(report, report_ref=report_ref, critique_ref=critique_ref)
-        self.store.append_claims(report.claims_generated)
+        # Legacy broad reports are audit artifacts only.  Canonical claim acceptance now flows
+        # through ObligationRunValidator + CommitManager after linked obligations are fulfilled.
         return report, report_ref.path
+
+    def run_obligation(
+        self,
+        *,
+        obligation: ResearchObligation,
+        candidate_claim: CandidateClaim,
+        state: ResearchState,
+    ) -> tuple[ObligationRun, str, str]:
+        """Run exactly one linked obligation.
+
+        This is the obligation-centered harness path.  The returned run is only an attempt;
+        deterministic validation and commit happen outside the agent.
+        """
+        task = self.store.read_text(ArtifactStore.RESEARCH_TASK)
+        context = {
+            "research_task_md": task,
+            "research_state": state.model_dump(mode="json"),
+            "candidate_claim": candidate_claim.model_dump(mode="json"),
+            "assigned_obligation": obligation.model_dump(mode="json"),
+            "artifact_manifest": self.store.artifact_manifest(max_items=120),
+            "instructions": (
+                "Execute only the assigned obligation. Do not claim that the candidate claim "
+                "is proven unless this specific obligation is fulfilled with the required "
+                "evidence. If the obligation cannot be fulfilled, return outcome `blocked` "
+                "or `failed` with precise blockers. Reference any used tool_result_id values "
+                "inside EvidenceRecord.tool_result_ids."
+            ),
+        }
+        run, trace = self._generate_obligation_run_with_tools(obligation, candidate_claim, context)
+        run.obligation_id = obligation.obligation_id
+        run.claim_id = candidate_claim.claim_id
+        run = self._reconcile_obligation_tool_trace(run, trace=trace)
+
+        iteration_dir = self.store.create_iteration_dir(state.iteration)
+        trace_refs = self._write_obligation_tool_trace(iteration_dir, run=run, trace=trace)
+        for ref in trace_refs:
+            if ref.path not in {existing.path for existing in run.artifact_refs}:
+                run.artifact_refs.append(ref)
+        run_ref = self.store.write_json(f"{iteration_dir}/obligation_run_{run.run_id}.json", run)
+        if run_ref.path not in {existing.path for existing in run.artifact_refs}:
+            run.artifact_refs.append(run_ref)
+            self.store.write_json(f"{iteration_dir}/obligation_run_{run.run_id}.json", run)
+        self.store.write_text(
+            f"{iteration_dir}/obligation_run_{run.run_id}.md",
+            _render_obligation_run_markdown(run, obligation, candidate_claim),
+        )
+        return run, run_ref.path, trace_refs[0].path
 
     def _build_research_context(
         self,
@@ -148,6 +200,62 @@ class ResearchAgent:
             schema=ResearchReport,
             final_tool_name=FINAL_RESEARCH_REPORT_TOOL_NAME,
             mock_output=self._mock_report(proposal) if self.router.dry_run else None,
+        )
+
+    def _generate_obligation_run_with_tools(
+        self,
+        obligation: ResearchObligation,
+        candidate_claim: CandidateClaim,
+        context: Any,
+    ) -> tuple[ObligationRun, dict[str, Any]]:
+        prompt_payload = {
+            "instruction": (
+                "Think privately. Use native tool calls only when they materially affect this "
+                "one obligation. Finish only by calling "
+                f"`{FINAL_OBLIGATION_RUN_TOOL_NAME}`."
+            ),
+            "context": context,
+        }
+        system_prompt = (
+            "You are the existing research agent, but this run is scoped to exactly one "
+            "claim-linked obligation. Produce an ObligationRun, not a broad report. "
+            "Do not create unrelated claims. If evidence is missing, return `blocked` or "
+            "`failed` with precise blockers. Use the complete JSON schema inserted below "
+            "for the final submitted obligation run:\n{{ObligationRun}}"
+        )
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {
+                "role": "user",
+                "content": (
+                    "Execute this assigned obligation with durable, auditable evidence.\nContext:\n"
+                    + compact_json_dumps(prompt_payload)
+                ),
+            },
+        ]
+        toolset = research_execution_toolset(
+            store=self.store,
+            literature=self.literature,
+            theorem_prover=self.theorem_prover,
+            experiment=self.experiment,
+            final_tool_name=FINAL_OBLIGATION_RUN_TOOL_NAME,
+            final_schema=ObligationRun,
+            final_tool_description=(
+                "Commit the final structured ObligationRun for the assigned obligation. "
+                "The arguments must be the ObligationRun object itself, not wrapped under "
+                "another key."
+            ),
+        )
+        return self.router.complete_structured_with_tools(
+            task_type="research_execution",
+            messages=messages,
+            tools=toolset.openai_tools(),
+            tool_executors=toolset.executors(),
+            schema=ObligationRun,
+            final_tool_name=FINAL_OBLIGATION_RUN_TOOL_NAME,
+            mock_output=self._mock_obligation_run(obligation, candidate_claim)
+            if self.router.dry_run
+            else None,
         )
 
     def _write_research_tool_trace(
@@ -213,6 +321,70 @@ class ResearchAgent:
         )
         return [json_ref, md_ref]
 
+    def _write_obligation_tool_trace(
+        self,
+        iteration_dir: str,
+        *,
+        run: ObligationRun,
+        trace: dict[str, Any],
+    ) -> list[ArtifactRef]:
+        payload = {
+            "run_id": run.run_id,
+            "obligation_id": run.obligation_id,
+            "claim_id": run.claim_id,
+            "private_reasoning": "redacted_not_logged_or_replayed",
+            "trace": trace,
+        }
+        json_ref = self.store.write_json(
+            f"{iteration_dir}/obligation_tool_trace_{run.run_id}.json", payload
+        )
+        lines = [f"# Obligation Tool Trace `{run.run_id}`", ""]
+        lines.extend(
+            [
+                "Private chain-of-thought/reasoning is intentionally not logged.",
+                "Only external tool calls, arguments, observations, and finalization metadata appear here.",
+                "",
+            ]
+        )
+        for item in trace.get("tool_calls", []):
+            lines.append(
+                f"## Turn {item.get('turn', '?')}: `{item.get('name', '')}` "
+                f"({item.get('call_id', '')})"
+            )
+            lines.extend(
+                [
+                    "",
+                    "Arguments:",
+                    "",
+                    "```json",
+                    json.dumps(item.get("arguments", {}), indent=2, sort_keys=True),
+                    "```",
+                    "",
+                    "Observation:",
+                    "",
+                    "```json",
+                    json.dumps(item.get("observation", {}), indent=2, sort_keys=True),
+                    "```",
+                    "",
+                ]
+            )
+        if trace.get("finalization"):
+            lines.extend(
+                [
+                    "## Finalization",
+                    "",
+                    "```json",
+                    json.dumps(trace["finalization"], indent=2, sort_keys=True),
+                    "```",
+                    "",
+                ]
+            )
+        md_ref = self.store.write_text(
+            f"{iteration_dir}/obligation_tool_trace_{run.run_id}.md",
+            "\n".join(lines).rstrip() + "\n",
+        )
+        return [json_ref, md_ref]
+
     def _reconcile_tool_trace(
         self,
         report: ResearchReport,
@@ -236,6 +408,46 @@ class ResearchAgent:
             elif name == "run_experiment":
                 self._record_experiment_observation(report, observation)
         return report
+
+    def _reconcile_obligation_tool_trace(
+        self, run: ObligationRun, *, trace: dict[str, Any]
+    ) -> ObligationRun:
+        tool_results = self._tool_results_by_id(trace)
+        for evidence in run.evidence:
+            for result_id in evidence.tool_result_ids:
+                tool_result = tool_results.get(result_id)
+                if tool_result is None:
+                    continue
+                observation = tool_result.get("observation") or {}
+                name = str(tool_result.get("name") or "")
+                refs = artifact_refs_from_observation(observation)
+                if name == "attempt_lean_proof" and evidence.evidence_type == EvidenceType.lean_proof:
+                    if observation.get("proof_status") == "proved":
+                        for ref in refs:
+                            self._append_evidence_ref(evidence, ref)
+                            if ref.path not in {existing.path for existing in run.artifact_refs}:
+                                run.artifact_refs.append(ref)
+                        evidence.verifier = evidence.verifier or "LEAPHarness"
+                        evidence.confidence = max(evidence.confidence, 1.0)
+                elif name == "query_literature" and evidence.evidence_type == EvidenceType.citation:
+                    ledger_ref = _artifact_ref_from_plain(observation.get("ledger_ref"))
+                    if ledger_ref is not None:
+                        self._append_evidence_ref(evidence, ledger_ref)
+                        if ledger_ref.path not in {existing.path for existing in run.artifact_refs}:
+                            run.artifact_refs.append(ledger_ref)
+                    for key in _citation_keys_from_literature_observation(observation):
+                        if key not in evidence.citation_keys:
+                            evidence.citation_keys.append(key)
+                    evidence.verifier = evidence.verifier or "LiteratureResearcher"
+                    evidence.confidence = max(evidence.confidence, 0.5)
+                elif name == "run_experiment" and evidence.evidence_type == EvidenceType.experiment:
+                    for ref in refs:
+                        self._append_evidence_ref(evidence, ref)
+                        if ref.path not in {existing.path for existing in run.artifact_refs}:
+                            run.artifact_refs.append(ref)
+                    evidence.verifier = evidence.verifier or "DockerPiExperimenter"
+                    evidence.confidence = max(evidence.confidence, 0.7)
+        return run
 
     def _tool_results_by_id(self, trace: dict[str, Any]) -> dict[str, dict[str, Any]]:
         results: dict[str, dict[str, Any]] = {}
@@ -520,6 +732,27 @@ class ResearchAgent:
             )
             claim.updated_at = utc_now()
 
+    def _mock_obligation_run(
+        self, obligation: ResearchObligation, candidate_claim: CandidateClaim
+    ) -> ObligationRun:
+        return ObligationRun(
+            obligation_id=obligation.obligation_id,
+            claim_id=candidate_claim.claim_id,
+            outcome="fulfilled",
+            summary=(
+                "Dry-run obligation execution records a substantive placeholder argument for "
+                "the assigned obligation. Real runs must provide tool-backed or derivation-backed "
+                "evidence before the deterministic validator accepts the obligation."
+            ),
+            evidence=[
+                EvidenceRecord(
+                    evidence_type=EvidenceType.informal_argument,
+                    summary="Dry-run mock evidence for exercising the obligation harness only.",
+                    confidence=0.2,
+                )
+            ],
+        )
+
     def _mock_report(self, proposal: ResearchProposal) -> ResearchReport:
         claim = ClaimRecord(
             claim_type=ClaimType.other,
@@ -571,6 +804,31 @@ class ResearchAgent:
                 "derivation, or experimental evidence as appropriate."
             ],
         )
+
+
+def _render_obligation_run_markdown(
+    run: ObligationRun, obligation: ResearchObligation, candidate_claim: CandidateClaim
+) -> str:
+    lines = [f"# Obligation Run `{run.run_id}`", ""]
+    lines.append(f"**Claim:** `{candidate_claim.claim_id}`")
+    lines.append(f"**Obligation:** `{obligation.obligation_id}`")
+    lines.append(f"**Outcome:** `{run.outcome}`")
+    lines.extend(["", "## Candidate claim", candidate_claim.statement, ""])
+    lines.extend(["## Obligation", obligation.statement, ""])
+    lines.extend(["## Summary", run.summary, ""])
+    if run.evidence:
+        lines.append("## Evidence")
+        for evidence in run.evidence:
+            tools = f" tool_results={evidence.tool_result_ids}" if evidence.tool_result_ids else ""
+            cites = f" citations={evidence.citation_keys}" if evidence.citation_keys else ""
+            lines.append(f"- {evidence.evidence_type.value}:{tools}{cites} {evidence.summary}")
+        lines.append("")
+    if run.unresolved_blockers:
+        lines.append("## Unresolved blockers")
+        for blocker in run.unresolved_blockers:
+            lines.append(f"- {blocker}")
+        lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
 
 
 def _artifact_ref_from_plain(value: Any) -> ArtifactRef | None:

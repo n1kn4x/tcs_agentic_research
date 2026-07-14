@@ -216,6 +216,22 @@ def _cmd_status(args: argparse.Namespace) -> int:
             store.read_jsonl(ArtifactStore.PROPOSAL_LEDGER, limit=args.ledger_tail), indent=2
         )
     )
+    print("\nObligation board:")
+    board = store.load_obligation_board()
+    print(
+        json.dumps(
+            {
+                "candidate_claims": [claim.model_dump(mode="json") for claim in board.candidate_claims[-args.ledger_tail :]],
+                "open_obligations": [
+                    obligation.model_dump(mode="json")
+                    for obligation in board.obligations
+                    if obligation.status == "open"
+                ][: args.ledger_tail],
+                "recent_runs": [run.model_dump(mode="json") for run in board.runs[-args.ledger_tail :]],
+            },
+            indent=2,
+        )
+    )
     return 0
 
 

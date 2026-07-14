@@ -331,6 +331,68 @@ class ResearchReport(StrictModel):
     created_at: str = Field(default_factory=utc_now)
 
 
+class ValidationGateStatus(StrictModel):
+    gate: Literal["scope_provenance", "evidence", "consistency"]
+    passed: bool
+    issues: list[str] = Field(default_factory=list)
+
+
+class ValidationResult(StrictModel):
+    ok: bool
+    gate_results: list[ValidationGateStatus] = Field(default_factory=list)
+    blocking_issues: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    created_at: str = Field(default_factory=utc_now)
+
+
+class CandidateClaim(StrictModel):
+    claim_id: str = Field(default_factory=lambda: new_id("claim"))
+    statement: str
+    claim_type: ClaimType = ClaimType.mathematical
+    status: Literal["candidate", "in_progress", "proven", "blocked", "refuted"] = "candidate"
+    source_proposal_id: str = ""
+    obligation_ids: list[str] = Field(default_factory=list)
+    evidence: list[EvidenceRecord] = Field(default_factory=list)
+    blocked_reason: str = ""
+    created_at: str = Field(default_factory=utc_now)
+    updated_at: str = Field(default_factory=utc_now)
+
+
+class ResearchObligation(StrictModel):
+    obligation_id: str = Field(default_factory=lambda: new_id("obl"))
+    claim_id: str = ""
+    statement: str
+    kind: Literal["literature", "derivation", "proof", "experiment", "consistency", "other"] = "other"
+    required_evidence: list[EvidenceType] = Field(default_factory=list)
+    status: Literal["open", "in_progress", "fulfilled", "blocked", "failed"] = "open"
+    last_run_id: str | None = None
+    failure_reason: str = ""
+    evidence_refs: list[ArtifactRef] = Field(default_factory=list)
+    created_at: str = Field(default_factory=utc_now)
+    updated_at: str = Field(default_factory=utc_now)
+
+
+class ObligationRun(StrictModel):
+    run_id: str = Field(default_factory=lambda: new_id("obl_run"))
+    obligation_id: str = ""
+    claim_id: str = ""
+    outcome: Literal["fulfilled", "blocked", "failed", "partial"] = "blocked"
+    summary: str
+    evidence: list[EvidenceRecord] = Field(default_factory=list)
+    artifact_refs: list[ArtifactRef] = Field(default_factory=list)
+    child_obligations: list[ResearchObligation] = Field(default_factory=list)
+    unresolved_blockers: list[str] = Field(default_factory=list)
+    validation: ValidationResult | None = None
+    created_at: str = Field(default_factory=utc_now)
+
+
+class ObligationBoard(StrictModel):
+    candidate_claims: list[CandidateClaim] = Field(default_factory=list)
+    obligations: list[ResearchObligation] = Field(default_factory=list)
+    runs: list[ObligationRun] = Field(default_factory=list)
+    updated_at: str = Field(default_factory=utc_now)
+
+
 class ResearchCritique(StrictModel):
     accepted_claim_ids: list[str] = Field(default_factory=list)
     downgraded_claim_ids: list[str] = Field(default_factory=list)
@@ -657,6 +719,10 @@ class GraphState(TypedDict):
     current_proposal_id: NotRequired[str | None]
     current_proposal_path: NotRequired[str | None]
     current_report_path: NotRequired[str | None]
+    current_obligation_id: NotRequired[str | None]
+    current_claim_id: NotRequired[str | None]
+    current_obligation_run_path: NotRequired[str | None]
+    current_obligation_trace_path: NotRequired[str | None]
     last_verdict_path: NotRequired[str | None]
     possible_breakthrough: NotRequired[bool]
     confirmed_solved: NotRequired[bool]
