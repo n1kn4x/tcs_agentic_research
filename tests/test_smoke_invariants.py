@@ -777,9 +777,15 @@ def test_literature_toolset_can_import_and_extract_for_literature_obligations(tm
     assert "extract_imported_papers" in names
 
 
-def test_extract_imported_papers_processes_unextracted_full_text(tmp_path: Path) -> None:
+def test_extract_imported_papers_processes_unextracted_full_text_without_llm(tmp_path: Path) -> None:
+    class FailingExtractionRouter:
+        dry_run = False
+
+        def complete_structured(self, *args: object, **kwargs: object) -> object:
+            raise AssertionError("deterministic batch extraction must not call the LLM")
+
     store = _store(tmp_path)
-    agent = LiteratureResearcher(store, _router(store))
+    agent = LiteratureResearcher(store, FailingExtractionRouter())
     text = (
         "--- page 1 ---\n\n"
         "Theorem 2. Orthogonal Vectors has the stated conditional lower-bound role in this "

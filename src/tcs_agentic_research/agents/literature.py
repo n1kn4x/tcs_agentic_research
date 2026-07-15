@@ -206,7 +206,11 @@ class LiteratureResearcher:
     # Extraction and nomenclature mapping
     # ------------------------------------------------------------------
     def extract_paper(
-        self, *, citation_key: str | None = None, paper_id: str | None = None
+        self,
+        *,
+        citation_key: str | None = None,
+        paper_id: str | None = None,
+        use_llm: bool = True,
     ) -> LiteratureExtract:
         """Run theorem/algorithm extraction for an imported paper.
 
@@ -224,6 +228,7 @@ class LiteratureResearcher:
             paper_text=text,
             paper_id=paper.paper_id,
             text_artifact_path=paper.text_path,
+            use_llm=use_llm,
         )
 
     def extract_imported_papers(
@@ -244,7 +249,7 @@ class LiteratureResearcher:
         for paper in self.list_papers():
             if paper.citation_key:
                 latest_by_key[paper.citation_key] = paper
-        already_extracted = self._citation_keys_with_extractions()
+        already_extracted = self._citation_keys_with_statement_extractions()
         processed: list[dict[str, Any]] = []
         skipped: list[dict[str, str]] = []
         errors: list[dict[str, str]] = []
@@ -275,7 +280,7 @@ class LiteratureResearcher:
                         {"citation_key": current.citation_key, "reason": "text artifact missing"}
                     )
                     continue
-                extract = self.extract_paper(citation_key=current.citation_key)
+                extract = self.extract_paper(citation_key=current.citation_key, use_llm=False)
                 statements = [
                     *extract.theorem_statements,
                     *extract.algorithm_statements,
@@ -318,9 +323,15 @@ class LiteratureResearcher:
             "errors": errors[:20],
         }
 
-    def _citation_keys_with_extractions(self) -> set[str]:
+    def _citation_keys_with_statement_extractions(self) -> set[str]:
         keys: set[str] = set()
         for record in self.store.read_jsonl("LiteratureDB/extracted_claims.jsonl"):
+            if not (
+                record.get("theorem_statements")
+                or record.get("algorithm_statements")
+                or record.get("lower_bound_statements")
+            ):
+                continue
             key = str(record.get("citation_key") or "")
             if key:
                 keys.add(key)
@@ -334,6 +345,7 @@ class LiteratureResearcher:
         nomenclature_yaml: str | None = None,
         paper_id: str = "",
         text_artifact_path: str | None = None,
+        use_llm: bool = True,
     ) -> LiteratureExtract:
         """Extract statements/claims and commit only nomenclature-mapped records.
 
@@ -348,30 +360,39 @@ class LiteratureResearcher:
             paper_id=paper_id,
             text_ref=text_ref,
         )
-        messages = [
-            {
-                "role": "system",
-                "content": render_prompt("literature_researcher", override_dir=self.prompt_dir),
-            },
-            {
-                "role": "user",
-                "content": (
-                    f"Citation key: {citation_key}\n"
-                    f"Paper ID: {paper_id}\n"
-                    f"Nomenclature (canonical notation; map all outputs to it):\n"
-                    f"{nomenclature_yaml or self.store.read_text(ArtifactStore.NOMENCLATURE)}\n\n"
-                    "Paper text/excerpt (extract exact quote provenance with offsets/locators "
-                    "when possible):\n"
-                    f"{paper_text[:70000]}"
-                ),
-            },
-        ]
-        extract = self.router.complete_structured(
-            task_type="literature_extraction",
-            messages=messages,
-            schema=LiteratureExtract,
-            mock_output=heuristic if self.router.dry_run else None,
-        )
+        if use_llm:
+            messages = [
+                {
+                    "role": "system",
+                    "content": render_prompt("literature_researcher", override_dir=self.prompt_dir),
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"Citation key: {citation_key}\n"
+                        f"Paper ID: {paper_id}\n"
+                        f"Nomenclature (canonical notation; map all outputs to it):\n"
+                        f"{nomenclature_yaml or self.store.read_text(ArtifactStore.NOMENCLATURE)}\n\n"
+                        "Paper text/excerpt (extract exact quote provenance with offsets/locators "
+                        "when possible):\n"
+                        f"{paper_text[:45000]}"
+                    ),
+                },
+            ]
+            try:
+                extract = self.router.complete_structured(
+                    task_type="literature_extraction",
+                    messages=messages,
+                    schema=LiteratureExtract,
+                    mock_output=heuristic if self.router.dry_run else None,
+                )
+            except Exception:
+                # Literature obligations depend on extraction being robust.  If the LLM backend is
+                # unavailable or over context, keep the deterministic statement scan rather than
+                # failing the whole research run.
+                extract = heuristic
+        else:
+            extract = heuristic
         extract = self._postprocess_extract(
             extract,
             heuristic=heuristic,
@@ -886,8 +907,11 @@ class _StatementMatch:
 
 
 _STATEMENT_START_RE = re.compile(
-    r"(?im)^\s*(?P<label>(?:Theorem|Lemma|Corollary|Proposition|Algorithm)"
-    r"\s*(?:[0-9A-Za-z][0-9A-Za-z().-]*)?)\s*(?:\([^\n]{0,80}\))?\s*(?:[:.]|—|-)"
+    r"(?im)^\s*(?P<label>(?:(?:Theorem|Lemma|Corollary|Proposition|Algorithm|Definition)"
+    r"\s*(?:[0-9A-Za-z][0-9A-Za-z().-]*)?)|"
+    r"(?:(?:Hypothesis|Assumption|Conjecture)\s*[A-Za-z0-9().-]*)|"
+    r"(?:(?:[A-Z][A-Za-z0-9 -]{0,80}\s+)?(?:Hypothesis|Conjecture)))"
+    r"\s*(?:\([^\n]{0,80}\))?\s*(?:[:.]|—|-)"
 )
 _LOWER_BOUND_RE = re.compile(r"(?i)\b(lower bound|impossibility theorem|no-go theorem)\b")
 
@@ -942,6 +966,10 @@ def _statement_kind(label: str) -> str:
         return "algorithm"
     if _LOWER_BOUND_RE.search(label):
         return "lower_bound"
+    if lowered.startswith("definition"):
+        return "definition"
+    if "hypothesis" in lowered or "conjecture" in lowered or lowered.startswith("assumption"):
+        return "claim"
     if lowered.startswith("lemma"):
         return "lemma"
     if lowered.startswith("corollary"):

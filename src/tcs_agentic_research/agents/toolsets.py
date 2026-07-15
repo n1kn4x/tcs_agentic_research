@@ -291,7 +291,7 @@ def literature_toolset(
         extraction_error: str = ""
         if auto_extract_after_import and requested and paper.text_path:
             try:
-                extraction = literature.extract_paper(citation_key=paper.citation_key)
+                extraction = literature.extract_paper(citation_key=paper.citation_key, use_llm=False)
             except Exception as exc:  # noqa: BLE001 - preserve the successful import observation
                 extraction_error = f"{type(exc).__name__}: {exc}"
         return _compact_imported_paper(
@@ -394,6 +394,7 @@ def literature_toolset(
             extract = literature.extract_paper(
                 citation_key=args.citation_key or None,
                 paper_id=args.paper_id or None,
+                use_llm=False,
             )
             return _compact_literature_extract(
                 "extract_paper",
