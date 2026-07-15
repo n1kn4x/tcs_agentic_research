@@ -66,6 +66,9 @@ class EvidenceRecord(StrictModel):
     artifact_refs: list[ArtifactRef] = Field(default_factory=list)
     citation_keys: list[str] = Field(default_factory=list)
     tool_result_ids: list[str] = Field(default_factory=list)
+    # Stable handles from LiteratureDB/index.sqlite.  Literature evidence should cite these
+    # statement/quote/support IDs rather than relying on citation keys alone.
+    literature_support_ids: list[str] = Field(default_factory=list)
     verifier: str | None = None
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
     created_at: str = Field(default_factory=utc_now)
@@ -545,6 +548,8 @@ class LiteratureQuote(StrictModel):
     quote: str
     char_start: int | None = None
     char_end: int | None = None
+    source_sha256: str = ""
+    validated: bool = False
     artifact_refs: list[ArtifactRef] = Field(default_factory=list)
 
 
@@ -592,6 +597,11 @@ class LiteratureQueryResult(StrictModel):
     mapped_statement: str
     summary: str = ""
     score: float = 0.0
+    statement_id: str = ""
+    quote_id: str = ""
+    support_id: str = ""
+    support_level: str = ""
+    relation: str = ""
     provenance: list[LiteratureQuote] = Field(default_factory=list)
     notation_mappings: dict[str, str] = Field(default_factory=dict)
     duplicate_of: str | None = None

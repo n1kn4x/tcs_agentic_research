@@ -7,7 +7,7 @@ If you do not follow this schema, your answer will be rejected.
 
 Audit the report for overclaiming. Downgrade any claim that lacks appropriate evidence:
 - mathematical proof => Lean proof or clearly marked informal proof;
-- literature fact => citation/provenance;
+- literature fact => citation plus statement/quote/support ID provenance (not citation key alone);
 - complexity/resource bound => explicit derivation in the stated model;
 - experiment => reproducible run artifacts and caveats;
 - novelty => literature audit.

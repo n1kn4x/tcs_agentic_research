@@ -13,6 +13,7 @@ from tcs_agentic_research.agents.critics import (
     is_claim_acceptably_supported,
 )
 from tcs_agentic_research.agents.initialization import InitializationAgent
+from tcs_agentic_research.agents.literature import LiteratureResearcher
 from tcs_agentic_research.agents.proposal import ProposalAgent
 from tcs_agentic_research.agents.research import ResearchAgent
 from tcs_agentic_research.agents.toolsets import artifact_retrieval_toolset
@@ -726,3 +727,75 @@ def test_commit_manager_blocks_obligation_on_failed_validation(tmp_path: Path) -
     )
     assert blocked_obligation.status == "blocked"
     assert not store.latest_claims_by_id()
+
+
+def test_literature_extraction_indexes_support_ids_without_auto_claims(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    agent = LiteratureResearcher(store, _router(store))
+    text = (
+        "--- page 1 ---\n\n"
+        "Lemma 1. The BKW algorithm for LPN has time complexity 2^O(n/log n).\n\n"
+        "Proof. This is quoted only for a smoke test.\n"
+    )
+    text_ref = store.write_text("LiteratureDB/papers/BKWTest/paper.txt", text)
+    paper = PaperMetadata(
+        citation_key="BKWTest",
+        title="BKW Test Paper",
+        source_type="manual",
+        text_path=text_ref.path,
+    )
+    agent.import_paper(paper)
+
+    extract = agent.extract_paper(citation_key="BKWTest")
+    assert extract.theorem_statements
+    assert not store.read_claims()  # Literature extraction creates evidence objects, not claims.
+
+    answer = agent.answer_query("BKW LPN time complexity", limit=3)
+    assert answer.results
+    top = answer.results[0]
+    assert top.support_id
+    assert top.statement_id
+    assert top.provenance[0].validated
+
+    supported = ClaimRecord(
+        claim_type=ClaimType.literature,
+        statement="BKWTest states a BKW LPN time bound.",
+        status=ClaimStatus.cited,
+        evidence=[
+            EvidenceRecord(
+                evidence_type=EvidenceType.citation,
+                summary="Statement-level support from LiteratureDB.",
+                citation_keys=["BKWTest"],
+                literature_support_ids=[top.support_id],
+            )
+        ],
+    )
+    assert is_claim_acceptably_supported(supported, store)
+
+    citation_key_only = supported.model_copy(deep=True)
+    citation_key_only.evidence[0].literature_support_ids = []
+    assert not is_claim_acceptably_supported(citation_key_only, store)
+
+
+def test_literature_registry_deduplicates_papers_by_arxiv_id(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    agent = LiteratureResearcher(store, _router(store))
+    first = PaperMetadata(
+        citation_key="GKZ2017",
+        title="Learning with Errors is easy with quantum samples",
+        source_type="manual",
+        arxiv_id="1702.08255",
+    )
+    second = PaperMetadata(
+        citation_key="GKZ17",
+        title="Learning with Errors is easy with quantum samples",
+        source_type="manual",
+        arxiv_id="1702.08255",
+    )
+
+    imported_first = agent.import_paper(first)
+    imported_second = agent.import_paper(second)
+
+    assert imported_second.paper_id == imported_first.paper_id
+    assert len(store.read_jsonl("LiteratureDB/papers.jsonl")) == 1
+    assert agent.index.find_paper(citation_key="GKZ17").paper_id == imported_first.paper_id

@@ -87,8 +87,10 @@ class ProofDAG(StrictModel):
         )
         self.nodes[and_node.node_id] = and_node
         self.nodes[parent_node_id].child_ids.append(and_node.node_id)
+        parent_goal = self.nodes[parent_node_id].goal
+        parent_goal_ids = [parent_goal.goal_id] if parent_goal is not None else []
         for statement in subgoals:
-            child_goal = ProofGoal(lean_statement=statement, parent_goal_ids=[self.nodes[parent_node_id].goal.goal_id] if self.nodes[parent_node_id].goal else [])
+            child_goal = ProofGoal(lean_statement=statement, parent_goal_ids=parent_goal_ids)
             child = ProofDAGNode(
                 node_type="or",
                 label=statement.name,

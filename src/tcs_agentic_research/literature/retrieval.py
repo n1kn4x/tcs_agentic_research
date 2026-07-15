@@ -17,6 +17,7 @@ from ..schemas import (
     LiteratureStatement,
     PaperMetadata,
 )
+from .index import LiteratureIndex
 from .nomenclature import NomenclatureMapper
 
 
@@ -27,9 +28,16 @@ class LiteratureRetriever:
     truth; a vector index can later be added behind the same result schema.
     """
 
-    def __init__(self, store: ArtifactStore, mapper: NomenclatureMapper | None = None):
+    def __init__(
+        self,
+        store: ArtifactStore,
+        mapper: NomenclatureMapper | None = None,
+        *,
+        index: LiteratureIndex | None = None,
+    ):
         self.store = store
         self.mapper = mapper or NomenclatureMapper(store)
+        self.index = index or LiteratureIndex(store)
 
     def answer_query(self, query: str, *, limit: int = 10) -> LiteratureQueryAnswer:
         query = query.strip()
@@ -59,6 +67,11 @@ class LiteratureRetriever:
         )
 
     def retrieve(self, query: str, *, limit: int = 10) -> list[LiteratureQueryResult]:
+        indexed = self._indexed_results(query, limit=limit)
+        if indexed:
+            return indexed[:limit]
+
+        # Backward-compatible fallback for legacy workspaces without a populated index.
         terms = _terms(query)
         papers = _paper_index(self.store)
         candidates = list(self._statement_candidates(papers)) + list(
@@ -77,6 +90,55 @@ class LiteratureRetriever:
         scored.sort(key=lambda item: item.score, reverse=True)
         return scored[:limit]
 
+    def _indexed_results(self, query: str, *, limit: int) -> list[LiteratureQueryResult]:
+        rows = self.index.search(query, limit=max(limit, 1))
+        results: list[LiteratureQueryResult] = []
+        for row in rows:
+            citation_key = str(row.get("citation_key") or "")
+            paper_id = str(row.get("paper_id") or "")
+            quote = str(row.get("quote") or row.get("mapped_statement") or "")
+            quote_obj = LiteratureQuote(
+                citation_key=citation_key,
+                paper_id=paper_id,
+                locator=str(row.get("locator") or row.get("label") or ""),
+                quote=quote,
+                char_start=row.get("char_start"),
+                char_end=row.get("char_end"),
+                source_sha256=str(row.get("text_sha256") or ""),
+                validated=bool(row.get("validated") or False),
+            )
+            if row.get("quote_id"):
+                quote_obj.quote_id = str(row.get("quote_id"))
+            mapped = str(row.get("mapped_statement") or "")
+            notation_mappings: dict[str, str] = {}
+            if row.get("notation_json"):
+                try:
+                    parsed = json.loads(str(row.get("notation_json")))
+                    if isinstance(parsed, dict):
+                        notation_mappings = {str(k): str(v) for k, v in parsed.items()}
+                except Exception:
+                    notation_mappings = {}
+            result = LiteratureQueryResult(
+                citation_key=citation_key,
+                paper_id=paper_id,
+                title=str(row.get("paper_title") or ""),
+                year=row.get("year"),
+                kind=str(row.get("kind") or row.get("result_kind") or "text_chunk"),
+                label=str(row.get("label") or row.get("locator") or ""),
+                mapped_statement=self.mapper.map_text(mapped, notation_mappings),
+                summary=_summary(mapped),
+                score=float(row.get("score") or 0.0),
+                statement_id=str(row.get("statement_id") or ""),
+                quote_id=quote_obj.quote_id,
+                support_id=str(row.get("support_id") or ""),
+                support_level=str(row.get("support_level") or ""),
+                relation=str(row.get("relation") or ""),
+                provenance=[quote_obj],
+                notation_mappings=notation_mappings,
+            )
+            results.append(result)
+        return results
+
     def _statement_candidates(
         self, papers: dict[str, PaperMetadata]
     ) -> Iterable[tuple[LiteratureQueryResult, str]]:
@@ -84,7 +146,7 @@ class LiteratureRetriever:
             citation_key = str(record.get("citation_key") or "")
             paper = papers.get(citation_key)
             paper_id = str(record.get("paper_id") or (paper.paper_id if paper else ""))
-            all_statements = []
+            all_statements: list[Any] = []
             for field in ["theorem_statements", "algorithm_statements", "lower_bound_statements"]:
                 all_statements.extend(record.get(field) or [])
             for raw_statement in all_statements:
@@ -354,9 +416,11 @@ def _render_answer(
         quote = result.provenance[0].quote if result.provenance else ""
         quote = _summary(quote, limit=220)
         locator = result.provenance[0].locator if result.provenance else result.label
+        support = f", support_id={result.support_id}" if result.support_id else ""
+        validated = "validated" if result.provenance and result.provenance[0].validated else "unvalidated"
         lines.append(
             f"{idx}. [{result.citation_key}] {result.mapped_statement}"
-            f" (kind={result.kind}, locator={locator}, score={result.score}{duplicate})"
+            f" (kind={result.kind}, locator={locator}, score={result.score}{support}, {validated}{duplicate})"
         )
         if quote:
             lines.append(f"   quote (original notation, provenance only): \"{quote}\"")

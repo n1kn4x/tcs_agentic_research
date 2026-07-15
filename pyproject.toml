@@ -42,3 +42,7 @@ python_version = "3.11"
 plugins = ["pydantic.mypy"]
 strict = false
 warn_unused_ignores = true
+
+[[tool.mypy.overrides]]
+module = "yaml"
+ignore_missing_imports = true

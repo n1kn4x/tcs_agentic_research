@@ -25,7 +25,7 @@ ObligationBoard.json            obligation-first work queue, runs, generated cla
 ClaimLedger.jsonl               accepted/proven mathematical/algorithmic/literature/resource claims
 ProposalLedger.jsonl            proposal events and critic decisions
 ModelCallLedger.jsonl           model routing, latency, token, validation logs
-LiteratureDB/                   papers, discovery candidates, extracted statements/claims, query answers
+LiteratureDB/                   papers, discovery candidates, extracted statements/claims, query answers, SQLite index
 LeanProject/                    Lean/Lake project and LEAP proof DAGs
 ExperimentRuns/                 reproducible runs with configs/seeds/logs
 Reports/                        structured reports and derived Markdown
@@ -147,6 +147,10 @@ tcs-research literature extract --workspace workspaces/demo --citation-key arxiv
 
 tcs-research literature query --workspace workspaces/demo \
   --query "lower bound for the main subproblem"
+
+# Rebuild the materialized SQLite index of canonical papers, aliases, passages,
+# statements, quotes, and stable support IDs:
+tcs-research literature rebuild-index --workspace workspaces/demo
 
 # Scholar-like discovery via OpenAlex queues candidates only:
 tcs-research literature search --workspace workspaces/demo \

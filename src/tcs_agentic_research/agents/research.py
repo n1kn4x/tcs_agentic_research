@@ -440,6 +440,9 @@ class ResearchAgent:
                     for key in _citation_keys_from_literature_observation(observation):
                         if key not in evidence.citation_keys:
                             evidence.citation_keys.append(key)
+                    for support_id in _support_ids_from_literature_observation(observation):
+                        if support_id not in evidence.literature_support_ids:
+                            evidence.literature_support_ids.append(support_id)
                     evidence.verifier = evidence.verifier or "LiteratureResearcher"
                     evidence.confidence = max(evidence.confidence, 0.5)
                 elif name == "run_experiment" and evidence.evidence_type == EvidenceType.experiment:
@@ -496,6 +499,9 @@ class ResearchAgent:
                     for key in _citation_keys_from_literature_observation(observation):
                         if key not in evidence.citation_keys:
                             evidence.citation_keys.append(key)
+                    for support_id in _support_ids_from_literature_observation(observation):
+                        if support_id not in evidence.literature_support_ids:
+                            evidence.literature_support_ids.append(support_id)
                     evidence.verifier = evidence.verifier or "LiteratureResearcher"
                     evidence.confidence = max(evidence.confidence, 0.5)
                 elif name == "run_experiment":
@@ -531,6 +537,7 @@ class ResearchAgent:
             tool_result_ids=[str(observation.get("tool_result_id"))]
             if observation.get("tool_result_id")
             else [],
+            literature_support_ids=_support_ids_from_literature_observation(observation),
             verifier="LiteratureResearcher",
             confidence=0.5,
         )
@@ -1037,6 +1044,23 @@ def _citation_keys_from_literature_observation(observation: dict[str, Any]) -> l
         if isinstance(result, dict) and result.get("citation_key"):
             keys.append(str(result["citation_key"]))
     return list(dict.fromkeys(keys))
+
+
+def _support_ids_from_literature_observation(observation: dict[str, Any]) -> list[str]:
+    support_ids: list[str] = []
+    for result in observation.get("results") or []:
+        if isinstance(result, dict):
+            for key in ["support_id", "statement_id"]:
+                value = str(result.get(key) or "")
+                if value:
+                    support_ids.append(value)
+                    break
+            else:
+                if str(result.get("kind") or "") != "text_chunk":
+                    value = str(result.get("quote_id") or "")
+                    if value:
+                        support_ids.append(value)
+    return list(dict.fromkeys(support_ids))
 
 
 def _same_evidence_present(existing: list[EvidenceRecord], candidate: EvidenceRecord) -> bool:

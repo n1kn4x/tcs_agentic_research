@@ -67,7 +67,7 @@ class PDFTextExtractor:
 
     def _extract_with_pypdf(self, pdf_path: Path, *, page_separator: str) -> str:
         try:
-            from pypdf import PdfReader  # type: ignore[import-not-found]
+            from pypdf import PdfReader
         except Exception:
             return ""
         try:

@@ -35,9 +35,9 @@ Here are additional rules that you must follow:
 - For a Lean proof obligation, make `statement` a Lean proposition/type after the theorem colon when possible; use natural language only when formalization is not yet possible.
 - When a claim depends on a tool result, put the returned `tool_result_id` in the flat submission's `tool_result_ids`.
 - A Lean proof tool result supports a claim only if the tool returned `proof_status: proved`; partial/failed Lean attempts should become open or blocked obligations.
-- Literature query results may support literature claims only when provenance and citation keys are returned; include citation keys in claim evidence.
+- Literature query results may support literature claims only when provenance and stable `support_id`/`statement_id`/`quote_id` handles are returned; include the returned `tool_result_id` and citation keys in the flat submission so the system can attach support IDs.
 - Any algorithmic improvement needs explicit complexity/resource estimates and derivation caveats.
 - `required_verifications` should contain only unresolved blocking verification tasks, not generic policy reminders.
 - If `run_experiment` returns successfully, cite the returned `tool_result_id` in `tool_result_ids`; the system will attach imported experiment artifacts from the trace. If Docker/pi/experimenter configuration is missing, the tool fails fatally rather than recording a placeholder.
 - Experiments may support empirical or computational claims only; they are not mathematical proofs. Do not invent experiment artifacts.
-- Cite literature only if provenance appears in the supplied context or LiteratureDB, and include citation keys from LiteratureDB in claim evidence.
+- Cite literature only if provenance appears in the supplied context or LiteratureDB. Prefer statement/quote/support IDs over citation-key-only evidence; citation keys alone are not enough to establish a literature claim.

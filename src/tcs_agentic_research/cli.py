@@ -89,6 +89,11 @@ def main(argv: list[str] | None = None) -> int:
     lit_query.add_argument("--query", required=True)
     lit_query.add_argument("--limit", type=int, default=10)
 
+    lit_rebuild = lit_sub.add_parser(
+        "rebuild-index", help="Rebuild LiteratureDB/index.sqlite from canonical artifacts"
+    )
+    _add_common(lit_rebuild)
+
     lit_search = lit_sub.add_parser("search", help="Search OpenAlex and queue candidates")
     _add_common(lit_search)
     lit_search.add_argument("--query", required=True)
@@ -301,6 +306,10 @@ def _cmd_literature(args: argparse.Namespace) -> int:
     if args.literature_command == "query":
         answer = agent.answer_query(args.query, limit=args.limit)
         print(answer.model_dump_json(indent=2))
+        return 0
+    if args.literature_command == "rebuild-index":
+        agent.index.rebuild()
+        print(json.dumps({"index_path": agent.index.INDEX_PATH, "status": "rebuilt"}, indent=2))
         return 0
     if args.literature_command == "search":
         candidates = agent.search_papers(args.query, limit=args.limit)

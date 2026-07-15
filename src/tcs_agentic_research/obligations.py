@@ -211,6 +211,10 @@ class ObligationRunValidator:
         for key in evidence.citation_keys:
             if key not in _imported_citation_keys(self.store):
                 issues.append(f"Citation key `{key}` is not imported in LiteratureDB/papers.jsonl.")
+        if evidence.evidence_type == EvidenceType.citation:
+            for support_id in evidence.literature_support_ids:
+                if not _literature_support_exists(self.store, support_id):
+                    issues.append(f"Literature support_id `{support_id}` is not indexed in LiteratureDB.")
         if evidence.evidence_type == EvidenceType.experiment:
             experiment_ids = _tool_result_ids_from_trace(trace, tool_name="run_experiment")
             for result_id in evidence.tool_result_ids:
@@ -568,8 +572,34 @@ def _has_extracted_statement(store: ArtifactStore, citation_key: str) -> bool:
     return False
 
 
+def _literature_support_exists(store: ArtifactStore, support_id: str) -> bool:
+    try:
+        from .literature.index import LiteratureIndex
+
+        if LiteratureIndex(store).support_exists(support_id):
+            return True
+    except Exception:
+        pass
+    for record in store.read_jsonl("LiteratureDB/extracted_claims.jsonl"):
+        for field in ["theorem_statements", "algorithm_statements", "lower_bound_statements"]:
+            for statement in record.get(field) or []:
+                if not isinstance(statement, dict):
+                    continue
+                if statement.get("statement_id") == support_id:
+                    return True
+                for quote in statement.get("provenance") or []:
+                    if isinstance(quote, dict) and quote.get("quote_id") == support_id:
+                        return True
+    return False
+
+
 def _has_citation_evidence(evidence: Iterable[EvidenceRecord]) -> bool:
-    return any(ev.evidence_type == EvidenceType.citation and ev.citation_keys for ev in evidence)
+    return any(
+        ev.evidence_type == EvidenceType.citation
+        and ev.citation_keys
+        and ev.literature_support_ids
+        for ev in evidence
+    )
 
 
 def _citation_keys(evidence: Iterable[EvidenceRecord]) -> set[str]:

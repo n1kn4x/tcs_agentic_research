@@ -274,8 +274,10 @@ class DockerProjectContainer:
             path = Path(self.settings.dockerfile).expanduser().resolve()
         else:
             path = Path(
-                importlib.resources.files("tcs_agentic_research.experimenter").joinpath(
-                    "Dockerfile"
+                str(
+                    importlib.resources.files("tcs_agentic_research.experimenter").joinpath(
+                        "Dockerfile"
+                    )
                 )
             )
         if not path.exists():

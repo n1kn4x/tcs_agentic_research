@@ -337,24 +337,34 @@ def _solved_outcomes_from_report(report: ResearchReport) -> list[SolvedOutcome]:
 
 
 def _literature_claim_has_statement_support(store: ArtifactStore, claim: ClaimRecord) -> bool:
-    """Require statement-level extraction before accepting literature claims as cited."""
-    citation_keys = {
-        key
+    """Require stable statement/quote/support handles before accepting literature claims."""
+    support_ids = {
+        support_id
         for evidence in claim.evidence
         if evidence.evidence_type == EvidenceType.citation
-        for key in evidence.citation_keys
+        for support_id in evidence.literature_support_ids
     }
-    if not citation_keys:
+    if not support_ids:
         return False
-    for record in store.read_jsonl("LiteratureDB/extracted_claims.jsonl"):
-        if record.get("citation_key") not in citation_keys:
-            continue
-        if (
-            record.get("theorem_statements")
-            or record.get("algorithm_statements")
-            or record.get("lower_bound_statements")
-        ):
+    try:
+        from ..literature.index import LiteratureIndex
+
+        index = LiteratureIndex(store)
+        if any(index.support_exists(support_id) for support_id in support_ids):
             return True
+    except Exception:
+        pass
+    # Backward-compatible fallback for extracted statement IDs present in JSONL.
+    for record in store.read_jsonl("LiteratureDB/extracted_claims.jsonl"):
+        for field in ["theorem_statements", "algorithm_statements", "lower_bound_statements"]:
+            for statement in record.get(field) or []:
+                if not isinstance(statement, dict):
+                    continue
+                if statement.get("statement_id") in support_ids:
+                    return True
+                for quote in statement.get("provenance") or []:
+                    if isinstance(quote, dict) and quote.get("quote_id") in support_ids:
+                        return True
     return False
 
 

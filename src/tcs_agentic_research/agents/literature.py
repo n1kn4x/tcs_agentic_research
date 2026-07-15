@@ -13,7 +13,14 @@ from pathlib import Path
 from typing import Any
 
 from ..artifact_store import ArtifactStore
-from ..literature.fetchers import LiteratureFetcher, parse_arxiv_id, parse_doi
+from ..literature.fetchers import (
+    LiteratureFetcher,
+    normalize_arxiv_id,
+    normalize_doi,
+    parse_arxiv_id,
+    parse_doi,
+)
+from ..literature.index import LiteratureIndex
 from ..literature.nomenclature import NomenclatureMapper
 from ..literature.openalex import OpenAlexClient
 from ..literature.pdf_text import PDFTextExtractor
@@ -52,7 +59,15 @@ class LiteratureResearcher:
         self.fetcher = LiteratureFetcher(store)
         self.pdf_extractor = PDFTextExtractor(store)
         self.mapper = NomenclatureMapper(store)
-        self.retriever = LiteratureRetriever(store, self.mapper)
+        needs_index_rebuild = not store.exists(LiteratureIndex.INDEX_PATH)
+        self.index = LiteratureIndex(store)
+        has_literature_artifacts = bool(
+            store.read_jsonl("LiteratureDB/papers.jsonl")
+            or store.read_jsonl("LiteratureDB/extracted_claims.jsonl")
+        )
+        if (needs_index_rebuild or self.index.is_empty()) and has_literature_artifacts:
+            self.index.rebuild()
+        self.retriever = LiteratureRetriever(store, self.mapper, index=self.index)
         self.openalex = OpenAlexClient()
 
     # ------------------------------------------------------------------
@@ -77,7 +92,15 @@ class LiteratureResearcher:
         )
 
     def import_paper(self, paper: PaperMetadata) -> PaperMetadata:
-        """Register already-known paper metadata in ``LiteratureDB``."""
+        """Register already-known paper metadata in ``LiteratureDB``.
+
+        The append-only JSONL ledger remains an audit trail; the SQLite literature index records
+        canonical paper aliases so duplicate citation keys/DOIs/arXiv IDs resolve to one paper.
+        """
+        existing = self._find_existing_paper_for_metadata(paper)
+        if existing is not None and existing.paper_id != paper.paper_id:
+            self.index.add_alias(existing.paper_id, "citation_key", paper.citation_key)
+            return existing
         if paper.metadata_path:
             metadata_ref = self.store.write_json(paper.metadata_path, paper)
         else:
@@ -88,6 +111,9 @@ class LiteratureResearcher:
             paper.artifact_refs.append(metadata_ref)
         self.store.write_json(paper.metadata_path, paper)
         self.store.append_jsonl("LiteratureDB/papers.jsonl", paper)
+        self.index.upsert_paper(paper)
+        if paper.text_path and self.store.exists(paper.text_path):
+            self.index.index_paper_text(paper)
         return paper
 
     def import_url(
@@ -100,19 +126,45 @@ class LiteratureResearcher:
         extract_text: bool = False,
     ) -> PaperMetadata:
         """Fetch a URL/DOI/arXiv/PDF source into ``LiteratureDB/papers/``."""
+        arxiv_id = parse_arxiv_id(url)
+        doi_value = doi or parse_doi(url)
+        existing = None
+        if arxiv_id:
+            existing = self.index.find_paper(arxiv_id=arxiv_id)
+        elif doi_value:
+            existing = self.index.find_paper(doi=doi_value)
+        if existing is not None:
+            if citation_key:
+                self.index.add_alias(existing.paper_id, "citation_key", citation_key)
+            return self._extract_text_if_requested(existing, extract_text=extract_text)
         paper = self.fetcher.import_url(url, citation_key=citation_key, title=title, doi=doi)
+        self.index.upsert_paper(paper)
         return self._extract_text_if_requested(paper, extract_text=extract_text)
 
     def import_arxiv(
         self, arxiv_id: str, *, citation_key: str | None = None, extract_text: bool = False
     ) -> PaperMetadata:
-        paper = self.fetcher.import_arxiv(arxiv_id, citation_key=citation_key)
+        clean_id = normalize_arxiv_id(arxiv_id)
+        existing = self.index.find_paper(arxiv_id=clean_id)
+        if existing is not None:
+            if citation_key:
+                self.index.add_alias(existing.paper_id, "citation_key", citation_key)
+            return self._extract_text_if_requested(existing, extract_text=extract_text)
+        paper = self.fetcher.import_arxiv(clean_id, citation_key=citation_key)
+        self.index.upsert_paper(paper)
         return self._extract_text_if_requested(paper, extract_text=extract_text)
 
     def import_doi(
         self, doi: str, *, citation_key: str | None = None, extract_text: bool = False
     ) -> PaperMetadata:
-        paper = self.fetcher.import_doi(doi, citation_key=citation_key)
+        clean_doi = normalize_doi(doi)
+        existing = self.index.find_paper(doi=clean_doi)
+        if existing is not None:
+            if citation_key:
+                self.index.add_alias(existing.paper_id, "citation_key", citation_key)
+            return self._extract_text_if_requested(existing, extract_text=extract_text)
+        paper = self.fetcher.import_doi(clean_doi, citation_key=citation_key)
+        self.index.upsert_paper(paper)
         return self._extract_text_if_requested(paper, extract_text=extract_text)
 
     def _extract_text_if_requested(
@@ -146,6 +198,7 @@ class LiteratureResearcher:
             if text_ref.path not in {ref.path for ref in paper.artifact_refs}:
                 paper.artifact_refs.append(text_ref)
             self._update_paper_record(paper)
+            self.index.index_paper_text(paper)
         return text_path
 
     # ------------------------------------------------------------------
@@ -407,6 +460,9 @@ class LiteratureResearcher:
         if metadata_ref.path not in {ref.path for ref in paper.artifact_refs}:
             paper.artifact_refs.append(metadata_ref)
         self.store.append_jsonl("LiteratureDB/papers.jsonl", paper)
+        self.index.upsert_paper(paper)
+        if paper.text_path and self.store.exists(paper.text_path):
+            self.index.index_paper_text(paper)
 
     # ------------------------------------------------------------------
     # Extraction internals
@@ -478,13 +534,12 @@ class LiteratureResearcher:
                     text_ref,
                 )
 
-        has_acceptance_statement = bool(
-            extract.theorem_statements
-            or extract.algorithm_statements
-            or extract.lower_bound_statements
-        )
+        support_ids_by_statement = self.index.index_extract(extract)
+        has_acceptance_statement = bool(support_ids_by_statement)
         if has_acceptance_statement and not extract.extracted_claims:
-            extract.extracted_claims = self._claims_from_statements(extract)
+            extract.extracted_claims = self._claims_from_statements(
+                extract, support_ids_by_statement=support_ids_by_statement
+            )
         for claim in extract.extracted_claims:
             self._normalize_literature_claim(
                 claim,
@@ -492,6 +547,7 @@ class LiteratureResearcher:
                 has_acceptance_statement=has_acceptance_statement,
                 text_ref=text_ref,
                 notation_mappings=extract.notation_mappings,
+                support_ids=self._matching_support_ids_for_claim(claim, extract, support_ids_by_statement),
             )
         return extract
 
@@ -502,8 +558,9 @@ class LiteratureResearcher:
                 "LiteratureDB/notation_mappings.jsonl",
                 {"citation_key": extract.citation_key, "symbol": symbol, "canonical": canonical},
             )
-        if extract.extracted_claims:
-            self.store.append_claims(extract.extracted_claims)
+        # Do not auto-promote literature-derived statements into the global ClaimLedger.
+        # LiteratureDB records are evidence objects; research/obligation code must explicitly
+        # create claims that cite stable support IDs.
 
     def _normalize_statement(
         self,
@@ -528,6 +585,7 @@ class LiteratureResearcher:
                     paper_id=paper_id,
                     locator=statement.label,
                     quote=statement.original_statement,
+                    source_sha256=text_ref.sha256 if text_ref and text_ref.sha256 else "",
                     artifact_refs=[text_ref] if text_ref else [],
                 )
             ]
@@ -535,6 +593,8 @@ class LiteratureResearcher:
             for quote in statement.provenance:
                 quote.citation_key = quote.citation_key or citation_key
                 quote.paper_id = quote.paper_id or paper_id
+                if text_ref and text_ref.sha256 and not quote.source_sha256:
+                    quote.source_sha256 = text_ref.sha256
                 if text_ref and text_ref.path not in {ref.path for ref in quote.artifact_refs}:
                     quote.artifact_refs.append(text_ref)
 
@@ -546,6 +606,7 @@ class LiteratureResearcher:
         has_acceptance_statement: bool,
         text_ref: ArtifactRef | None,
         notation_mappings: dict[str, str],
+        support_ids: list[str],
     ) -> None:
         claim.claim_type = ClaimType.literature
         claim.normalized_statement = self.mapper.map_text(
@@ -563,8 +624,9 @@ class LiteratureResearcher:
                     ),
                     artifact_refs=[text_ref] if text_ref else [],
                     citation_keys=[citation_key],
+                    literature_support_ids=support_ids,
                     verifier="LiteratureResearcher",
-                    confidence=0.7 if has_acceptance_statement else 0.3,
+                    confidence=0.7 if has_acceptance_statement and support_ids else 0.3,
                 )
             )
         else:
@@ -574,14 +636,19 @@ class LiteratureResearcher:
                         ev.citation_keys.append(citation_key)
                     if text_ref and text_ref.path not in {ref.path for ref in ev.artifact_refs}:
                         ev.artifact_refs.append(text_ref)
-        if has_acceptance_statement:
+                    for support_id in support_ids:
+                        if support_id not in ev.literature_support_ids:
+                            ev.literature_support_ids.append(support_id)
+        if has_acceptance_statement and support_ids:
             claim.status = ClaimStatus.cited
         else:
             claim.status = ClaimStatus.needs_review
             if "unaccepted_no_extracted_theorem_or_algorithm" not in claim.tags:
                 claim.tags.append("unaccepted_no_extracted_theorem_or_algorithm")
 
-    def _claims_from_statements(self, extract: LiteratureExtract) -> list[ClaimRecord]:
+    def _claims_from_statements(
+        self, extract: LiteratureExtract, *, support_ids_by_statement: dict[str, str]
+    ) -> list[ClaimRecord]:
         claims: list[ClaimRecord] = []
         for statement in [
             *extract.theorem_statements,
@@ -589,12 +656,13 @@ class LiteratureResearcher:
             *extract.lower_bound_statements,
         ]:
             refs = statement.provenance[0].artifact_refs if statement.provenance else []
+            support_id = support_ids_by_statement.get(statement.statement_id, "")
             claims.append(
                 ClaimRecord(
                     claim_type=ClaimType.literature,
                     statement=f"{extract.citation_key} states: {statement.mapped_statement}",
                     normalized_statement=statement.mapped_statement,
-                    status=ClaimStatus.cited,
+                    status=ClaimStatus.cited if support_id else ClaimStatus.needs_review,
                     evidence=[
                         EvidenceRecord(
                             evidence_type=EvidenceType.citation,
@@ -604,6 +672,7 @@ class LiteratureResearcher:
                             ),
                             artifact_refs=refs,
                             citation_keys=[extract.citation_key],
+                            literature_support_ids=[support_id] if support_id else [],
                             verifier="LiteratureResearcher",
                             confidence=statement.confidence or 0.7,
                         )
@@ -612,6 +681,42 @@ class LiteratureResearcher:
                 )
             )
         return claims
+
+    def _matching_support_ids_for_claim(
+        self,
+        claim: ClaimRecord,
+        extract: LiteratureExtract,
+        support_ids_by_statement: dict[str, str],
+    ) -> list[str]:
+        """Return support IDs whose extracted statement text matches a literature claim."""
+        claim_text = _normalize_title(claim.normalized_statement or claim.statement)
+        if not claim_text:
+            return []
+        matched: list[str] = []
+        for statement in [
+            *extract.theorem_statements,
+            *extract.algorithm_statements,
+            *extract.lower_bound_statements,
+        ]:
+            stmt_text = _normalize_title(statement.mapped_statement or statement.original_statement)
+            if not stmt_text:
+                continue
+            support_id = support_ids_by_statement.get(statement.statement_id)
+            if not support_id:
+                continue
+            if stmt_text in claim_text or claim_text in stmt_text:
+                matched.append(support_id)
+        return list(dict.fromkeys(matched))
+
+    def _find_existing_paper_for_metadata(self, paper: PaperMetadata) -> PaperMetadata | None:
+        existing = None
+        if paper.doi:
+            existing = self.index.find_paper(doi=paper.doi)
+        if existing is None and paper.arxiv_id:
+            existing = self.index.find_paper(arxiv_id=paper.arxiv_id)
+        if existing is None:
+            existing = self.index.find_paper(title=paper.title)
+        return existing
 
     def _heuristic_extract(
         self,
@@ -666,7 +771,7 @@ class LiteratureResearcher:
                 "Deterministic regex extraction; review before relying on fine details."
             ),
         )
-        extract.extracted_claims = self._claims_from_statements(extract)
+        # Support IDs are assigned during postprocessing when the quote spans are indexed.
         return extract
 
 

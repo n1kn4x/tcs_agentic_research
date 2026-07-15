@@ -281,6 +281,7 @@ _MANIFEST_CORE_PRIORITY = {
     "LiteratureDB/papers.jsonl": 6,
     "LiteratureDB/extracted_claims.jsonl": 7,
     "LiteratureDB/query_answers.jsonl": 8,
+    "LiteratureDB/index.sqlite": 9,
 }
 
 
@@ -328,6 +329,8 @@ def _manifest_summary(store: ArtifactStore, rel: str, path: Path) -> str:
         return "Imported literature metadata index."
     if rel == "LiteratureDB/query_answers.jsonl":
         return "Literature query-answer ledger with quote provenance; use JSONL retrieval by answer_id."
+    if rel == "LiteratureDB/index.sqlite":
+        return "Materialized LiteratureDB index: canonical papers, aliases, passages, statements, quotes, and support IDs."
     if rel.startswith("Reports/iterations/") and path.name.startswith("proposal_"):
         return "Proposal artifact for a research iteration."
     if rel.startswith("Reports/iterations/") and "critique" in path.name:

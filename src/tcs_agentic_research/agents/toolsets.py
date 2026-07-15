@@ -503,11 +503,18 @@ def _compact_literature_answer(
                 "mapped_statement": _compact_text(result.mapped_statement, 1200),
                 "summary": _compact_text(result.summary, 800),
                 "score": result.score,
+                "statement_id": result.statement_id,
+                "quote_id": result.quote_id,
+                "support_id": result.support_id,
+                "support_level": result.support_level,
+                "relation": result.relation,
                 "duplicate_of": result.duplicate_of,
                 "provenance": [
                     {
+                        "quote_id": quote.quote_id,
                         "locator": quote.locator,
                         "quote_excerpt": _compact_text(quote.quote, 500),
+                        "validated": quote.validated,
                     }
                     for quote in result.provenance[:2]
                 ],
@@ -519,7 +526,7 @@ def _compact_literature_answer(
         "ledger_ref": ledger_ref.model_dump(mode="json"),
         "instruction": (
             "If a final submission uses this literature query, put answer_id/tool_result_id in "
-            "tool_result_ids and cite returned citation_key values."
+            "tool_result_ids and cite returned support_id values (preferred) plus citation_key values."
         ),
     }
 
