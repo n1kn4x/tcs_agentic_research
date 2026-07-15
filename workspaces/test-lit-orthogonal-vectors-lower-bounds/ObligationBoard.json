@@ -186,23 +186,23 @@
       ],
       "created_at": "2026-07-15T18:45:17.777384+00:00",
       "evidence_refs": [],
-      "failure_reason": "",
+      "failure_reason": "Obligation run outcome is `partial`, not `fulfilled`.; Citation key `Abboud_2016_Simulating` has no extracted theorem/algorithm/lower-bound statement.; Citation key `Carmosino_2016_Nondeterministic` has no extracted theorem/algorithm/lower-bound statement.",
       "generated_claim_ids": [],
       "kind": "literature",
-      "last_run_id": null,
+      "last_run_id": "obl_run_a893effb10f9",
       "obligation_id": "obl_df067cc678ce",
       "proposal_id": "proposal_9362c675d10a",
       "required_evidence": [
         "citation"
       ],
       "statement": "Read the text of imported papers to extract precise theorem statements about OV lower bounds under SETH, with quote-level provenance.",
-      "status": "open",
+      "status": "blocked",
       "success_criteria": [
         "At least 5 core papers on OV/SETH are imported or queued for import, including Williams STOC 2009, Abboud-Williams STOC 2014, and Backurs-Indyk STOC 2015.",
         "Extracted theorem statements with citation keys and quote-level provenance for the SETH-OV lower bound.",
         "A normalized explanation of assumptions and parameter regimes (logarithmic, polylogarithmic, polynomial dimension)."
       ],
-      "updated_at": "2026-07-15T18:45:17.777416+00:00"
+      "updated_at": "2026-07-15T20:10:55.499396+00:00"
     },
     {
       "assumptions": [
@@ -220,23 +220,23 @@
       ],
       "created_at": "2026-07-15T18:45:17.777529+00:00",
       "evidence_refs": [],
-      "failure_reason": "",
+      "failure_reason": "Evidence references unknown tool_result_id `paper ngo\u1ea1n2d97ac86b790`.; Obligation run outcome is `partial`, not `fulfilled`.; Citation key `Williams_2010_Subcubic` has no extracted theorem/algorithm/lower-bound statement.",
       "generated_claim_ids": [],
       "kind": "literature",
-      "last_run_id": null,
+      "last_run_id": "obl_run_a4b1e1e573d5",
       "obligation_id": "obl_4154472a14d1",
       "proposal_id": "proposal_9362c675d10a",
       "required_evidence": [
         "citation"
       ],
       "statement": "Query LiteratureDB to verify coverage of imported papers and extract any pre-existing statements.",
-      "status": "open",
+      "status": "blocked",
       "success_criteria": [
         "At least 5 core papers on OV/SETH are imported or queued for import, including Williams STOC 2009, Abboud-Williams STOC 2014, and Backurs-Indyk STOC 2015.",
         "Extracted theorem statements with citation keys and quote-level provenance for the SETH-OV lower bound.",
         "A normalized explanation of assumptions and parameter regimes (logarithmic, polylogarithmic, polynomial dimension)."
       ],
-      "updated_at": "2026-07-15T18:45:17.777559+00:00"
+      "updated_at": "2026-07-15T20:16:30.281204+00:00"
     },
     {
       "assumptions": [
@@ -254,23 +254,203 @@
       ],
       "created_at": "2026-07-15T18:45:17.777792+00:00",
       "evidence_refs": [],
-      "failure_reason": "",
+      "failure_reason": "Obligation run outcome is `partial`, not `fulfilled`.; Citation key `arxiv_1504.07401` has no extracted theorem/algorithm/lower-bound statement.; Citation key `Abboud_2016_Simulating` has no extracted theorem/algorithm/lower-bound statement.; Citation key `Williams_2010_Subcubic` has no extracted theorem/algorithm/lower-bound statement.; Citation key `Carmosino_2016_Nondeterministic` has no extracted theorem/algorithm/lower-bound statement.",
       "generated_claim_ids": [],
       "kind": "literature",
-      "last_run_id": null,
+      "last_run_id": "obl_run_de3b4b74e360",
       "obligation_id": "obl_9ce4bd04848d",
       "proposal_id": "proposal_9362c675d10a",
       "required_evidence": [
         "citation"
       ],
       "statement": "Produce a structured literature map distinguishing supported vs. unsupported claims about OV-SETH lower bounds across dimension regimes.",
-      "status": "open",
+      "status": "blocked",
       "success_criteria": [
         "At least 5 core papers on OV/SETH are imported or queued for import, including Williams STOC 2009, Abboud-Williams STOC 2014, and Backurs-Indyk STOC 2015.",
         "Extracted theorem statements with citation keys and quote-level provenance for the SETH-OV lower bound.",
         "A normalized explanation of assumptions and parameter regimes (logarithmic, polylogarithmic, polynomial dimension)."
       ],
-      "updated_at": "2026-07-15T18:45:17.777823+00:00"
+      "updated_at": "2026-07-15T20:18:30.376518+00:00"
+    },
+    {
+      "assumptions": [
+        "SETH implies OVH (Lemma 2.1, arxiv_1502.01063, page 6, support_id lit_sup_9267262b89fe).",
+        "OVH: no O(n^{2-\u03b5} poly(d)) algorithm for OV on n=m vectors (arxiv_1502.01063, page 6, support_id lit_sup_4c3232c765ce).",
+        "UOVH: no O((nm)^{1-\u03b5}) algorithm for OV with m=\u0398(n^\u03b1), d\u2264n^{o(1)} (arxiv_1502.01063, page 6, support_id lit_sup_244bae74457e).",
+        "The LiteratureDB import_url and import_arxiv tools can successfully fetch and extract text from academic papers when given valid URLs.",
+        "The PDF at LiteratureDB/papers/Williams_2010\u4f18\u79c0\u4eba\u624d_Subcubic/paper.pdf is the correct Williams 2010 Subcubic Equivalences paper.",
+        "SETH implies OVH is a known result (Lemma 2.1 in arxiv_1502.01063).",
+        "The OVH states: for no \u03b5>0 there is an algorithm for OV on n=m vectors in time O(n^{2-\u03b5} poly(d))."
+      ],
+      "created_at": "2026-07-15T20:28:30.847972+00:00",
+      "evidence_refs": [],
+      "failure_reason": "Obligation run outcome is `blocked`, not `fulfilled`.; Literature obligation lacks citation evidence with citation keys.",
+      "generated_claim_ids": [],
+      "kind": "literature",
+      "last_run_id": "obl_run_07c74943f6ac",
+      "obligation_id": "obl_003a75bd22a0",
+      "proposal_id": "proposal_349c1358b012",
+      "required_evidence": [
+        "citation"
+      ],
+      "statement": "Extract text from Williams_2010_Subcubic PDF: Use import_url with url=https://people.csail.mit.edu/rrw/w2010subcubic.pdf or re-import the existing PDF at LiteratureDB/papers/Williams_2010_Subcubic/paper.pdf via import_url to get text_path populated. Citation key: Williams_2010_Subcubic.",
+      "status": "blocked",
+      "success_criteria": [
+        "Extracted readable text for at least 3 of the 4 key papers: Williams_2010_Subcubic, Abboud_2016_Simulating, Carmosino_2016_Nondeterministic, arxiv_1502.01063.",
+        "For each paper with text, extract at least one theorem/lower-bound statement about OV-SETH implications with quote-level provenance (quote excerpt, page number, support_id).",
+        "Produce a structured literature map distinguishing supported claims (with citation keys and provenance) from unsupported claims."
+      ],
+      "updated_at": "2026-07-15T20:30:06.325644+00:00"
+    },
+    {
+      "assumptions": [
+        "SETH implies OVH (Lemma 2.1, arxiv_1502.01063, page 6, support_id lit_sup_9267262b89fe).",
+        "OVH: no O(n^{2-\u03b5} poly(d)) algorithm for OV on n=m vectors (arxiv_1502.01063, page 6, support_id lit_sup_4c3232c765ce).",
+        "UOVH: no O((nm)^{1-\u03b5}) algorithm for OV with m=\u0398(n^\u03b1), d\u2264n^{o(1)} (arxiv_1502.01063, page 6, support_id lit_sup_244bae74457e).",
+        "The LiteratureDB import_url and import_arxiv tools can successfully fetch and extract text from academic papers when given valid URLs.",
+        "The PDF at LiteratureDB/papers/Williams_2010\u4f18\u79c0\u4eba\u624d_Subcubic/paper.pdf is the correct Williams 2010 Subcubic Equivalences paper.",
+        "SETH implies OVH is a known result (Lemma 2.1 in arxiv_1502.01063).",
+        "The OVH states: for no \u03b5>0 there is an algorithm for OV on n=m vectors in time O(n^{2-\u03b5} poly(d))."
+      ],
+      "created_at": "2026-07-15T20:28:30.848149+00:00",
+      "evidence_refs": [],
+      "failure_reason": "Obligation run outcome is `blocked`, not `fulfilled`.; Literature obligation lacks citation evidence with citation keys.; Citation key `Abboud_2016_Simulating` has no extracted theorem/algorithm/lower-bound statement.",
+      "generated_claim_ids": [],
+      "kind": "literature",
+      "last_run_id": "obl_run_2a81a5430f8d",
+      "obligation_id": "obl_ad2292d6c42a",
+      "proposal_id": "proposal_349c1358b012",
+      "required_evidence": [
+        "citation"
+      ],
+      "statement": "Find and import text for Abboud_2016_Simulating: Search for arXiv version or author-hosted PDF (authors: Amir Abboud, Thomas Dueholm Hansen, Virginia Vassilevska Williams, Ryan Williams). Try import_url with https://theory.stanford.edu/~amir/ad/ or similar. Citation key: Abboud_2016_Simulating.",
+      "status": "blocked",
+      "success_criteria": [
+        "Extracted readable text for at least 3 of the 4 key papers: Williams_2010_Subcubic, Abboud_2016_Simulating, Carmosino_2016_Nondeterministic, arxiv_1502.01063.",
+        "For each paper with text, extract at least one theorem/lower-bound statement about OV-SETH implications with quote-level provenance (quote excerpt, page number, support_id).",
+        "Produce a structured literature map distinguishing supported claims (with citation keys and provenance) from unsupported claims."
+      ],
+      "updated_at": "2026-07-15T20:33:46.996156+00:00"
+    },
+    {
+      "assumptions": [
+        "SETH implies OVH (Lemma 2.1, arxiv_1502.01063, page 6, support_id lit_sup_9267262b89fe).",
+        "OVH: no O(n^{2-\u03b5} poly(d)) algorithm for OV on n=m vectors (arxiv_1502.01063, page 6, support_id lit_sup_4c3232c765ce).",
+        "UOVH: no O((nm)^{1-\u03b5}) algorithm for OV with m=\u0398(n^\u03b1), d\u2264n^{o(1)} (arxiv_1502.01063, page 6, support_id lit_sup_244bae74457e).",
+        "The LiteratureDB import_url and import_arxiv tools can successfully fetch and extract text from academic papers when given valid URLs.",
+        "The PDF at LiteratureDB/papers/Williams_2010\u4f18\u79c0\u4eba\u624d_Subcubic/paper.pdf is the correct Williams 2010 Subcubic Equivalences paper.",
+        "SETH implies OVH is a known result (Lemma 2.1 in arxiv_1502.01063).",
+        "The OVH states: for no \u03b5>0 there is an algorithm for OV on n=m vectors in time O(n^{2-\u03b5} poly(d))."
+      ],
+      "created_at": "2026-07-15T20:28:30.848343+00:00",
+      "evidence_refs": [],
+      "failure_reason": "",
+      "generated_claim_ids": [],
+      "kind": "literature",
+      "last_run_id": null,
+      "obligation_id": "obl_8a7984071b5f",
+      "proposal_id": "proposal_349c1358b012",
+      "required_evidence": [
+        "citation"
+      ],
+      "statement": "Find and import text for Carmosino_2016_Nondeterministic: Search for arXiv version or author-hosted PDF (authors: Marco L. Carmosino, Jiawei Gao, Russell Impagliazzo, Ivan Mihajlin, Ramamohan Paturi, Stefan Schneider). Try import_url with https://eccc.weizmann.ac.il/report/2016/ or similar. Citation key: Carmosino_2016_Nondeterministic.",
+      "status": "open",
+      "success_criteria": [
+        "Extracted readable text for at least 3 of the 4 key papers: Williams_2010_Subcubic, Abboud_2016_Simulating, Carmosino_2016_Nondeterministic, arxiv_1502.01063.",
+        "For each paper with text, extract at least one theorem/lower-bound statement about OV-SETH implications with quote-level provenance (quote excerpt, page number, support_id).",
+        "Produce a structured literature map distinguishing supported claims (with citation keys and provenance) from unsupported claims."
+      ],
+      "updated_at": "2026-07-15T20:28:30.848374+00:00"
+    },
+    {
+      "assumptions": [
+        "SETH implies OVH (Lemma 2.1, arxiv_1502.01063, page 6, support_id lit_sup_9267262b89fe).",
+        "OVH: no O(n^{2-\u03b5} poly(d)) algorithm for OV on n=m vectors (arxiv_1502.01063, page 6, support_id lit_sup_4c3232c765ce).",
+        "UOVH: no O((nm)^{1-\u03b5}) algorithm for OV with m=\u0398(n^\u03b1), d\u2264n^{o(1)} (arxiv_1502.01063, page 6, support_id lit_sup_244bae74457e).",
+        "The LiteratureDB import_url and import_arxiv tools can successfully fetch and extract text from academic papers when given valid URLs.",
+        "The PDF at LiteratureDB/papers/Williams_2010\u4f18\u79c0\u4eba\u624d_Subcubic/paper.pdf is the correct Williams 2010 Subcubic Equivalences paper.",
+        "SETH implies OVH is a known result (Lemma 2.1 in arxiv_1502.01063).",
+        "The OVH states: for no \u03b5>0 there is an algorithm for OV on n=m vectors in time O(n^{2-\u03b5} poly(d))."
+      ],
+      "created_at": "2026-07-15T20:28:30.848543+00:00",
+      "evidence_refs": [],
+      "failure_reason": "",
+      "generated_claim_ids": [],
+      "kind": "literature",
+      "last_run_id": null,
+      "obligation_id": "obl_2d433761a59a",
+      "proposal_id": "proposal_349c1358b012",
+      "required_evidence": [
+        "citation"
+      ],
+      "statement": "Verify and extract theorem statements from arxiv_1502.01063 (Bringmann-K\u00fcnnemann): Read the extracted text at LiteratureDB/papers/arxiv_1502.01063/paper.txt, identify and extract Lemma 2.1 (SETH implies OVH and UOVH) and OVH/UOVH definitions with quote-level provenance. Citation key: arxiv_1502.01063.",
+      "status": "open",
+      "success_criteria": [
+        "Extracted readable text for at least 3 of the 4 key papers: Williams_2010_Subcubic, Abboud_2016_Simulating, Carmosino_2016_Nondeterministic, arxiv_1502.01063.",
+        "For each paper with text, extract at least one theorem/lower-bound statement about OV-SETH implications with quote-level provenance (quote excerpt, page number, support_id).",
+        "Produce a structured literature map distinguishing supported claims (with citation keys and provenance) from unsupported claims."
+      ],
+      "updated_at": "2026-07-15T20:28:30.848573+00:00"
+    },
+    {
+      "assumptions": [
+        "SETH implies OVH (Lemma 2.1, arxiv_1502.01063, page 6, support_id lit_sup_9267262b89fe).",
+        "OVH: no O(n^{2-\u03b5} poly(d)) algorithm for OV on n=m vectors (arxiv_1502.01063, page 6, support_id lit_sup_4c3232c765ce).",
+        "UOVH: no O((nm)^{1-\u03b5}) algorithm for OV with m=\u0398(n^\u03b1), d\u2264n^{o(1)} (arxiv_1502.01063, page 6, support_id lit_sup_244bae74457e).",
+        "The LiteratureDB import_url and import_arxiv tools can successfully fetch and extract text from academic papers when given valid URLs.",
+        "The PDF at LiteratureDB/papers/Williams_2010\u4f18\u79c0\u4eba\u624d_Subcubic/paper.pdf is the correct Williams 2010 Subcubic Equivalences paper.",
+        "SETH implies OVH is a known result (Lemma 2.1 in arxiv_1502.01063).",
+        "The OVH states: for no \u03b5>0 there is an algorithm for OV on n=m vectors in time O(n^{2-\u03b5} poly(d))."
+      ],
+      "created_at": "2026-07-15T20:28:30.848798+00:00",
+      "evidence_refs": [],
+      "failure_reason": "",
+      "generated_claim_ids": [],
+      "kind": "literature",
+      "last_run_id": null,
+      "obligation_id": "obl_243f32453687",
+      "proposal_id": "proposal_349c1358b012",
+      "required_evidence": [
+        "citation"
+      ],
+      "statement": "Verify text quality: For each paper with newly extracted text, check for garbled characters, missing sections, or incomplete paragraphs. Flag any papers where text quality is insufficient for claim extraction.",
+      "status": "open",
+      "success_criteria": [
+        "Extracted readable text for at least 3 of the 4 key papers: Williams_2010_Subcubic, Abboud_2016_Simulating, Carmosino_2016_Nondeterministic, arxiv_1502.01063.",
+        "For each paper with text, extract at least one theorem/lower-bound statement about OV-SETH implications with quote-level provenance (quote excerpt, page number, support_id).",
+        "Produce a structured literature map distinguishing supported claims (with citation keys and provenance) from unsupported claims."
+      ],
+      "updated_at": "2026-07-15T20:28:30.848829+00:00"
+    },
+    {
+      "assumptions": [
+        "SETH implies OVH (Lemma 2.1, arxiv_1502.01063, page 6, support_id lit_sup_9267262b89fe).",
+        "OVH: no O(n^{2-\u03b5} poly(d)) algorithm for OV on n=m vectors (arxiv_1502.01063, page 6, support_id lit_sup_4c3232c765ce).",
+        "UOVH: no O((nm)^{1-\u03b5}) algorithm for OV with m=\u0398(n^\u03b1), d\u2264n^{o(1)} (arxiv_1502.01063, page 6, support_id lit_sup_244bae74457e).",
+        "The LiteratureDB import_url and import_arxiv tools can successfully fetch and extract text from academic papers when given valid URLs.",
+        "The PDF at LiteratureDB/papers/Williams_2010\u4f18\u79c0\u4eba\u624d_Subcubic/paper.pdf is the correct Williams 2010 Subcubic Equivalences paper.",
+        "SETH implies OVH is a known result (Lemma 2.1 in arxiv_1502.01063).",
+        "The OVH states: for no \u03b5>0 there is an algorithm for OV on n=m vectors in time O(n^{2-\u03b5} poly(d))."
+      ],
+      "created_at": "2026-07-15T20:28:30.848956+00:00",
+      "evidence_refs": [],
+      "failure_reason": "",
+      "generated_claim_ids": [],
+      "kind": "literature",
+      "last_run_id": null,
+      "obligation_id": "obl_4dd788febdc9",
+      "proposal_id": "proposal_349c1358b012",
+      "required_evidence": [
+        "citation"
+      ],
+      "statement": "Query LiteratureDB for any additional OV-SETH statements: Use query_literature with queries about 'Orthogonal Vectors SETH lower bound', 'OVH dimension regime', 'NSETH OV' to find any statements already extracted from imported papers.",
+      "status": "open",
+      "success_criteria": [
+        "Extracted readable text for at least 3 of the 4 key papers: Williams_2010_Subcubic, Abboud_2016_Simulating, Carmosino_2016_Nondeterministic, arxiv_1502.01063.",
+        "For each paper with text, extract at least one theorem/lower-bound statement about OV-SETH implications with quote-level provenance (quote excerpt, page number, support_id).",
+        "Produce a structured literature map distinguishing supported claims (with citation keys and provenance) from unsupported claims."
+      ],
+      "updated_at": "2026-07-15T20:28:30.848986+00:00"
     }
   ],
   "runs": [
@@ -1188,7 +1368,1466 @@
         "ok": false,
         "warnings": []
       }
+    },
+    {
+      "artifact_refs": [
+        {
+          "created_at": "2026-07-15T20:06:48.123863+00:00",
+          "kind": "other",
+          "path": "LiteratureDB/papers/arxiv_1402.0054/paper.pdf",
+          "sha256": "8baac33bdff2ddd7bd192915b52de37a5ed284c541c296cb177a874a2f4a76ad",
+          "summary": "Wrote binary artifact LiteratureDB/papers/arxiv_1402.0054/paper.pdf"
+        },
+        {
+          "created_at": "2026-07-15T20:06:48.125806+00:00",
+          "kind": "json",
+          "path": "LiteratureDB/papers/arxiv_1402.0054/metadata.json",
+          "sha256": "f43a30c99d87a6c9afc5d477ea324b281679e6ed2f4291e6088981bf895b57c2",
+          "summary": "Wrote text artifact LiteratureDB/papers/arxiv_1402.0054/metadata.json"
+        },
+        {
+          "created_at": "2026-07-15T20:06:49.892514+00:00",
+          "kind": "markdown",
+          "path": "LiteratureDB/papers/arxiv_1402.0054/paper.txt",
+          "sha256": "aa7a8debb6f17b49e3afb04a6cb7514375892e9b2edfd3b63168412426826dde",
+          "summary": ""
+        },
+        {
+          "created_at": "2026-07-15T20:06:50.254962+00:00",
+          "kind": "jsonl",
+          "path": "LiteratureDB/extracted_claims.jsonl",
+          "sha256": "66e7108e1493cc658dd0a091c3e956cf533425ba5ac2c369c9e92f76ecd7b4aa",
+          "summary": ""
+        },
+        {
+          "created_at": "2026-07-15T20:06:50.387583+00:00",
+          "kind": "other",
+          "path": "LiteratureDB/papers/arxiv_1502.01063/paper.pdf",
+          "sha256": "397b76272a4437dac41d465ff2be29722b446e75eb3b4f948df5c80516d601ac",
+          "summary": "Wrote binary artifact LiteratureDB/papers/arxiv_1502.01063/paper.pdf"
+        },
+        {
+          "created_at": "2026-07-15T20:06:50.389082+00:00",
+          "kind": "json",
+          "path": "LiteratureDB/papers/arxiv_1502.01063/metadata.json",
+          "sha256": "8f13fbfeeda04119b77b15c98751323f67b0dc2d91c877a57807ebe4a2574012",
+          "summary": "Wrote text artifact LiteratureDB/papers/arxiv_1502.01063/metadata.json"
+        },
+        {
+          "created_at": "2026-07-15T20:06:51.787900+00:00",
+          "kind": "markdown",
+          "path": "LiteratureDB/papers/arxiv_1502.01063/paper.txt",
+          "sha256": "0745d236fef7933be626d412cd9076c086e15dc27b8885ffeefb46792e65e913",
+          "summary": ""
+        },
+        {
+          "created_at": "2026-07-15T20:06:47.921585+00:00",
+          "kind": "json",
+          "path": "LiteratureDB/papers/Abboud_2016_Simulating/metadata.json",
+          "sha256": "046eab655927749f8e1bf8a9b5cd50dc356b79f40272fd9125e093503e9900cb",
+          "summary": "Wrote text artifact LiteratureDB/papers/Abboud_2016_Simulating/metadata.json"
+        },
+        {
+          "created_at": "2026-07-15T20:06:52.502013+00:00",
+          "kind": "json",
+          "path": "LiteratureDB/papers/Carmosino_2016_Nondeterministic/metadata.json",
+          "sha256": "e96547c1f4039e71b77fba14cc24b57cb636fd9d4806045bd1367e23412d2c11",
+          "summary": "Wrote text artifact LiteratureDB/papers/Carmosino_2016_Nondeterministic/metadata.json"
+        },
+        {
+          "created_at": "2026-07-15T20:10:34.915843+00:00",
+          "kind": "jsonl",
+          "path": "LiteratureDB/query_answers.jsonl",
+          "sha256": "0c73b5c3f1e40d178d081e91968e56871c39acb4c7995801ed71b1d04278aef2",
+          "summary": ""
+        },
+        {
+          "created_at": "2026-07-15T20:10:55.376342+00:00",
+          "kind": "json",
+          "path": "Reports/iterations/iteration_0001/obligation_tool_trace_obl_run_a893effb10f9.json",
+          "sha256": "e3ecba7da2dd73e742d7725d2e69e76dace8d56a9b550c5e9adee1574a89e00f",
+          "summary": "Wrote text artifact Reports/iterations/iteration_0001/obligation_tool_trace_obl_run_a893effb10f9.json"
+        },
+        {
+          "created_at": "2026-07-15T20:10:55.387421+00:00",
+          "kind": "markdown",
+          "path": "Reports/iterations/iteration_0001/obligation_tool_trace_obl_run_a893effb10f9.md",
+          "sha256": "eaab3aff71b4852d1004427566aa2816221d25903f4e38b509fef99035d3b175",
+          "summary": "Wrote text artifact Reports/iterations/iteration_0001/obligation_tool_trace_obl_run_a893effb10f9.md"
+        },
+        {
+          "created_at": "2026-07-15T20:10:55.390083+00:00",
+          "kind": "json",
+          "path": "Reports/iterations/iteration_0001/obligation_run_obl_run_a893effb10f9.json",
+          "sha256": "518fd5e9c7f15b766072853b3aa1984f909e0e544c3ee87c3b49546878b009f8",
+          "summary": "Wrote text artifact Reports/iterations/iteration_0001/obligation_run_obl_run_a893effb10f9.json"
+        }
+      ],
+      "child_obligations": [],
+      "claims_generated": [
+        {
+          "assumptions": [],
+          "claim_id": "claim_783ae45052ef",
+          "claim_type": "literature",
+          "created_at": "2026-07-15T20:10:55.365471+00:00",
+          "depends_on_claim_ids": [],
+          "evidence": [],
+          "normalized_statement": "",
+          "related_proposal_ids": [
+            "proposal_9362c675d10a"
+          ],
+          "related_report_ids": [],
+          "statement": "SETH implies the Orthogonal Vectors Hypothesis (OVH): for no \u03b5 > 0 there is an algorithm for OVjeros on n = m instances running in time O(n^(2\u2212\u03b5) poly(d))",
+          "status": "cited",
+          "supersedes_claim_ids": [],
+          "tags": [],
+          "updated_at": "2026-07-15T20:10:55.365502+00:00"
+        },
+        {
+          "assumptions": [],
+          "claim_id": "claim_e3707d6147a9",
+          "claim_type": "literature",
+          "created_at": "2026-07-15T20:10:55.365571+00:00",
+          "depends_on_claim_ids": [],
+          "evidence": [],
+          "normalized_statement": "",
+          "related_proposal_ids": [
+            "proposal_9362c675d10a"
+          ],
+          "related_report_ids": [],
+          "statement": "SETH also implies the Unbalanced Orthogonal Vectors Hypothesis (UOVH): for 0 < \u03b1 \u2264 1, no algorithm for OV with m = \u0398(n^\u03b1) and d \u2264 n^o(1) runs in time O((nm)^(1\u2212\u03b5))",
+          "status": "cited",
+          "supersedes_claim_ids": [],
+          "tags": [],
+          "updated_at": "2026-07-15T20:10:55.365601+00:00"
+        },
+        {
+          "assumptions": [],
+          "claim_id": "claim_a5cae70ecd03",
+          "claim_type": "literature",
+          "created_at": "2026-07-15T20:10:55.365666+00:00",
+          "depends_on_claim_ids": [],
+          "evidence": [],
+          "normalized_statement": "",
+          "related_proposal_ids": [
+            "proposal_9362c675d10a"
+          ],
+          "related_report_ids": [],
+          "statement": "OVH and UOVH are weaker assumptions than SETH",
+          "status": "cited",
+          "supersedes_claim_ids": [],
+          "tags": [],
+          "updated_at": "2026-07-15T20:10:55.365796+00:00"
+        },
+        {
+          "assumptions": [],
+          "claim_id": "claim_8e0cd4e125da",
+          "claim_type": "literature",
+          "created_at": "2026-07-15T20:10:55.365863+00:00",
+          "depends_on_claim_ids": [],
+          "evidence": [],
+          "normalized_statement": "",
+          "related_proposal_ids": [
+            "proposal_9362c675d10a"
+          ],
+          "related_report_ids": [],
+          "statement": "Bringmann-K\u00fcnnemann (arxiv_1502.01063) prove SETH-based quadratic lower bounds for Edit Distance, LCS, and DTW via reductions from OV",
+          "status": "cited",
+          "supersedes_claim_ids": [],
+          "tags": [],
+          "updated_at": "2026-07-15T20:10:55.365893+00:00"
+        },
+        {
+          "assumptions": [],
+          "claim_id": "claim_06abd50dacee",
+          "claim_type": "literature",
+          "created_at": "2026-07-15T20:10:55.365958+00:00",
+          "depends_on_claim_ids": [],
+          "evidence": [],
+          "normalized_statement": "",
+          "related_proposal_ids": [
+            "proposal_9362c675d10a"
+          ],
+          "related_report_ids": [],
+          "statement": "The reduction framework uses alignment gadgets to transfer OV hardness to similarity measures",
+          "status": "cited",
+          "supersedes_claim_ids": [],
+          "tags": [],
+          "updated_at": "2026-07-15T20:10:55.365988+00:00"
+        },
+        {
+          "assumptions": [],
+          "claim_id": "claim_a9d0504ec695",
+          "claim_type": "literature",
+          "created_at": "2026-07-15T20:10:55.366053+00:00",
+          "depends_on_claim_ids": [],
+          "evidence": [],
+          "normalized_statement": "",
+          "related_proposal_ids": [
+            "proposal_9362c675d10a"
+          ],
+          "related_report_ids": [],
+          "statement": "Abboud-Williams (arxiv_1402.0054) establish SETH-based lower bounds for dynamic problems including APSP, triangle detection, and BMM",
+          "status": "cited",
+          "supersedes_claim_ids": [],
+          "tags": [],
+          "updated_at": "2026-07-15T20:10:55.366083+00:00"
+        },
+        {
+          "assumptions": [],
+          "claim_id": "claim_b68df2770091",
+          "claim_type": "literature",
+          "created_at": "2026-07-15T20:10:55.366148+00:00",
+          "depends_on_claim_ids": [],
+          "evidence": [],
+          "normalized_statement": "",
+          "related_proposal_ids": [
+            "proposal_9362c675d10a"
+          ],
+          "related_report_ids": [],
+          "statement": "Williams STOC 2009 (faster exhaustive search) is cited as the origin of SETH and the SETH\u2192OVH implication, but this paper was not successfully imported",
+          "status": "cited",
+          "supersedes_claim_ids": [],
+          "tags": [],
+          "updated_at": "2026-07-15T20:10:55.366178+00:00"
+        },
+        {
+          "assumptions": [],
+          "claim_id": "claim_4d62afc15425",
+          "claim_type": "literature",
+          "created_at": "2026-07-15T20:10:55.366263+00:00",
+          "depends_on_claim_ids": [],
+          "evidence": [],
+          "normalized_statement": "",
+          "related_proposal_ids": [
+            "proposal_9362c675d10a"
+          ],
+          "related_report_ids": [],
+          "statement": "Backurs-Indyk STOC 2015 (Edit Distance CPX-completeness under SETH) was not successfully imported",
+          "status": "cited",
+          "supersedes_claim_ids": [],
+          "tags": [],
+          "updated_at": "2026-07-15T20:10:55.366294+00:00"
+        }
+      ],
+      "created_at": "2026-07-15T20:10:55.366379+00:00",
+      "evidence": [
+        {
+          "artifact_refs": [
+            {
+              "created_at": "2026-07-15T20:06:48.123863+00:00",
+              "kind": "other",
+              "path": "LiteratureDB/papers/arxiv_1402.0054/paper.pdf",
+              "sha256": "8baac33bdff2ddd7bd192915b52de37a5ed284c541c296cb177a874a2f4a76ad",
+              "summary": "Wrote binary artifact LiteratureDB/papers/arxiv_1402.0054/paper.pdf"
+            },
+            {
+              "created_at": "2026-07-15T20:06:48.125806+00:00",
+              "kind": "json",
+              "path": "LiteratureDB/papers/arxiv_1402.0054/metadata.json",
+              "sha256": "f43a30c99d87a6c9afc5d477ea324b281679e6ed2f4291e6088981bf895b57c2",
+              "summary": "Wrote text artifact LiteratureDB/papers/arxiv_1402.0054/metadata.json"
+            },
+            {
+              "created_at": "2026-07-15T20:06:49.892514+00:00",
+              "kind": "markdown",
+              "path": "LiteratureDB/papers/arxiv_1402.0054/paper.txt",
+              "sha256": "aa7a8debb6f17b49e3afb04a6cb7514375892e9b2edfd3b63168412426826dde",
+              "summary": ""
+            },
+            {
+              "created_at": "2026-07-15T20:06:50.254962+00:00",
+              "kind": "jsonl",
+              "path": "LiteratureDB/extracted_claims.jsonl",
+              "sha256": "66e7108e1493cc658dd0a091c3e956cf533425ba5ac2c369c9e92f76ecd7b4aa",
+              "summary": ""
+            },
+            {
+              "created_at": "2026-07-15T20:06:50.387583+00:00",
+              "kind": "other",
+              "path": "LiteratureDB/papers/arxiv_1502.01063/paper.pdf",
+              "sha256": "397b76272a4437dac41d465ff2be29722b446e75eb3b4f948df5c80516d601ac",
+              "summary": "Wrote binary artifact LiteratureDB/papers/arxiv_1502.01063/paper.pdf"
+            },
+            {
+              "created_at": "2026-07-15T20:06:50.389082+00:00",
+              "kind": "json",
+              "path": "LiteratureDB/papers/arxiv_1502.01063/metadata.json",
+              "sha256": "8f13fbfeeda04119b77b15c98751323f67b0dc2d91c877a57807ebe4a2574012",
+              "summary": "Wrote text artifact LiteratureDB/papers/arxiv_1502.01063/metadata.json"
+            },
+            {
+              "created_at": "2026-07-15T20:06:51.787900+00:00",
+              "kind": "markdown",
+              "path": "LiteratureDB/papers/arxiv_1502.01063/paper.txt",
+              "sha256": "0745d236fef7933be626d412cd9076c086e15dc27b8885ffeefb46792e65e913",
+              "summary": ""
+            },
+            {
+              "created_at": "2026-07-15T20:06:47.921585+00:00",
+              "kind": "json",
+              "path": "LiteratureDB/papers/Abboud_2016_Simulating/metadata.json",
+              "sha256": "046eab655927749f8e1bf8a9b5cd50dc356b79f40272fd9125e093503e9900cb",
+              "summary": "Wrote text artifact LiteratureDB/papers/Abboud_2016_Simulating/metadata.json"
+            },
+            {
+              "created_at": "2026-07-15T20:06:52.502013+00:00",
+              "kind": "json",
+              "path": "LiteratureDB/papers/Carmosino_2016_Nondeterministic/metadata.json",
+              "sha256": "e96547c1f4039e71b77fba14cc24b57cb636fd9d4806045bd1367e23412d2c11",
+              "summary": "Wrote text artifact LiteratureDB/papers/Carmosino_2016_Nondeterministic/metadata.json"
+            },
+            {
+              "created_at": "2026-07-15T20:10:34.915843+00:00",
+              "kind": "jsonl",
+              "path": "LiteratureDB/query_answers.jsonl",
+              "sha256": "0c73b5c3f1e40d178d081e91968e56871c39acb4c7995801ed71b1d04278aef2",
+              "summary": ""
+            }
+          ],
+          "citation_keys": [
+            "arxiv_1502.01063",
+            "arxiv_1402.0054",
+            "Abboud_2016_Simulating",
+            "Carmosino_2016_Nondeterministic"
+          ],
+          "confidence": 0.5,
+          "created_at": "2026-07-15T20:10:55.365363+00:00",
+          "evidence_id": "ev_a192410b5e5e",
+          "evidence_type": "citation",
+          "literature_support_ids": [
+            "lit_stmt_69415d99f2b4",
+            "lit_stmt_95c884334efb",
+            "lit_stmt_4a8c05f03602",
+            "lit_stmt_f1e4a5d2c0f7",
+            "lit_stmt_6f51f5f6d868",
+            "lit_stmt_26eb35370e82",
+            "lit_stmt_663f90b7bfe9",
+            "lit_stmt_cf81b7e98cd4",
+            "lit_stmt_1610958efdc7",
+            "lit_stmt_70be39613733",
+            "lit_stmt_4491331a3b08",
+            "lit_stmt_d525b310edc2",
+            "lit_stmt_ac4883e436e8",
+            "lit_stmt_9c41737689d8",
+            "lit_stmt_50a6cc7ed928",
+            "lit_stmt_627f65ada9f2",
+            "lit_stmt_601bd1bbf5a6",
+            "lit_stmt_4151a320f503",
+            "lit_stmt_65364dfb6638",
+            "lit_stmt_50d490f298a5",
+            "lit_stmt_f3d3d78bfc12",
+            "lit_stmt_e0e40ac06f71",
+            "lit_stmt_d6cd27c55721",
+            "lit_stmt_38ad7403c9bd",
+            "lit_stmt_137f41d9aaeb",
+            "lit_stmt_d0f8330984c7",
+            "lit_stmt_47b0b0f64cb6",
+            "lit_stmt_5675f3aecca8",
+            "lit_stmt_2638d9b7e9b6",
+            "lit_stmt_b13dfa0af351",
+            "lit_stmt_9089b185b11c",
+            "lit_stmt_e270f112539f",
+            "lit_stmt_0b57f770cf82",
+            "lit_stmt_5df74cbf6428",
+            "lit_stmt_a023d1d615a1",
+            "lit_stmt_f820d4da7c54",
+            "lit_stmt_c4fe720730bc",
+            "lit_stmt_0ac19d523e1e",
+            "lit_stmt_439316768519",
+            "lit_stmt_ae41577f8024",
+            "lit_stmt_1956fb4f2c36",
+            "lit_stmt_7980f9f1a416",
+            "lit_stmt_d1efdd3c36ac",
+            "lit_stmt_3b0065165bd2",
+            "lit_stmt_8f7f3b0f88d4",
+            "lit_stmt_3b43ea9dcdf6",
+            "lit_stmt_8ce70c221c66",
+            "lit_stmt_b00c34789919",
+            "lit_stmt_e724fb7fdcf1",
+            "lit_stmt_b118532a68e7",
+            "lit_stmt_56d7845d0bc3",
+            "lit_stmt_1d885e8b052f",
+            "lit_stmt_e8b250e7b0fc",
+            "lit_stmt_df35189bc6ce",
+            "lit_stmt_b0f08aed9bd2",
+            "lit_stmt_abd12d68b8e4",
+            "lit_stmt_40a26aa17927",
+            "lit_stmt_e0ca009999b5",
+            "lit_stmt_d5a3c7aa301b",
+            "lit_stmt_8d8bf73a1590",
+            "lit_stmt_1859240832f8",
+            "lit_stmt_49f41cdc5e38",
+            "lit_stmt_f54a91cf3505",
+            "lit_stmt_cfd8898fe0f2",
+            "lit_stmt_4aa04afbe556",
+            "lit_stmt_d130bcbb316c",
+            "lit_stmt_15ee00f621bf",
+            "lit_stmt_0a4ffacdd329",
+            "lit_stmt_218afe8c0c5c",
+            "lit_stmt_fd80629db146",
+            "lit_stmt_7954728ac5e7",
+            "lit_stmt_013afe0dbfe7",
+            "lit_stmt_a7c0cdf022ec",
+            "lit_stmt_9eaee3d50fc2",
+            "lit_stmt_1b1a4919813f",
+            "lit_stmt_9a36c9a65cf6",
+            "lit_stmt_9cc8060deade",
+            "lit_stmt_c775466b1378",
+            "lit_stmt_16639811163d",
+            "lit_stmt_e7e260e12b4e",
+            "lit_stmt_a876ec96c83c",
+            "lit_stmt_5d6d6b26cf8c",
+            "lit_sup_244bae74457e",
+            "lit_sup_4c3232c765ce",
+            "lit_sup_68aa16d11d8b",
+            "lit_sup_a4ef56616cf3",
+            "lit_sup_4657b24f342f"
+          ],
+          "summary": "Imported 4 papers: arxiv_1402.0054 (Abboud-Williams 2014, extracted 53 statements), arxiv_1502.01063 (Bringmann-K\u00fcnnemann 2015, extracted 17 theorems/6 lower bounds), Abboud_2016_Simulating (no text), Carmosino_2016_Nondeterministic (no text). Extracted OVH, UOVH definitions and SETH\u2192OVH implication from Bringmann-K\u00fcnnemann with quote-level provenance (page 6). Missing: Williams STOC 2009 (original SETH paper) and Backurs-Indyk STOC 2015 (Edit Distance lower bound) - could not be found or imported via search.",
+          "tool_result_ids": [
+            "paper_c31823857410",
+            "paper_4a3760490568",
+            "paper_1eb060124368",
+            "paper_2259ac7845ec",
+            "lit_extract_batch_1bbe2954485a",
+            "lit_answer_e907fcb7c03f"
+          ],
+          "verifier": "LiteratureResearcher"
+        }
+      ],
+      "obligation_id": "obl_df067cc678ce",
+      "outcome": "partial",
+      "proposal_id": "proposal_9362c675d10a",
+      "run_id": "obl_run_a893effb10f9",
+      "summary": "Extracted SETH-OV lower bound statements from 2 imported papers (arxiv_1402.0054, arxiv_1502.01063) with quote-level provenance. OVH and UOVH formally defined with SETH implication established. However, only 4 of 5 required core papers were imported (missing Williams STOC 2009 and Backurs-Indyk STOC 2015), and 2 of those had no extractable text.",
+      "unresolved_blockers": [
+        "Williams STOC 2009 'Faster Exhaustive Search' paper could not be found or imported; this is the original source of SETH and the SETH\u2192OVH reduction",
+        "Backurs-Indyk STOC 2015 'Edit Distance is CPX-Complete' paper could not be found or imported; this is the seminal SETH-based quadratic lower bound for Edit Distance",
+        "Abboud_2016_Simulating and Carmosino_2016_Nondeterministic were imported but have no text_path or pdf_path, so no theorem extraction was possible"
+      ],
+      "validation": {
+        "blocking_issues": [
+          "Obligation run outcome is `partial`, not `fulfilled`.",
+          "Citation key `Abboud_2016_Simulating` has no extracted theorem/algorithm/lower-bound statement.",
+          "Citation key `Carmosino_2016_Nondeterministic` has no extracted theorem/algorithm/lower-bound statement."
+        ],
+        "created_at": "2026-07-15T20:10:55.496787+00:00",
+        "gate_results": [
+          {
+            "gate": "scope_provenance",
+            "issues": [],
+            "passed": true
+          },
+          {
+            "gate": "evidence",
+            "issues": [
+              "Obligation run outcome is `partial`, not `fulfilled`.",
+              "Citation key `Abboud_2016_Simulating` has no extracted theorem/algorithm/lower-bound statement.",
+              "Citation key `Carmosino_2016_Nondeterministic` has no extracted theorem/algorithm/lower-bound statement."
+            ],
+            "passed": false
+          },
+          {
+            "gate": "consistency",
+            "issues": [],
+            "passed": true
+          }
+        ],
+        "ok": false,
+        "warnings": []
+      }
+    },
+    {
+      "artifact_refs": [
+        {
+          "created_at": "2026-07-15T20:10:57.776512+00:00",
+          "kind": "jsonl",
+          "path": "LiteratureDB/query_answers.jsonl",
+          "sha256": "3c0513c39e91a8721cca2b62362f4ca1d78c6da976ca6578d4025249bc8d8395",
+          "summary": ""
+        },
+        {
+          "created_at": "2026-07-15T20:11:41.178999+00:00",
+          "kind": "jsonl",
+          "path": "LiteratureDB/extracted_claims.jsonl",
+          "sha256": "ac94a3929688f5de51cc03f1b4f116811b26df50117cfbd0d055bba0c6344703",
+          "summary": ""
+        },
+        {
+          "created_at": "2026-07-15T20:16:30.214954+00:00",
+          "kind": "json",
+          "path": "Reports/iterations/iteration_0002/obligation_tool_trace_obl_run_a4b1e1e573d5.json",
+          "sha256": "5672c29ea88c6f77d83166d5f973d903aeb1cf599280b3348ced2c1502a29ce1",
+          "summary": "Wrote text artifact Reports/iterations/iteration_0002/obligation_tool_trace_obl_run_a4b1e1e573d5.json"
+        },
+        {
+          "created_at": "2026-07-15T20:16:30.234258+00:00",
+          "kind": "markdown",
+          "path": "Reports/iterations/iteration_0002/obligation_tool_trace_obl_run_a4b1e1e573d5.md",
+          "sha256": "2ad38b89c92a1a25091e2231961213a776f71b493eb36b4fd4d82d5481a5723e",
+          "summary": "Wrote text artifact Reports/iterations/iteration_0002/obligation_tool_trace_obl_run_a4b1e1e573d5.md"
+        },
+        {
+          "created_at": "2026-07-15T20:16:30.236507+00:00",
+          "kind": "json",
+          "path": "Reports/iterations/iteration_0002/obligation_run_obl_run_a4b1e1e573d5.json",
+          "sha256": "6eae32a5abd1065897bd0bef92762941b03a29ad67cefa44f80b9d9aedb5700c",
+          "summary": "Wrote text artifact Reports/iterations/iteration_0002/obligation_run_obl_run_a4b1e1e573d5.json"
+        }
+      ],
+      "child_obligations": [],
+      "claims_generated": [
+        {
+          "assumptions": [],
+          "claim_id": "claim_570ec301663d",
+          "claim_type": "literature",
+          "created_at": "2026-07-15T20:16:30.198250+00:00",
+          "depends_on_claim_ids": [],
+          "evidence": [],
+          "normalized_statement": "",
+          "related_proposal_ids": [
+            "proposal_9362c675d10a"
+          ],
+          "related_report_ids": [],
+          "statement": "LiteratureDB contains 4 imported papers: Abboud_2016_Simulating, arxiv_1402.0054, arxiv_1502.01063, Carmosino_2016_Nondeterministic.",
+          "status": "cited",
+          "supersedes_claim_ids": [],
+          "tags": [],
+          "updated_at": "2026-07-15T20:16:30.198281+00:00"
+        },
+        {
+          "assumptions": [],
+          "claim_id": "claim_dbf1897874e2",
+          "claim_type": "literature",
+          "created_at": "2026-07-15T20:16:30.198349+00:00",
+          "depends_on_claim_ids": [],
+          "evidence": [],
+          "normalized_statement": "",
+          "related_proposal_ids": [
+            "proposal_9362c675d10a"
+          ],
+          "related_report_ids": [],
+          "statement": "arxiv_1502.01063 (Bringmann, K\u00fcnnemann 2015) contains extracted statements for OVH and UOVH with quote-level provenance.",
+          "status": "cited",
+          "supersedes_claim_ids": [],
+          "tags": [],
+          "updated_at": "2026-07-15T20:16:30.198380+00:00"
+        },
+        {
+          "assumptions": [],
+          "claim_id": "claim_a9a55f16563b",
+          "claim_type": "literature",
+          "created_at": "2026-07-15T20:16:30.198445+00:00",
+          "depends_on_claim_ids": [],
+          "evidence": [],
+          "normalized_statement": "",
+          "related_proposal_ids": [
+            "proposal_9362c675d10a"
+          ],
+          "related_report_ids": [],
+          "statement": "arxiv_1402.0054 (Abboud, Williams 2014) contains extracted statements for SETH and dynamic problem lower bounds.",
+          "status": "cited",
+          "supersedes_claim_ids": [],
+          "tags": [],
+          "updated_at": "2026-07-15T20:16:30.198475+00:00"
+        },
+        {
+          "assumptions": [],
+          "claim_id": "claim_eefa3dee97a8",
+          "claim_type": "literature",
+          "created_at": "2026-07-15T20:16:30.198541+00:00",
+          "depends_on_claim_ids": [],
+          "evidence": [],
+          "normalized_statement": "",
+          "related_proposal_ids": [
+            "proposal_9362c675d10a"
+          ],
+          "related_report_ids": [],
+          "statement": "Williams_2010_Subcubic was imported but PDF text extraction failed.",
+          "status": "cited",
+          "supersedes_claim_ids": [],
+          "tags": [],
+          "updated_at": "2026-07-15T20:16:30.198571+00:00"
+        },
+        {
+          "assumptions": [],
+          "claim_id": "claim_3244ef97550a",
+          "claim_type": "literature",
+          "created_at": "2026-07-15T20:16:30.198646+00:00",
+          "depends_on_claim_ids": [],
+          "evidence": [],
+          "normalized_statement": "",
+          "related_proposal_ids": [
+            "proposal_9362c675d10a"
+          ],
+          "related_report_ids": [],
+          "statement": "Williams STOC 2009, Backurs-Indyk STOC 2015, and Abboud-Williams SODA 2014 wereannaot successfully imported or extracted.",
+          "status": "cited",
+          "supersedes_claim_ids": [],
+          "tags": [],
+          "updated_at": "2026-07-15T20:16:30.198785+00:00"
+        }
+      ],
+      "created_at": "2026-07-15T20:16:30.198875+00:00",
+      "evidence": [
+        {
+          "artifact_refs": [
+            {
+              "created_at": "2026-07-15T20:10:57.776512+00:00",
+              "kind": "jsonl",
+              "path": "LiteratureDB/query_answers.jsonl",
+              "sha256": "3c0513c39e91a8721cca2b62362f4ca1d78c6da976ca6578d4025249bc8d8395",
+              "summary": ""
+            },
+            {
+              "created_at": "2026-07-15T20:11:41.178999+00:00",
+              "kind": "jsonl",
+              "path": "LiteratureDB/extracted_claims.jsonl",
+              "sha256": "ac94a3929688f5de51cc03f1b4f116811b26df50117cfbd0d055bba0c6344703",
+              "summary": ""
+            }
+          ],
+          "citation_keys": [
+            "arxiv_1502.01063",
+            "arxiv_1402.0054",
+            "Williams_2010_Subcubic"
+          ],
+          "confidence": 0.5,
+          "created_at": "2026-07-15T20:16:30.198159+00:00",
+          "evidence_id": "ev_5c1615bde55f",
+          "evidence_type": "citation",
+          "literature_support_ids": [
+            "lit_sup_244bae74457e",
+            "lit_sup_4c3232c765ce",
+            "lit_sup_b84cbef96a68",
+            "lit_sup_d71e8ee4174d",
+            "lit_sup_68aa16d11d8b",
+            "lit_sup_57f97fd31ffb",
+            "lit_sup_013e355ba3c3",
+            "lit_sup_3d3b3613a00d",
+            "lit_sup_27508672361c",
+            "lit_sup_a4ef56616cf3",
+            "lit_sup_93fb89434a33",
+            "lit_sup_4657b24f342f"
+          ],
+          "summary": "LiteratureDB queries returned extracted claims for OVH, UOVH, and SETH from arxiv_1502.01063 and arxiv_1402.0054. Williams_2010_Subcubic was imported but text extraction failed. Core papers Williams STOC 2009, Backurs-Indyk STOC 2015, and Abboud-Williams SODA 2014 were not successfully imported or extracted.",
+          "tool_result_ids": [
+            "lit_answer_2850285a1246",
+            "lit_answer_18e731d760a3",
+            "lit_answer_aaa0c1ad27d8",
+            "lit_answer_06940b5fb812",
+            "lit_extract_batch_e305fe6430c9",
+            "paper ngo\u1ea1n2d97ac86b790"
+          ],
+          "verifier": "LiteratureResearcher"
+        }
+      ],
+      "obligation_id": "obl_4154472a14d1",
+      "outcome": "partial",
+      "proposal_id": "proposal_9362c675d10a",
+      "run_id": "obl_run_a4b1e1e573d5",
+      "summary": "Queried LiteratureDB to verify coverage of imported papers and extract pre-existing statements. Found 4 imported papers: Abboud_2016_Simulating (no text), arxiv_1402.0054 (Abboud-Williams 2014, already extracted), arxiv_1502.01063 (Bringmann-K\u00fcnnemann 2015, already extracted), Carmosino_2016_Nondeterministic (no text). Extracted statements include: OVH (Orthogonal Vectors Hypothesis) from arxiv_1502.01063 stating no O(n^(2-\u03b5) poly(d)) algorithm exists; UOVH (Unbalanced OVH) from same paper; SETH definition from arxiv_1402.0054; and various lower bound claims. Imported Williams_2010_Subcubic (FOCS 2010) but PDF text extraction failed (scanned/no text). Searched for Williams STOC 2009, Backurs-Indyk STOC 2015, and Abboud-Williams SODA 2014 \"Hardness of Interactivity\" but could not locate or import them due to search limitations and API rate limits. The LiteratureDB contains extracted claims for OVH, UOVH, and SETH from Bringmann-K\u00fcnnemann 2015 and Abboud-Williams 2014, but is missing direct extracted statements from the three core papers explicitly required by the success criteria: Williams STOC 2009 (subcubic equivalences), Backurs-Indyk STOC 2015 (edit distance SETH lower bound), and Abboud-Williams SODA 2014 (Hardness of Interactivity/OV). The obligation to extract statements from these specific papers is not fulfilled.",
+      "unresolved_blockers": [
+        "Williams STOC 2009 paper not imported or extracted.",
+        "Backurs-Indyk STOC 2015 paper not imported or extracted.",
+        "Abboud-Williams SODA 2014 'Hardness of Interactivity' paper not imported or extracted."
+      ],
+      "validation": {
+        "blocking_issues": [
+          "Evidence references unknown tool_result_id `paper ngo\u1ea1n2d97ac86b790`.",
+          "Obligation run outcome is `partial`, not `fulfilled`.",
+          "Citation key `Williams_2010_Subcubic` has no extracted theorem/algorithm/lower-bound statement."
+        ],
+        "created_at": "2026-07-15T20:16:30.278941+00:00",
+        "gate_results": [
+          {
+            "gate": "scope_provenance",
+            "issues": [
+              "Evidence references unknown tool_result_id `paper ngo\u1ea1n2d97ac86b790`."
+            ],
+            "passed": false
+          },
+          {
+            "gate": "evidence",
+            "issues": [
+              "Obligation run outcome is `partial`, not `fulfilled`.",
+              "Citation key `Williams_2010_Subcubic` has no extracted theorem/algorithm/lower-bound statement."
+            ],
+            "passed": false
+          },
+          {
+            "gate": "consistency",
+            "issues": [],
+            "passed": true
+          }
+        ],
+        "ok": false,
+        "warnings": []
+      }
+    },
+    {
+      "artifact_refs": [
+        {
+          "created_at": "2026-07-15T20:16:33.702106+00:00",
+          "kind": "jsonl",
+          "path": "LiteratureDB/query_answers.jsonl",
+          "sha256": "836765c6041211c3399af6adb9e0e47fbf3bf9cec19d7f95b156d45734d202b5",
+          "summary": ""
+        },
+        {
+          "created_at": "2026-07-15T20:17:19.850430+00:00",
+          "kind": "other",
+          "path": "LiteratureDB/papers/arxiv_1312.6680/paper.pdf",
+          "sha256": "0501a4244aab3a087f33ac9fc862eb86432f1a3c8ed8d8d36a69a6d99294d117",
+          "summary": "Wrote binary artifact LiteratureDB/papers/arxiv_1312.6680/paper.pdf"
+        },
+        {
+          "created_at": "2026-07-15T20:17:19.852368+00:00",
+          "kind": "json",
+          "path": "LiteratureDB/papers/arxiv_1312.6680/metadata.json",
+          "sha256": "57fe9781eafca3351539ca812a6117a5be079a86795e244c7166b3895c9d5c51",
+          "summary": "Wrote text artifact LiteratureDB/papers/arxiv_1312.6680/metadata.json"
+        },
+        {
+          "created_at": "2026-07-15T20:17:20.727178+00:00",
+          "kind": "markdown",
+          "path": "LiteratureDB/papers/arxiv_1312.6680/paper.txt",
+          "sha256": "ef26b8d8bb507107bfe3b6611cd98fe51b4c9bef137a7319670c7f3263ae1dda",
+          "summary": ""
+        },
+        {
+          "created_at": "2026-07-15T20:17:20.859904+00:00",
+          "kind": "jsonl",
+          "path": "LiteratureDB/extracted_claims.jsonl",
+          "sha256": "1b934afbe261ac349a88650a937ddf1f77f37f31c1072704c42ab06012e0fa83",
+          "summary": ""
+        },
+        {
+          "created_at": "2026-07-15T20:17:21.480437+00:00",
+          "kind": "other",
+          "path": "LiteratureDB/papers/arxiv_1504.03297/paper.pdf",
+          "sha256": "4e7c9e81fbf8faafce48ba34c83831d74a0d60aa6bcf635cbd295496bc1ce44f",
+          "summary": "Wrote binary artifact LiteratureDB/papers/arxiv_1504.03297/paper.pdf"
+        },
+        {
+          "created_at": "2026-07-15T20:17:21.482450+00:00",
+          "kind": "json",
+          "path": "LiteratureDB/papers/arxiv_1504.03297/metadata.json",
+          "sha256": "bd19cda04285222ab12c69aeda70944417f7849f7ef569d4a4775658257e5847",
+          "summary": "Wrote text artifact LiteratureDB/papers/arxiv_1504.03297/metadata.json"
+        },
+        {
+          "created_at": "2026-07-15T20:17:22.084818+00:00",
+          "kind": "markdown",
+          "path": "LiteratureDB/papers/arxiv_1504.03297/paper.txt",
+          "sha256": "f087b782ed2a84a2ac34f505723f734a3fa0a0f6b5a7cf57023a5d5148110647",
+          "summary": ""
+        },
+        {
+          "created_at": "2026-07-15T20:17:54.205955+00:00",
+          "kind": "other",
+          "path": "LiteratureDB/papers/arxiv_1504.07401/paper.pdf",
+          "sha256": "aedf322beedd61332f05d98f1dea1319ab8c35deef629c88a11cd7a31b4a8188",
+          "summary": "Wrote binary artifact LiteratureDB/papers/arxiv_1504.07401/paper.pdf"
+        },
+        {
+          "created_at": "2026-07-15T20:17:54.207905+00:00",
+          "kind": "json",
+          "path": "LiteratureDB/papers/arxiv_1504.07401/metadata.json",
+          "sha256": "d2d473ce1adeca59caa367130418119f28b5609d91dd7f5636589d96d3cb72c4",
+          "summary": "Wrote text artifact LiteratureDB/papers/arxiv_1504.07401/metadata.json"
+        },
+        {
+          "created_at": "2026-07-15T20:17:54.602862+00:00",
+          "kind": "markdown",
+          "path": "LiteratureDB/papers/arxiv_1504.07401/paper.txt",
+          "sha256": "cbba6ea71da6b9f4b9062739fab2fa0e72209ec89c54d9553313190800b9e53a",
+          "summary": ""
+        },
+        {
+          "created_at": "2026-07-15T20:18:30.254005+00:00",
+          "kind": "json",
+          "path": "Reports/iterations/iteration_0003/obligation_tool_trace_obl_run_de3b4b74e360.json",
+          "sha256": "8ccb157617df17f3f87279edfe3df61c2b430b95b4cb4612634ffe1c7fadfb29",
+          "summary": "Wrote text artifact Reports/iterations/iteration_0003/obligation_tool_trace_obl_run_de3b4b74e360.json"
+        },
+        {
+          "created_at": "2026-07-15T20:18:30.268260+00:00",
+          "kind": "markdown",
+          "path": "Reports/iterations/iteration_0003/obligation_tool_trace_obl_run_de3b4b74e360.md",
+          "sha256": "d82c8090c0794378f0c91a69986372f96f518466fff966eb90c0472c1f062a54",
+          "summary": "Wrote text artifact Reports/iterations/iteration_0003/obligation_tool_trace_obl_run_de3b4b74e360.md"
+        },
+        {
+          "created_at": "2026-07-15T20:18:30.270870+00:00",
+          "kind": "json",
+          "path": "Reports/iterations/iteration_0003/obligation_run_obl_run_de3b4b74e360.json",
+          "sha256": "01689c1ded29335bfd568ef76d84e450613b6b3b81b5baff4404b8ff1dbddb1b",
+          "summary": "Wrote text artifact Reports/iterations/iteration_0003/obligation_run_obl_run_de3b4b74e360.json"
+        }
+      ],
+      "child_obligations": [],
+      "claims_generated": [
+        {
+          "assumptions": [],
+          "claim_id": "claim_fe5ffab899b7",
+          "claim_type": "literature",
+          "created_at": "2026-07-15T20:18:30.236477+00:00",
+          "depends_on_claim_ids": [],
+          "evidence": [],
+          "normalized_statement": "",
+          "related_proposal_ids": [
+            "proposal_9362c675d10a"
+          ],
+          "related_report_ids": [],
+          "statement": "SETH implies OVH (Orthogonal Vectors Hypothesis): For no \u03b5 > 0 there is an algorithm for OV restricted to n=m that runs in time O(n^{2-\u03b5} poly(d))",
+          "status": "cited",
+          "supersedes_claim_ids": [],
+          "tags": [],
+          "updated_at": "2026-07-15T20:18:30.236507+00:00"
+        },
+        {
+          "assumptions": [],
+          "claim_id": "claim_9ac18e83e4a4",
+          "claim_type": "literature",
+          "created_at": "2026-07-15T20:18:30.236572+00:00",
+          "depends_on_claim_ids": [],
+          "evidence": [],
+          "normalized_statement": "",
+          "related_proposal_ids": [
+            "proposal_9362c675d10a"
+          ],
+          "related_report_ids": [],
+          "statement": "SETH implies UOVH (Unbalanced OV Hypothesis): For no \u03b5 > 0 there is an algorithm for OV restricted to m=\u0398(n^\u03b1) and d\u2264n^{o(1)} that runs in time O((nm)^{1-\u03b5})",
+          "status": "cited",
+          "supersedes_claim_ids": [],
+          "tags": [],
+          "updated_at": "2026-07-15T20:18:30.236615+00:00"
+        },
+        {
+          "assumptions": [],
+          "claim_id": "claim_289f7a38e5f6",
+          "claim_type": "literature",
+          "created_at": "2026-07-15T20:18:30.236786+00:00",
+          "depends_on_claim_ids": [],
+          "evidence": [],
+          "normalized_statement": "",
+          "related_proposal_ids": [
+            "proposal_9362c675d10a"
+          ],
+          "related_report_ids": [],
+          "statement": "SETH formulation: For every \u03b5 > 0 there exists k such that SAT on k-CNF formulas on n variables cannot be solved in O(2^{(1-\u03b5)n} poly(n)) time",
+          "status": "cited",
+          "supersedes_claim_ids": [],
+          "tags": [],
+          "updated_at": "2026-07-15T20:18:30.236816+00:00"
+        },
+        {
+          "assumptions": [],
+          "claim_id": "claim_8762c470e4f3",
+          "claim_type": "literature",
+          "created_at": "2026-07-15T20:18:30.236881+00:00",
+          "depends_on_claim_ids": [],
+          "evidence": [],
+          "normalized_statement": "",
+          "related_proposal_ids": [
+            "proposal_9362c675d10a"
+          ],
+          "related_report_ids": [],
+          "statement": "LCS and longest tandem subsequence have no O(n^{2-\u03b5}) algorithms unless SETH fails (Theorem 1.5, arxiv_1502.01063)",
+          "status": "cited",
+          "supersedes_claim_ids": [],
+          "tags": [],
+          "updated_at": "2026-07-15T20:18:30.236910+00:00"
+        },
+        {
+          "assumptions": [],
+          "claim_id": "claim_78786748183c",
+          "claim_type": "literature",
+          "created_at": "2026-07-15T20:18:30.236975+00:00",
+          "depends_on_claim_ids": [],
+          "evidence": [],
+          "normalized_statement": "",
+          "related_proposal_ids": [
+            "proposal_9362c675d10a"
+          ],
+          "related_report_ids": [],
+          "statement": "Williams 2013 arxiv_1312.6680 establishes faster APSP via circuit complexity with n^3/2^{\u03a9((log n)^{1/2})} time on real RAM",
+          "status": "cited",
+          "supersedes_claim_ids": [],
+          "tags": [],
+          "updated_at": "2026-07-15T20:18:30.237004+00:00"
+        },
+        {
+          "assumptions": [],
+          "claim_id": "claim_35854209b768",
+          "claim_type": "literature",
+          "created_at": "2026-07-15T20:18:30.237068+00:00",
+          "depends_on_claim_ids": [],
+          "evidence": [],
+          "normalized_statement": "",
+          "related_proposal_ids": [
+            "proposal_9362c675d10a"
+          ],
+          "related_report_ids": [],
+          "statement": "OVH is a weaker assumption than SETH (arxiv_1502.01063, page 6)",
+          "status": "cited",
+          "supersedes_claim_ids": [],
+          "tags": [],
+          "updated_at": "2026-07-15T20:18:30.237098+00:00"
+        },
+        {
+          "assumptions": [],
+          "claim_id": "claim_f728973cb646",
+          "claim_type": "literature",
+          "created_at": "2026-07-15T20:18:30.237162+00:00",
+          "depends_on_claim_ids": [],
+          "evidence": [],
+          "normalized_statement": "",
+          "related_proposal_ids": [
+            "proposal_9362c675d10a"
+          ],
+          "related_report_ids": [],
+          "statement": "UOVH is a weaker assumption than SETH (arxiv_1502.01063, page 6)",
+          "status": "cited",
+          "supersedes_claim_ids": [],
+          "tags": [],
+          "updated_at": "2026-07-15T20:18:30.237191+00:00"
+        }
+      ],
+      "created_at": "2026-07-15T20:18:30.237269+00:00",
+      "evidence": [
+        {
+          "artifact_refs": [
+            {
+              "created_at": "2026-07-15T20:16:33.702106+00:00",
+              "kind": "jsonl",
+              "path": "LiteratureDB/query_answers.jsonl",
+              "sha256": "836765c6041211c3399af6adb9e0e47fbf3bf9cec19d7f95b156d45734d202b5",
+              "summary": ""
+            },
+            {
+              "created_at": "2026-07-15T20:17:19.850430+00:00",
+              "kind": "other",
+              "path": "LiteratureDB/papers/arxiv_1312.6680/paper.pdf",
+              "sha256": "0501a4244aab3a087f33ac9fc862eb86432f1a3c8ed8d8d36a69a6d99294d117",
+              "summary": "Wrote binary artifact LiteratureDB/papers/arxiv_1312.6680/paper.pdf"
+            },
+            {
+              "created_at": "2026-07-15T20:17:19.852368+00:00",
+              "kind": "json",
+              "path": "LiteratureDB/papers/arxiv_1312.6680/metadata.json",
+              "sha256": "57fe9781eafca3351539ca812a6117a5be079a86795e244c7166b3895c9d5c51",
+              "summary": "Wrote text artifact LiteratureDB/papers/arxiv_1312.6680/metadata.json"
+            },
+            {
+              "created_at": "2026-07-15T20:17:20.727178+00:00",
+              "kind": "markdown",
+              "path": "LiteratureDB/papers/arxiv_1312.6680/paper.txt",
+              "sha256": "ef26b8d8bb507107bfe3b6611cd98fe51b4c9bef137a7319670c7f3263ae1dda",
+              "summary": ""
+            },
+            {
+              "created_at": "2026-07-15T20:17:20.859904+00:00",
+              "kind": "jsonl",
+              "path": "LiteratureDB/extracted_claims.jsonl",
+              "sha256": "1b934afbe261ac349a88650a937ddf1f77f37f31c1072704c42ab06012e0fa83",
+              "summary": ""
+            },
+            {
+              "created_at": "2026-07-15T20:17:21.480437+00:00",
+              "kind": "other",
+              "path": "LiteratureDB/papers/arxiv_1504.03297/paper.pdf",
+              "sha256": "4e7c9e81fbf8faafce48ba34c83831d74a0d60aa6bcf635cbd295496bc1ce44f",
+              "summary": "Wrote binary artifact LiteratureDB/papers/arxiv_1504.03297/paper.pdf"
+            },
+            {
+              "created_at": "2026-07-15T20:17:21.482450+00:00",
+              "kind": "json",
+              "path": "LiteratureDB/papers/arxiv_1504.03297/metadata.json",
+              "sha256": "bd19cda04285222ab12c69aeda70944417f7849f7ef569d4a4775658257e5847",
+              "summary": "Wrote text artifact LiteratureDB/papers/arxiv_1504.03297/metadata.json"
+            },
+            {
+              "created_at": "2026-07-15T20:17:22.084818+00:00",
+              "kind": "markdown",
+              "path": "LiteratureDB/papers/arxiv_1504.03297/paper.txt",
+              "sha256": "f087b782ed2a84a2ac34f505723f734a3fa0a0f6b5a7cf57023a5d5148110647",
+              "summary": ""
+            },
+            {
+              "created_at": "2026-07-15T20:17:54.205955+00:00",
+              "kind": "other",
+              "path": "LiteratureDB/papers/arxiv_1504.07401/paper.pdf",
+              "sha256": "aedf322beedd61332f05d98f1dea1319ab8c35deef629c88a11cd7a31b4a8188",
+              "summary": "Wrote binary artifact LiteratureDB/papers/arxiv_1504.07401/paper.pdf"
+            },
+            {
+              "created_at": "2026-07-15T20:17:54.207905+00:00",
+              "kind": "json",
+              "path": "LiteratureDB/papers/arxiv_1504.07401/metadata.json",
+              "sha256": "d2d473ce1adeca59caa367130418119f28b5609d91dd7f5636589d96d3cb72c4",
+              "summary": "Wrote text artifact LiteratureDB/papers/arxiv_1504.07401/metadata.json"
+            },
+            {
+              "created_at": "2026-07-15T20:17:54.602862+00:00",
+              "kind": "markdown",
+              "path": "LiteratureDB/papers/arxiv_1504.07401/paper.txt",
+              "sha256": "cbba6ea71da6b9f4b9062739fab2fa0e72209ec89c54d9553313190800b9e53a",
+              "summary": ""
+            }
+          ],
+          "citation_keys": [
+            "arxiv_1502.01063",
+            "arxiv_1402.0054",
+            "arxiv_1312.6680",
+            "Williams_2010_Subcubic",
+            "Abboud_2016_Simulating",
+            "Carmosino_2016_Nondeterministic",
+            "arxiv_1504.03297",
+            "arxiv_1504.07401"
+          ],
+          "confidence": 0.5,
+          "created_at": "2026-07-15T20:18:30.236394+00:00",
+          "evidence_id": "ev_851642ff1de0",
+          "evidence_type": "citation",
+          "literature_support_ids": [
+            "lit_sup_244bae74457e",
+            "lit_sup_4c3232c765ce",
+            "lit_sup_d71e8ee4174d",
+            "lit_sup_b84cbef96a68",
+            "lit_sup_68aa16d11d8b",
+            "lit_sup_57f97fd31ffb",
+            "lit_sup_9267262b89fe",
+            "lit_sup_23946e70efbf",
+            "lit_sup_49f0639d1e0c",
+            "lit_sup_21101c20b1e4",
+            "lit_sup_3d3b3613a00d",
+            "lit_sup_013e355ba3c3",
+            "lit_sup_4c273d14851c",
+            "lit_sup_a4ef56616cf3",
+            "lit_sup_4657b24f342f",
+            "lit_sup_93fb89434a33",
+            "lit_sup_27508672361c",
+            "lit_sup_72abce53b89e",
+            "lit_stmt_9416ab4ef7ba",
+            "lit_stmt_81d93ffa6d6f",
+            "lit_stmt_5fdd80e66172",
+            "lit_stmt_ba3b6b907a2c",
+            "lit_stmt_74fd1874733c",
+            "lit_stmt_74fda13506c2",
+            "lit_stmt_dcf76fa005b7",
+            "lit_stmt_75fe64252b9d",
+            "lit_stmt_cd2144fb77c6",
+            "lit_stmt_1f0d75e0217c",
+            "lit_stmt_139baad74450",
+            "lit_stmt_3e7a2377f20b",
+            "lit_stmt_c019eec7c127",
+            "lit_stmt_4fca4cbedb0d",
+            "lit_stmt_98607aeaeb2e",
+            "lit_stmt_1aa031ffcbb2",
+            "lit_stmt_d1d114ab12e0",
+            "lit_stmt_114263df5f21",
+            "lit_stmt_77b7ad688f5d"
+          ],
+          "summary": "6 papers imported/queued in LiteratureDB; 3 with extracted theorem/lower-bound statements and quote-level provenance; 3 without text extraction. Key supported claims: SETH implies OVH and UOVH (arxiv_1502.01063 Lemma 2.1), SETH formulation (arxiv_1402.0054 Conjecture 3), LCS lower bounds (arxiv_1502.01063 Theorem 1.5). Missing: Backurs-Indyk STOC 2015, Abboud-Williams STOC 2014.",
+          "tool_result_ids": [
+            "lit_answer_e5447bea352c",
+            "lit_answer_2f7efb9e7e37",
+            "lit_answer_4e30d24aad94",
+            "lit_answer_f8ce85fcfe42",
+            "lit_answer_df3dad4c12c8",
+            "lit_answer_f268e411a851",
+            "lit_answer_cc92433d0a51",
+            "paper_7f2a3449268c",
+            "paper_f21f20aed0c1",
+            "paper_177273963240"
+          ],
+          "verifier": "LiteratureResearcher"
+        }
+      ],
+      "obligation_id": "obl_9ce4bd04848d",
+      "outcome": "partial",
+      "proposal_id": "proposal_9362c675d10a",
+      "run_id": "obl_run_de3b4b74e360",
+      "summary": "Structured literature map for OV-SETH lower bounds across dimension regimes. \n\n**IMPORTED PAPERS WITH EXTRACTED STATEMENTS:**\n\n1. **arxiv_1\u5c82502.01063** (Bringmann, K\u00fcnnemann 2015) - \"Quadratic Conditional Lower Bounds for String Problems and Dynamic Time Warping\"\n   - OVH (Orthogonal Vectors Hypothesis): \"For no \u03b5 > 0 there is an algorithm for OV, restricted to n = m, that runs in time O(n^{2-\u03b5} poly(d))\" (page 6, support_id: lit_sup_4c3232c765ce)\n   - UOVH (Unbalanced OV Hypothesis): \"For no \u03b5 > 0 there is an algorithm for OVchronically, restricted to m = \u0398(n^\u03b1) and d \u2264 n^{o(1)}, that runs in time O((nm Swagger 1-\u03b5)\" (page 6, support_id: lit_sup_244bae74457e)\n   - Lemma 2.1: \"SETH implies OVH and UOVH\" (page 6, support_id: lit_sup_9267262b89fe)\n   - Theorem 1.5: LCS and longest tandem subsequence have no O(n^{2-\u03b5}) algorithms unless SETH fails (page 4, support_id: lit_sup_68aa16d11d8b)\n\n2. **arxiv_1402.0054** (Abboud, Williams 2014) - \"Popular conjectures imply strong lower bounds for dynamic problems\"\n   - Conjecture 3 (SETH): \"For every \u03b5 > 0, there exists a k, such that SAT on k-CNF formulas on n variables cannot be solved in O*(2^{(1-\u03b5)n}) time\" (page 3, support_id: lit_sup_49f0639d1e0c)\n   - Proposition 1: \"If SETH is true, then for every \u03b3 > 0 there exists a k such that k-SAT instances on O(n) clauses require 2^{(1-\u03b3)n-o(n)} time\" (page 24, support_id: lit_sup_21101c20b1e4)\n\n3. **arxiv_1312.6680** (Williams 2013) - \"Faster all-pairs shortest paths via circuit complexity\"\n   - Theorem 1.2: Minimum weight triangle in m^{3/2}/2^{\u03a9(\u2113(m))} time\n   - Theorem 1.3: Connection between truly subcubic APSP and circuit lower bounds\n   - Corollary 1.1: Multiple problems solvable in n^{3}/2^{\u03a9(\u2113(n))} time\n\n4. **Williams_2010_Subcubic** (Williams, Williams FOCS 2010) - \"Subcubic algorithms are unlikely\"\n   - IMPORTED BUT PDF TEXT EXTRACTION FAILED (scanned PDF, no OCR)\n\n5. **Abboud_2016_Simulating** (Abboud, Hansen, Williams, Williams STOC 2016) - \"Simulating branching programs with edit distance\"\n   - Metadata only, no text/pdf path available\n\n6. **Carmosino_2016_Nondeterministic** (Carmosino et al. ITCS 2016) - \"Nondeterministic SETH and applications\"\n   - Metadata only, no text/pdf path available\n\n**SUPPORTED CLAIMS:**\n- SETH implies OVH (Lemma 2.1 in arxiv_1502.01063, citation_key: arxiv_1502.01063, support_id: lit_sup_9267262b89fe)\n- SETH implies UOVH (Lemma 2.1 in arxiv_1502.01063, citation_key: arxiv_1502.01063, support_id: lit_sup_244bae74457e)\n- OVH states: no O(n^{2-\u03b5} poly(d)) algorithm for OV when n=m (arxiv_1502.01063, page 6, support_id: lit_sup_4c3232c765ce)\n- UOVH states: no O((nm)^{1-\u03b5}) algorithm for OV when m=\u0398(n^\u03b1), d\u2264n^{o(1)} (arxiv_1502.01063, page 6, support_id: lit_sup_244bae74457e)\n- SETH formulation: \u2200\u03b5>0 \u2203k: k-SAT not solvable in O(2^{(1-\u03b5)n} poly(n)) (arxiv_1402.0054, page 3, support_id: lit_sup_49f0639d1e0c)\n\n**UNSUPPORTED/MISSING CLAIMS:**\n- Backurs-Indyk STOC 2015 \"Edit Distance Cannot Be Computed in Strongly Subquadratic Time Unless SETH Fails\" - NOT imported (search API rate-limited, DOI import failed)\n- Abboud-Williams STOC 2014 \"A Comprehensive Framework for SETH-based Lower Bounds\" - NOT imported\n- Williams STOC 2009 \"Subcubic Algorithms are Unlikely\" - imported but text extraction failed\n\n**DIMENSION REGIMES:**\n- Polynomial dimension (d = poly(n)): OVH applies, no O(n^{2-\u03b5} poly(d)) algorithm\n- Logarithmic/polylogarithmic dimension (d = polylog(n)): Not explicitly addressed in imported sources\n- Unbalanced regime (m = n^\u03b1, d = n^{o(1)}): UOVH applies, no O((nm kekurangan 1-\u03b5)) algorithm\n\n**BLOCKERS:**\n- Backurs-Indyk STOC 2015 paper not imported (critical for Edit Distance lower bounds)\n- Abboud-Williams STOC 2014 paper not imported\n- Williams STOC 2009 paper text extraction failed\n- Search API rate-limited preventing additional imports",
+      "unresolved_blockers": [
+        "Backurs-Indyk STOC 2015 paper not imported - critical for Edit Distance lower bounds under SETH",
+        "Abboud-Williams STOC 20oble 2014 paper not imported",
+        "Williams STOC 2009 paper text extraction failed (scanned PDF)",
+        "Search API rate-limited (429 errors) preventing additional imports",
+        "Logarithmic/polylogarithmic dimension regime not explicitly addressed in imported sources"
+      ],
+      "validation": {
+        "blocking_issues": [
+          "Obligation run outcome is `partial`, not `fulfilled`.",
+          "Citation key `arxiv_1504.07401` has no extracted theorem/algorithm/lower-bound statement.",
+          "Citation key `Abboud_2016_Simulating` has no extracted theorem/algorithm/lower-bound statement.",
+          "Citation key `Williams_2010_Subcubic` has no extracted theorem/algorithm/lower-bound statement.",
+          "Citation key `Carmosino_2016_Nondeterministic` has no extracted theorem/algorithm/lower-bound statement."
+        ],
+        "created_at": "2026-07-15T20:18:30.374090+00:00",
+        "gate_results": [
+          {
+            "gate": "scope_provenance",
+            "issues": [],
+            "passed": true
+          },
+          {
+            "gate": "evidence",
+            "issues": [
+              "Obligation run outcome is `partial`, not `fulfilled`.",
+              "Citation key `arxiv_1504.07401` has no extracted theorem/algorithm/lower-bound statement.",
+              "Citation key `Abboud_2016_Simulating` has no extracted theorem/algorithm/lower-bound statement.",
+              "Citation key `Williams_2010_Subcubic` has no extracted theorem/algorithm/lower-bound statement.",
+              "Citation key `Carmosino_2016_Nondeterministic` has no extracted theorem/algorithm/lower-bound statement."
+            ],
+            "passed": false
+          },
+          {
+            "gate": "consistency",
+            "issues": [],
+            "passed": true
+          }
+        ],
+        "ok": false,
+        "warnings": []
+      }
+    },
+    {
+      "artifact_refs": [
+        {
+          "created_at": "2026-07-15T20:30:06.282057+00:00",
+          "kind": "json",
+          "path": "Reports/iterations/iteration_0004/obligation_tool_trace_obl_run_07c74943f6ac.json",
+          "sha256": "71a5101886a49f6ebc366dc68428e0be3d24fe044bec0e2ae5d35934e7d3b87f",
+          "summary": "Wrote text artifact Reports/iterations/iteration_0004/obligation_tool_trace_obl_run_07c74943f6ac.json"
+        },
+        {
+          "created_at": "2026-07-15T20:30:06.296533+00:00",
+          "kind": "markdown",
+          "path": "Reports/iterations/iteration_0004/obligation_tool_trace_obl_run_07c74943f6ac.md",
+          "sha256": "b1778170f56a143f10f77256a74f0126346abfe09d954dfcc3c24adb72185a2c",
+          "summary": "Wrote text artifact Reports/iterations/iteration_0004/obligation_tool_trace_obl_run_07c74943f6ac.md"
+        },
+        {
+          "created_at": "2026-07-15T20:30:06.298528+00:00",
+          "kind": "json",
+          "path": "Reports/iterations/iteration_0004/obligation_run_obl_run_07c74943f6ac.json",
+          "sha256": "f4ff1a6da48ddaab339373f4b1bcfa742f057144629bf7467592599d02815c14",
+          "summary": "Wrote text artifact Reports/iterations/iteration_0004/obligation_run_obl_run_07c74943f6ac.json"
+        }
+      ],
+      "child_obligations": [],
+      "claims_generated": [
+        {
+          "assumptions": [],
+          "claim_id": "claim_485049c4966a",
+          "claim_type": "literature",
+          "created_at": "2026-07-15T20:30:06.276990+00:00",
+          "depends_on_claim_ids": [],
+          "evidence": [],
+          "normalized_statement": "",
+          "related_proposal_ids": [
+            "proposal_349c1358b012"
+          ],
+          "related_report_ids": [],
+          "statement": "The local PDF artifact for Williams_2010_Subcubic contains no extractable text, likely due to scanned images.",
+          "status": "needs_review",
+          "supersedes_claim_ids": [],
+          "tags": [],
+          "updated_at": "2026-07-15T20:30:06.277021+00:00"
+        },
+        {
+          "assumptions": [],
+          "claim_id": "claim_14ed4ed1aa28",
+          "claim_type": "literature",
+          "created_at": "2026-07-15T20:30:06.277088+00:00",
+          "depends_on_claim_ids": [],
+          "evidence": [],
+          "normalized_statement": "",
+          "related_proposal_ids": [
+            "proposal_349c1358b012"
+          ],
+          "related_report_ids": [],
+          "statement": "The primary URL https://people.csail.mit.edu/rrw/w2010subcubic.pdf returns a 404 Not Found error.",
+          "status": "needs_review",
+          "supersedes_claim_ids": [],
+          "tags": [],
+          "updated_at": "2026-07-15T20:30:06.277130+00:00"
+        },
+        {
+          "assumptions": [],
+          "claim_id": "claim_9a7d460a75f5",
+          "claim_type": "literature",
+          "created_at": "2026-07-15T20:30:06.277195+00:00",
+          "depends_on_claim_ids": [],
+          "evidence": [],
+          "normalized_statement": "",
+          "related_proposal_ids": [
+            "proposal_349c1358b012"
+          ],
+          "related_report_ids": [],
+          "statement": "The paper's landing page is blocked by an AWS WAF challenge requiring JavaScript.",
+          "status": "needs_review",
+          "supersedes_claim_ids": [],
+          "tags": [],
+          "updated_at": "2026-07-15T20:30:06.277224+00:00"
+        },
+        {
+          "assumptions": [],
+          "claim_id": "claim_8aca48f28cac",
+          "claim_type": "literature",
+          "created_at": "2026-07-15T20:30:06.277288+00:00",
+          "depends_on_claim_ids": [],
+          "evidence": [],
+          "normalized_statement": "",
+          "related_proposal_ids": [
+            "proposal_349c1358b012"
+          ],
+          "related_report_ids": [],
+          "statement": "External search APIs (OpenAlex) are currently rate-limited (HTTP 429), preventing discovery of alternative import sources.",
+          "status": "needs_review",
+          "supersedes_claim_ids": [],
+          "tags": [],
+          "updated_at": "2026-07-15T20:30:06.277317+00:00"
+        }
+      ],
+      "created_at": "2026-07-15T20:30:06.277396+00:00",
+      "evidence": [
+        {
+          "artifact_refs": [],
+          "citation_keys": [],
+          "confidence": 0.0,
+          "created_at": "2026-07-15T20:30:06.276902+00:00",
+          "evidence_id": "ev_edbedbb51670",
+          "evidence_type": "external_tool",
+          "literature_support_ids": [],
+          "summary": "The obligation to extract text from the Williams_2010_Subcubic PDF could not be fulfilled. The local PDF artifact (`LiteratureDB/papers/Williams_2010_Subcubic/paper.pdf`) contains no extractable text (likely scanned images). The original URL (`https://people.csail.mit.edu/rrw/w2010subcubic.pdf`) returns a 404 Not Found error. The paper's landing page is blocked by an AWS WAF challenge. External search tools (OpenAlex) are currently rate-limited (HTTP 429), preventing the discovery of alternative sources or DOIs to import.",
+          "tool_result_ids": [
+            "lit_answer_5f42a7c70044",
+            "lit_answer_ae3bb97235ac"
+          ],
+          "verifier": null
+        }
+      ],
+      "obligation_id": "obl_003a75bd22a0",
+      "outcome": "blocked",
+      "proposal_id": "proposal_349c1358b012",
+      "run_id": "obl_run_07c74943f6ac",
+      "summary": "The obligation to extract text from the Williams_2010_Subcubic PDF could not be fulfilled. The local PDF artifact (`LiteratureDB/papers/Williams_2010_Subcubic/paper.pdf`) contains no extractable text (likely scanned images). The original URL (`https://people.csail.mit.edu/rrw/w2010subcubic.pdf`) returns a 404 Not Found error. The paper's landing page is blocked by an AWS WAF challenge. External search tools (OpenAlex) are currently rate-limited (HTTP 429), preventing the discovery of alternative sources or DOIs to import.",
+      "unresolved_blockers": [
+        "Local PDF lacks extractable text (scanned images)",
+        "Primary URL returns 404 Not Found",
+        "Landing page blocked by AWS WAF challenge",
+        "External search APIs rate-limited (HTTP 429)"
+      ],
+      "validation": {
+        "blocking_issues": [
+          "Obligation run outcome is `blocked`, not `fulfilled`.",
+          "Literature obligation lacks citation evidence with citation keys."
+        ],
+        "created_at": "2026-07-15T20:30:06.318006+00:00",
+        "gate_results": [
+          {
+            "gate": "scope_provenance",
+            "issues": [],
+            "passed": true
+          },
+          {
+            "gate": "evidence",
+            "issues": [
+              "Obligation run outcome is `blocked`, not `fulfilled`.",
+              "Literature obligation lacks citation evidence with citation keys."
+            ],
+            "passed": false
+          },
+          {
+            "gate": "consistency",
+            "issues": [],
+            "passed": true
+          }
+        ],
+        "ok": false,
+        "warnings": []
+      }
+    },
+    {
+      "artifact_refs": [
+        {
+          "created_at": "2026-07-15T20:06:47.921585+00:00",
+          "kind": "json",
+          "path": "LiteratureDB/papers/Abboud_2016_Simulating/metadata.json",
+          "sha256": "046eab655927749f8e1bf8a9b5cd50dc356b79f40272fd9125e093503e9900cb",
+          "summary": "Wrote text artifact LiteratureDB/papers/Abboud_2016_Simulating/metadata.json"
+        },
+        {
+          "created_at": "2026-07-15T20:33:46.947299+00:00",
+          "kind": "json",
+          "path": "Reports/iterations/iteration_0005/obligation_tool_trace_obl_run_2a81a5430f8d.json",
+          "sha256": "db78108ee8a3d368ad705196109907eae2092997f2c001cb37fea781de53715f",
+          "summary": "Wrote text artifact Reports/iterations/iteration_0005/obligation_tool_trace_obl_run_2a81a5430f8d.json"
+        },
+        {
+          "created_at": "2026-07-15T20:33:46.955016+00:00",
+          "kind": "markdown",
+          "path": "Reports/iterations/iteration_0005/obligation_tool_trace_obl_run_2a81a5430f8d.md",
+          "sha256": "949dd41f8b5b83ff0f4013139d70e10939a345ffb4cff1070c7f987c253c441c",
+          "summary": "Wrote text artifact Reports/iterations/iteration_0005/obligation_tool_trace_obl_run_2a81a5430f8d.md"
+        },
+        {
+          "created_at": "2026-07-15T20:33:46.957105+00:00",
+          "kind": "json",
+          "path": "Reports/iterations/iteration_0005/obligation_run_obl_run_2a81a5430f8d.json",
+          "sha256": "b3aa64d62800ab8271944ea21679ac902b770b6b543594a7997723489846ff91",
+          "summary": "Wrote text artifact Reports/iterations/iteration_0005/obligation_run_obl_run_2a81a5430f8d.json"
+        }
+      ],
+      "child_obligations": [],
+      "claims_generated": [
+        {
+          "assumptions": [],
+          "claim_id": "claim_db0b5a10e612",
+          "claim_type": "literature",
+          "created_at": "2026-07-15T20:33:46.943461+00:00",
+          "depends_on_claim_ids": [],
+          "evidence": [],
+          "normalized_statement": "",
+          "related_proposal_ids": [
+            "proposal_349c1358b012"
+          ],
+          "related_report_ids": [],
+          "statement": "Abboud_2016_Simulating metadata exists in LiteratureDB (paper_id: paper_1eb060124368) but has no text or PDF artifact.",
+          "status": "cited",
+          "supersedes_claim_ids": [],
+          "tags": [],
+          "updated_at": "2026-07-15T20:33:46.943492+00:00"
+        },
+        {
+          "assumptions": [],
+          "claim_id": "claim_b23566a3c253",
+          "claim_type": "literature",
+          "created_at": "2026-07-15T20:33:46.943559+00:00",
+          "depends_on_claim_ids": [],
+          "evidence": [],
+          "normalized_statement": "",
+          "related_proposal_ids": [
+            "proposal_349c1358b012"
+          ],
+          "related_report_ids": [],
+          "statement": "The ACM gateway URL for the paper returns HTTP 403 Forbidden.",
+          "status": "cited",
+          "supersedes_claim_ids": [],
+          "tags": [],
+          "updated_at": "2026-07-15T20:33:46.943589+00:00"
+        },
+        {
+          "assumptions": [],
+          "claim_id": "claim_fe044c384772",
+          "claim_type": "literature",
+          "created_at": "2026-07-15T20:33:46.943655+00:00",
+          "depends_on_claim_ids": [],
+          "evidence": [],
+          "normalized_statement": "",
+          "related_proposal_ids": [
+            "proposal_349c1358b012"
+          ],
+          "related_report_ids": [],
+          "statement": "The author-hosted URL at theory.stanford.edu/~amir/ad/ returns HTTP 403 Forbidden.",
+          "status": "cited",
+          "supersedes_claim_ids": [],
+          "tags": [],
+          "updated_at": "2026-07-15T20:33:46.943795+00:00"
+        },
+        {
+          "assumptions": [],
+          "claim_id": "claim_7e997230b483",
+          "claim_type": "literature",
+          "created_at": "2026-07-15T20:33:46.943865+00:00",
+          "depends_on_claim_ids": [],
+          "evidence": [],
+          "normalized_statement": "",
+          "related_proposal_ids": [
+            "proposal_349c1358b012"
+          ],
+          "related_report_ids": [],
+          "statement": "No accessible arXiv or open-access full text for Abboud_2016_Simulating was found.",
+          "status": "cited",
+          "supersedes_claim_ids": [],
+          "tags": [],
+          "updated_at": "2026-07-15T20:33:46.943909+00:00"
+        }
+      ],
+      "created_at": "2026-07-15T20:33:46.943992+00:00",
+      "evidence": [
+        {
+          "artifact_refs": [
+            {
+              "created_at": "2026-07-15T20:06:47.921585+00:00",
+              "kind": "json",
+              "path": "LiteratureDB/papers/Abboud_2016_Simulating/metadata.json",
+              "sha256": "046eab655927749f8e1bf8a9b5cd50dc356b79f40272fd9125e093503e9900cb",
+              "summary": "Wrote text artifact LiteratureDB/papers/Abboud_2016_Simulating/metadata.json"
+            }
+          ],
+          "citation_keys": [
+            "Abboud_2016_Simulating"
+          ],
+          "confidence": 0.5,
+          "created_at": "2026-07-15T20:33:46.943373+00:00",
+          "evidence_id": "ev_856ed8b31573",
+          "evidence_type": "citation",
+          "literature_support_ids": [],
+          "summary": "Obligation to find and import text for Abboud_2016_Simulating (DOI: 10.1145/2897518.2897653) could Landschaft not be fulfilled. The paper metadata was already present in LiteratureDB but lacked a text or PDF artifact. Attempts to import via the ACM gateway URL (http://dl.acm.org/ft_gateway.cfm?id=2897653&type=pdf) and the author's Stanford homepage (https://theory.stanford.edu/~amir/ad/) both returned HTTP 403 Forbidden. The DOI import confirmed the paper exists but has no pdf_path or text_path. No arXiv version was found or accessible. The paper is a STOC 2016 / JACM 2018 publication behind an ACM paywall, and no open-access full text could be retrieved.",
+          "tool_result_ids": [
+            "paper_1eb060124368"
+          ],
+          "verifier": "LiteratureResearcher"
+        }
+      ],
+      "obligation_id": "obl_ad2292d6c42a",
+      "outcome": "blocked",
+      "proposal_id": "proposal_349c1358b012",
+      "run_id": "obl_run_2a81a5430f8d",
+      "summary": "Obligation to find and import text for Abboud_2016_Simulating (DOI: 10.1145/2897518.2897653) could Landschaft not be fulfilled. The paper metadata was already present in LiteratureDB but lacked a text or PDF artifact. Attempts to import via the ACM gateway URL (http://dl.acm.org/ft_gateway.cfm?id=2897653&type=pdf) and the author's Stanford homepage (https://theory.stanford.edu/~amir/ad/) both returned HTTP 403 Forbidden. The DOI import confirmed the paper exists but has no pdf_path or text_path. No arXiv version was found or accessible. The paper is a STOC 2016 / JACM 2018 publication behind an ACM paywall, and no open-access full text could be retrieved.",
+      "unresolved_blockers": [
+        "Paper is behind ACM paywall; no open-access full text available.",
+        "Author homepage and ACM gateway both return 403 Forbidden.",
+        "No arXiv version found for this paper."
+      ],
+      "validation": {
+        "blocking_issues": [
+          "Obligation run outcome is `blocked`, not `fulfilled`.",
+          "Literature obligation lacks citation evidence with citation keys.",
+          "Citation key `Abboud_2016_Simulating` has no extracted theorem/algorithm/lower-bound statement."
+        ],
+        "created_at": "2026-07-15T20:33:46.989306+00:00",
+        "gate_results": [
+          {
+            "gate": "scope_provenance",
+            "issues": [],
+            "passed": true
+          },
+          {
+            "gate": "evidence",
+            "issues": [
+              "Obligation run outcome is `blocked`, not `fulfilled`.",
+              "Literature obligation lacks citation evidence with citation keys.",
+              "Citation key `Abboud_2016_Simulating` has no extracted theorem/algorithm/lower-bound statement."
+            ],
+            "passed": false
+          },
+          {
+            "gate": "consistency",
+            "issues": [],
+            "passed": true
+          }
+        ],
+        "ok": false,
+        "warnings": []
+      }
     }
   ],
-  "updated_at": "2026-07-15T19:25:25.661364+00:00"
+  "updated_at": "2026-07-15T20:33:46.996214+00:00"
 }

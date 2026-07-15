@@ -12,8 +12,9 @@ from ..artifact_store import ArtifactStore
 class PDFTextExtractor:
     """Extract text from imported PDFs and store it next to the paper.
 
-    The preferred backend is ``pypdf`` because it is pure Python. If it is unavailable, the
-    extractor falls back to the common ``pdftotext`` command-line tool when installed.
+    The preferred backend is ``pypdf`` because it is pure Python. If it is unavailable or
+    finds no embedded text, the extractor falls back to ``pdftotext`` and then OCR backends
+    when installed: first ``ocrmypdf`` plus text extraction, then ``pdftoppm`` + ``tesseract``.
     """
 
     def __init__(self, store: ArtifactStore):
@@ -51,9 +52,11 @@ class PDFTextExtractor:
         if not text.strip():
             text = self._extract_with_pdftotext(source)
         if not text.strip():
+            text = self._extract_with_ocr(source, page_separator=page_separator)
+        if not text.strip():
             raise RuntimeError(
-                f"No extractable text found in {source}. The PDF may be scanned; "
-                "OCR is not implemented."
+                f"No extractable text found in {source}. Tried pypdf, pdftotext, and OCR "
+                "fallbacks. Install `ocrmypdf` or `pdftoppm` plus `tesseract` for scanned PDFs."
             )
 
         if output_path is None:
@@ -87,16 +90,118 @@ class PDFTextExtractor:
             return ""
         with tempfile.TemporaryDirectory() as tmpdir:
             output = Path(tmpdir) / "paper.txt"
-            result = subprocess.run(
-                [executable, "-layout", str(pdf_path), str(output)],
-                check=False,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-            )
+            try:
+                result = subprocess.run(
+                    [executable, "-layout", str(pdf_path), str(output)],
+                    check=False,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    timeout=300,
+                )
+            except (OSError, subprocess.TimeoutExpired):
+                return ""
             if result.returncode != 0 or not output.exists():
                 return ""
             return output.read_text(encoding="utf-8", errors="replace")
+
+    def _extract_with_ocr(self, pdf_path: Path, *, page_separator: str) -> str:
+        """Best-effort OCR fallback for scanned PDFs.
+
+        This method intentionally depends only on command-line tools, so OCR support is optional
+        and does not make the base Python package heavier.  It first tries ``ocrmypdf`` because
+        that preserves page layout well, then falls back to rendering pages with ``pdftoppm`` and
+        running ``tesseract`` on each page image.
+        """
+        text = self._extract_with_ocrmypdf(pdf_path, page_separator=page_separator)
+        if text.strip():
+            return text
+        return self._extract_with_tesseract(pdf_path, page_separator=page_separator)
+
+    def _extract_with_ocrmypdf(self, pdf_path: Path, *, page_separator: str) -> str:
+        executable = _which("ocrmypdf")
+        if executable is None:
+            return ""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_pdf = Path(tmpdir) / "ocr.pdf"
+            try:
+                result = subprocess.run(
+                    [
+                        executable,
+                        "--quiet",
+                        "--skip-text",
+                        str(pdf_path),
+                        str(output_pdf),
+                    ],
+                    check=False,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    timeout=900,
+                )
+            except (OSError, subprocess.TimeoutExpired):
+                return ""
+            if result.returncode != 0 or not output_pdf.exists():
+                return ""
+            text = self._extract_with_pdftotext(output_pdf)
+            if text.strip():
+                return text
+            return self._extract_with_pypdf(output_pdf, page_separator=page_separator)
+
+    def _extract_with_tesseract(self, pdf_path: Path, *, page_separator: str) -> str:
+        pdftoppm = _which("pdftoppm")
+        tesseract = _which("tesseract")
+        if pdftoppm is None or tesseract is None:
+            return ""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            prefix = Path(tmpdir) / "page"
+            try:
+                render = subprocess.run(
+                    [pdftoppm, "-png", "-r", "200", str(pdf_path), str(prefix)],
+                    check=False,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    timeout=900,
+                )
+            except (OSError, subprocess.TimeoutExpired):
+                return ""
+            if render.returncode != 0:
+                return ""
+            images = sorted(Path(tmpdir).glob("page-*.png"), key=_page_image_sort_key)
+            if not images:
+                return ""
+
+            pages: list[str] = []
+            for idx, image in enumerate(images, start=1):
+                try:
+                    ocr = subprocess.run(
+                        [tesseract, str(image), "stdout", "--psm", "1"],
+                        check=False,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                        timeout=180,
+                    )
+                except (OSError, subprocess.TimeoutExpired):
+                    continue
+                if ocr.returncode != 0:
+                    continue
+                page_text = _clean_ocr_text(ocr.stdout)
+                if page_text:
+                    pages.append(page_separator.format(page=idx) + page_text)
+            return "".join(pages).strip() + ("\n" if pages else "")
+
+
+def _page_image_sort_key(path: Path) -> tuple[int, str]:
+    stem = path.stem
+    suffix = stem.rsplit("-", 1)[-1]
+    page_number = int(suffix) if suffix.isdigit() else 0
+    return page_number, path.name
+
+
+def _clean_ocr_text(text: str) -> str:
+    return text.replace("\f", "").strip()
 
 
 def _which(name: str) -> str | None:

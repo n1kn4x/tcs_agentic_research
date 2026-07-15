@@ -22,8 +22,7 @@ from ..schemas import (
     ResearchState,
 )
 from ..tooling import Toolset, final_submission_tool
-from .literature import LiteratureResearcher
-from .toolsets import artifact_retrieval_toolset, literature_toolset
+from .toolsets import artifact_retrieval_toolset
 
 
 FINAL_PROPOSAL_TOOL_NAME = "submit_research_proposal"
@@ -34,7 +33,6 @@ class ProposalAgent:
         self.store = store
         self.router = router
         self.prompt_dir = prompt_dir
-        self.literature = LiteratureResearcher(store, router, prompt_dir=prompt_dir)
 
     def generate_and_review(
         self,
@@ -170,8 +168,10 @@ class ProposalAgent:
         prompt_payload = {
             "proposal_generation_attempt": attempt + 1,
             "instruction": (
-                "Think privately. Use native tool calls when they materially improve "
-                "the proposal. Finish by calling the final proposal-submission tool."
+                "Think privately. This proposal-generation phase is read-only: inspect "
+                "workspace artifacts when useful, but do not search, import, extract, "
+                "or otherwise mutate LiteratureDB or other research artifacts. Finish by "
+                "calling the final proposal-submission tool."
             ),
             "context": context,
             "previous_critique": previous_critique.model_dump(mode="json")
@@ -207,11 +207,14 @@ class ProposalAgent:
         return proposal
 
     def _proposal_toolset(self) -> Toolset:
-        return artifact_retrieval_toolset(store=self.store) + literature_toolset(
-            store=self.store,
-            literature=self.literature,
-            include_discovery_tools=True,
-        ) + Toolset(
+        """Tools visible during proposal generation.
+
+        Proposal generation is deliberately read-only.  It may inspect existing workspace
+        artifacts, but it must not queue candidates, import papers, extract literature, run
+        experiments, or update any canonical research database.  Concrete mutating work should
+        be proposed as obligations for the research-execution phase.
+        """
+        return artifact_retrieval_toolset(store=self.store) + Toolset(
             [
                 final_submission_tool(
                     FINAL_PROPOSAL_TOOL_NAME,
@@ -378,10 +381,11 @@ class ProposalAgent:
             "workspace_memory_instructions": (
                 "The artifact_manifest is a compact index of durable workspace memory. "
                 "Do not assume artifact contents that are not included in this prompt. "
-                "Use read_artifact or read_jsonl_records when details from prior proposals, "
-                "claims, literature answers, reports, obligation runs, or traces materially "
-                "affect the proposal. Accepted claims are established; blocked or failed "
-                "obligations are diagnostic input only."
+                "Proposal generation is read-only: use read_artifact or read_jsonl_records "
+                "when details from prior proposals, claims, literature answers, reports, "
+                "obligation runs, or traces materially affect the proposal, but do not import, "
+                "search, extract, or otherwise mutate LiteratureDB here. Accepted claims are "
+                "established; blocked or failed obligations are diagnostic input only."
             ),
         }
 

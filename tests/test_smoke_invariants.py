@@ -30,6 +30,7 @@ from tcs_agentic_research.leap.harness import (
 )
 from tcs_agentic_research.experimenter.docker_project import _diagnostic
 from tcs_agentic_research.experimenter.errors import ExperimenterConfigurationError
+from tcs_agentic_research.literature.pdf_text import PDFTextExtractor
 from tcs_agentic_research.llm import (
     LLMRouter,
     StructuredLLMError,
@@ -338,6 +339,29 @@ def test_structured_tool_completion_uses_openai_tool_calls(tmp_path: Path) -> No
     assert trace["tool_calls"][0]["name"] == "query_literature"
     assert "rationale" not in trace["tool_calls"][0]["arguments"]
     assert store.read_jsonl(ArtifactStore.MODEL_LEDGER)[-1]["completion_tokens"] == 10
+
+
+def test_proposal_generation_toolset_is_read_only(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    agent = ProposalAgent(store, _router(store))
+
+    names = {tool["function"]["name"] for tool in agent._proposal_toolset().openai_tools()}
+
+    assert names == {"read_artifact", "read_jsonl_records", "submit_research_proposal"}
+    assert names.isdisjoint(
+        {
+            "search_papers",
+            "import_url",
+            "import_arxiv",
+            "import_doi",
+            "import_candidate",
+            "extract_paper",
+            "extract_imported_papers",
+            "query_literature",
+            "run_experiment",
+            "attempt_lean_proof",
+        }
+    )
 
 
 def test_failed_proposal_revisions_convert_to_barrier_analysis(tmp_path: Path) -> None:
@@ -707,6 +731,27 @@ def test_commit_manager_blocks_obligation_on_failed_validation(tmp_path: Path) -
     )
     assert blocked_obligation.status == "blocked"
     assert not store.latest_claims_by_id()
+
+
+def test_pdf_text_extractor_falls_back_to_ocr_when_embedded_text_is_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = _store(tmp_path)
+    pdf_ref = store.write_bytes("LiteratureDB/papers/Scanned/paper.pdf", b"%PDF-1.4\n")
+    extractor = PDFTextExtractor(store)
+
+    monkeypatch.setattr(extractor, "_extract_with_pypdf", lambda *args, **kwargs: "")
+    monkeypatch.setattr(extractor, "_extract_with_pdftotext", lambda *args, **kwargs: "")
+    monkeypatch.setattr(
+        extractor,
+        "_extract_with_ocr",
+        lambda *args, **kwargs: "\n\n--- page 1 ---\n\nOCR recovered text.\n",
+    )
+
+    text_path = extractor.extract_pdf_text(pdf_ref.path)
+
+    assert text_path == "LiteratureDB/papers/Scanned/paper.txt"
+    assert "OCR recovered text" in store.read_text(text_path)
 
 
 def test_literature_extraction_indexes_support_ids_without_auto_claims(tmp_path: Path) -> None:
