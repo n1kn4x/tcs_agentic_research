@@ -313,7 +313,7 @@ def _manifest_summary(store: ArtifactStore, rel: str, path: Path) -> str:
     if rel == ArtifactStore.CLAIM_LEDGER:
         return "Append-only ledger of mathematical, algorithmic, literature, and resource claims."
     if rel == ArtifactStore.OBLIGATION_BOARD:
-        return "Canonical board of candidate claims, linked obligations, obligation runs, and blocked reasons."
+        return "Canonical obligation-first board of planned obligations, runs, generated claims, and blocked reasons."
     if rel == ArtifactStore.PROPOSAL_LEDGER:
         return "Append-only ledger of generated proposals, critic reviews, revisions, and decisions."
     if rel == ArtifactStore.NOMENCLATURE:

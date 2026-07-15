@@ -12,7 +12,6 @@ from ..prompt_serialization import compact_json_dumps
 from ..render import render_report_markdown
 from ..schemas import (
     ArtifactRef,
-    CandidateClaim,
     ClaimRecord,
     ClaimStatus,
     ClaimType,
@@ -21,12 +20,14 @@ from ..schemas import (
     ExperimentResult,
     LiteratureDependency,
     ObligationRun,
+    ObligationRunSubmission,
     ProofObligation,
     ReportOutcome,
     ResearchCritique,
     ResearchObligation,
     ResearchProposal,
     ResearchReport,
+    ResearchReportSubmission,
     ResearchState,
     utc_now,
 )
@@ -88,18 +89,17 @@ class ResearchAgent:
         )
 
         self._attach_report_refs_to_claims(report, report_ref=report_ref, critique_ref=critique_ref)
-        # Legacy broad reports are audit artifacts only.  Canonical claim acceptance now flows
-        # through ObligationRunValidator + CommitManager after linked obligations are fulfilled.
+        # Legacy broad reports are audit artifacts only. Canonical claim acceptance now flows
+        # through ObligationRunValidator + CommitManager after obligation runs are validated.
         return report, report_ref.path
 
     def run_obligation(
         self,
         *,
         obligation: ResearchObligation,
-        candidate_claim: CandidateClaim,
         state: ResearchState,
     ) -> tuple[ObligationRun, str, str]:
-        """Run exactly one linked obligation.
+        """Run exactly one obligation.
 
         This is the obligation-centered harness path.  The returned run is only an attempt;
         deterministic validation and commit happen outside the agent.
@@ -108,20 +108,19 @@ class ResearchAgent:
         context = {
             "research_task_md": task,
             "research_state": state.model_dump(mode="json"),
-            "candidate_claim": candidate_claim.model_dump(mode="json"),
             "assigned_obligation": obligation.model_dump(mode="json"),
             "artifact_manifest": self.store.artifact_manifest(max_items=120),
             "instructions": (
-                "Execute only the assigned obligation. Do not claim that the candidate claim "
-                "is proven unless this specific obligation is fulfilled with the required "
-                "evidence. If the obligation cannot be fulfilled, return outcome `blocked` "
-                "or `failed` with precise blockers. Reference any used tool_result_id values "
-                "inside EvidenceRecord.tool_result_ids."
+                "Execute only the assigned obligation. Generate factual claim statements only "
+                "for findings established by this obligation; never submit a meta-claim that "
+                "the proposal succeeded. If the obligation cannot be fulfilled, return outcome "
+                "`blocked` or `failed` with precise blockers. Reference any used tool_result_id "
+                "values in the flat final submission's tool_result_ids."
             ),
         }
-        run, trace = self._generate_obligation_run_with_tools(obligation, candidate_claim, context)
+        run, trace = self._generate_obligation_run_with_tools(obligation, context)
         run.obligation_id = obligation.obligation_id
-        run.claim_id = candidate_claim.claim_id
+        run.proposal_id = obligation.proposal_id
         run = self._reconcile_obligation_tool_trace(run, trace=trace)
 
         iteration_dir = self.store.create_iteration_dir(state.iteration)
@@ -135,7 +134,7 @@ class ResearchAgent:
             self.store.write_json(f"{iteration_dir}/obligation_run_{run.run_id}.json", run)
         self.store.write_text(
             f"{iteration_dir}/obligation_run_{run.run_id}.md",
-            _render_obligation_run_markdown(run, obligation, candidate_claim),
+            _render_obligation_run_markdown(run, obligation),
         )
         return run, run_ref.path, trace_refs[0].path
 
@@ -180,8 +179,8 @@ class ResearchAgent:
                 "role": "user",
                 "content": (
                     "Execute the selected proposal using durable, auditable evidence. "
-                    "Use tool_result_ids from observations in final EvidenceRecord.tool_result_ids "
-                    "when a claim depends on a tool result.\nContext:\n"
+                    "Use tool_result_ids from observations in the final flat submission when a "
+                    "claim depends on a tool result.\nContext:\n"
                     + compact_json_dumps(prompt_payload)
                 ),
             },
@@ -192,20 +191,22 @@ class ResearchAgent:
             theorem_prover=self.theorem_prover,
             experiment=self.experiment,
         )
-        return self.router.complete_structured_with_tools(
+        submission, trace = self.router.complete_structured_with_tools(
             task_type="research_execution",
             messages=messages,
             tools=toolset.openai_tools(),
             tool_executors=toolset.executors(),
-            schema=ResearchReport,
+            schema=ResearchReportSubmission,
             final_tool_name=FINAL_RESEARCH_REPORT_TOOL_NAME,
-            mock_output=self._mock_report(proposal) if self.router.dry_run else None,
+            mock_output=_report_submission_from_report(self._mock_report(proposal))
+            if self.router.dry_run
+            else None,
         )
+        return _research_report_from_submission(submission, proposal), trace
 
     def _generate_obligation_run_with_tools(
         self,
         obligation: ResearchObligation,
-        candidate_claim: CandidateClaim,
         context: Any,
     ) -> tuple[ObligationRun, dict[str, Any]]:
         prompt_payload = {
@@ -218,10 +219,12 @@ class ResearchAgent:
         }
         system_prompt = (
             "You are the existing research agent, but this run is scoped to exactly one "
-            "claim-linked obligation. Produce an ObligationRun, not a broad report. "
-            "Do not create unrelated claims. If evidence is missing, return `blocked` or "
-            "`failed` with precise blockers. Use the complete JSON schema inserted below "
-            "for the final submitted obligation run:\n{{ObligationRun}}"
+            "obligation. Finish with a flat ObligationRunSubmission, not nested Pydantic "
+            "objects. Generate claim_statements only for factual findings established by this "
+            "obligation. Do not create unrelated claims and do not state that the proposal "
+            "succeeds. If evidence is missing, return `blocked` or `failed` with precise "
+            "blockers. Use the complete JSON schema inserted below for the final submission:\n"
+            "{{ObligationRunSubmission}}"
         )
         messages = [
             {"role": "system", "content": system_prompt},
@@ -239,24 +242,23 @@ class ResearchAgent:
             theorem_prover=self.theorem_prover,
             experiment=self.experiment,
             final_tool_name=FINAL_OBLIGATION_RUN_TOOL_NAME,
-            final_schema=ObligationRun,
+            final_schema=ObligationRunSubmission,
             final_tool_description=(
-                "Commit the final structured ObligationRun for the assigned obligation. "
-                "The arguments must be the ObligationRun object itself, not wrapped under "
-                "another key."
+                "Commit the final flat ObligationRunSubmission for the assigned obligation. "
+                "Use strings/lists for claim_statements, evidence handles, blockers, and "
+                "child obligations; do not submit nested objects."
             ),
         )
-        return self.router.complete_structured_with_tools(
+        submission, trace = self.router.complete_structured_with_tools(
             task_type="research_execution",
             messages=messages,
             tools=toolset.openai_tools(),
             tool_executors=toolset.executors(),
-            schema=ObligationRun,
+            schema=ObligationRunSubmission,
             final_tool_name=FINAL_OBLIGATION_RUN_TOOL_NAME,
-            mock_output=self._mock_obligation_run(obligation, candidate_claim)
-            if self.router.dry_run
-            else None,
+            mock_output=self._mock_obligation_submission(obligation) if self.router.dry_run else None,
         )
+        return _obligation_run_from_submission(submission, obligation), trace
 
     def _write_research_tool_trace(
         self,
@@ -331,7 +333,7 @@ class ResearchAgent:
         payload = {
             "run_id": run.run_id,
             "obligation_id": run.obligation_id,
-            "claim_id": run.claim_id,
+            "proposal_id": run.proposal_id,
             "private_reasoning": "redacted_not_logged_or_replayed",
             "trace": trace,
         }
@@ -732,25 +734,17 @@ class ResearchAgent:
             )
             claim.updated_at = utc_now()
 
-    def _mock_obligation_run(
-        self, obligation: ResearchObligation, candidate_claim: CandidateClaim
-    ) -> ObligationRun:
-        return ObligationRun(
-            obligation_id=obligation.obligation_id,
-            claim_id=candidate_claim.claim_id,
+    def _mock_obligation_submission(self, obligation: ResearchObligation) -> ObligationRunSubmission:
+        return ObligationRunSubmission(
             outcome="fulfilled",
             summary=(
-                "Dry-run obligation execution records a substantive placeholder argument for "
-                "the assigned obligation. Real runs must provide tool-backed or derivation-backed "
-                "evidence before the deterministic validator accepts the obligation."
+                "Dry-run obligation execution records a substantive mock argument for the assigned "
+                "obligation. Real runs must provide tool-backed or derivation-backed evidence before "
+                "the deterministic validator accepts generated claims."
             ),
-            evidence=[
-                EvidenceRecord(
-                    evidence_type=EvidenceType.informal_argument,
-                    summary="Dry-run mock evidence for exercising the obligation harness only.",
-                    confidence=0.2,
-                )
-            ],
+            claim_statements=[f"Dry-run factual finding for obligation: {obligation.statement}"],
+            evidence_type=EvidenceType.informal_argument,
+            evidence_summary="Dry-run mock evidence for exercising the obligation harness only.",
         )
 
     def _mock_report(self, proposal: ResearchProposal) -> ResearchReport:
@@ -806,16 +800,215 @@ class ResearchAgent:
         )
 
 
+def _research_report_from_submission(
+    submission: ResearchReportSubmission, proposal: ResearchProposal
+) -> ResearchReport:
+    evidence = _evidence_from_flat_submission(
+        evidence_type=submission.evidence_type,
+        evidence_summary=submission.evidence_summary or submission.executive_summary,
+        tool_result_ids=submission.tool_result_ids,
+        citation_keys=submission.citation_keys,
+    )
+    claims = [
+        ClaimRecord(
+            claim_type=submission.claim_type,
+            statement=statement,
+            status=_claim_status_for_evidence(submission.evidence_type, submission.claim_type),
+            evidence=[evidence.model_copy(deep=True)] if evidence is not None else [],
+            related_proposal_ids=[proposal.proposal_id],
+        )
+        for statement in _unique_nonempty(submission.claim_statements)
+    ]
+    proof_obligations = [
+        ProofObligation(statement=statement)
+        for statement in _unique_nonempty(submission.proof_obligation_statements)
+    ]
+    return ResearchReport(
+        proposal_id=proposal.proposal_id,
+        outcome=submission.outcome,
+        executive_summary=submission.executive_summary,
+        claims_generated=claims,
+        evidence=[evidence] if evidence is not None else [],
+        proof_obligations=proof_obligations,
+        unresolved_issues=submission.unresolved_issues,
+        proposed_next_steps=submission.proposed_next_steps,
+        required_verifications=submission.required_verifications,
+    )
+
+
+def _report_submission_from_report(report: ResearchReport) -> ResearchReportSubmission:
+    first_evidence = report.evidence[0] if report.evidence else None
+    if first_evidence is None and report.claims_generated and report.claims_generated[0].evidence:
+        first_evidence = report.claims_generated[0].evidence[0]
+    return ResearchReportSubmission(
+        outcome=report.outcome,
+        executive_summary=report.executive_summary,
+        claim_statements=[claim.statement for claim in report.claims_generated],
+        claim_type=report.claims_generated[0].claim_type if report.claims_generated else ClaimType.other,
+        evidence_type=first_evidence.evidence_type if first_evidence else EvidenceType.informal_argument,
+        evidence_summary=first_evidence.summary if first_evidence else "",
+        tool_result_ids=first_evidence.tool_result_ids if first_evidence else [],
+        citation_keys=first_evidence.citation_keys if first_evidence else [],
+        proof_obligation_statements=[obligation.statement for obligation in report.proof_obligations],
+        unresolved_issues=report.unresolved_issues,
+        proposed_next_steps=report.proposed_next_steps,
+        required_verifications=report.required_verifications,
+    )
+
+
+def _obligation_run_from_submission(
+    submission: ObligationRunSubmission, obligation: ResearchObligation
+) -> ObligationRun:
+    evidence = _evidence_from_flat_submission(
+        evidence_type=submission.evidence_type,
+        evidence_summary=submission.evidence_summary or submission.summary,
+        tool_result_ids=submission.tool_result_ids,
+        citation_keys=submission.citation_keys,
+    )
+    claim_type = _claim_type_for_obligation(obligation, submission.evidence_type)
+    claims = [
+        ClaimRecord(
+            claim_type=claim_type,
+            statement=statement,
+            status=_claim_status_for_evidence(submission.evidence_type, claim_type),
+            related_proposal_ids=[obligation.proposal_id] if obligation.proposal_id else [],
+        )
+        for statement in _unique_nonempty(submission.claim_statements)
+    ]
+    child_obligations = [
+        _child_obligation_from_statement(statement, proposal_id=obligation.proposal_id)
+        for statement in _unique_nonempty(submission.child_obligation_statements)
+    ]
+    return ObligationRun(
+        obligation_id=obligation.obligation_id,
+        proposal_id=obligation.proposal_id,
+        outcome=submission.outcome,
+        summary=submission.summary,
+        claims_generated=claims,
+        evidence=[evidence] if evidence is not None else [],
+        child_obligations=child_obligations,
+        unresolved_blockers=submission.unresolved_blockers,
+    )
+
+
+def _evidence_from_flat_submission(
+    *,
+    evidence_type: EvidenceType,
+    evidence_summary: str,
+    tool_result_ids: list[str],
+    citation_keys: list[str],
+) -> EvidenceRecord | None:
+    summary = evidence_summary.strip()
+    ids = _unique_nonempty(tool_result_ids)
+    citations = _unique_nonempty(citation_keys)
+    if not summary and not ids and not citations:
+        return None
+    return EvidenceRecord(
+        evidence_type=evidence_type,
+        summary=summary or "Flat final submission supplied evidence handles.",
+        tool_result_ids=ids,
+        citation_keys=citations,
+        confidence=_initial_confidence_for_evidence(evidence_type),
+    )
+
+
+def _claim_type_for_obligation(obligation: ResearchObligation, evidence_type: EvidenceType) -> ClaimType:
+    if evidence_type == EvidenceType.citation or obligation.kind == "literature":
+        return ClaimType.literature
+    if evidence_type == EvidenceType.experiment or obligation.kind == "experiment":
+        return ClaimType.experimental
+    if obligation.kind == "derivation":
+        lowered = obligation.statement.lower()
+        if any(word in lowered for word in ["complexity", "runtime", "resource", "bound"]):
+            return ClaimType.complexity
+        return ClaimType.mathematical
+    if obligation.kind == "proof":
+        return ClaimType.theorem_statement
+    return ClaimType.mathematical
+
+
+def _claim_status_for_evidence(evidence_type: EvidenceType, claim_type: ClaimType) -> ClaimStatus:
+    if evidence_type == EvidenceType.lean_proof:
+        return ClaimStatus.proved_by_lean
+    if evidence_type == EvidenceType.citation and claim_type == ClaimType.literature:
+        return ClaimStatus.cited
+    if evidence_type == EvidenceType.experiment:
+        return ClaimStatus.experimentally_supported
+    if evidence_type == EvidenceType.counterexample:
+        return ClaimStatus.refuted
+    if evidence_type == EvidenceType.informal_argument:
+        return ClaimStatus.informal_argument
+    return ClaimStatus.needs_review
+
+
+def _initial_confidence_for_evidence(evidence_type: EvidenceType) -> float:
+    if evidence_type == EvidenceType.lean_proof:
+        return 1.0
+    if evidence_type == EvidenceType.experiment:
+        return 0.7
+    if evidence_type == EvidenceType.citation:
+        return 0.5
+    if evidence_type == EvidenceType.informal_argument:
+        return 0.3
+    return 0.0
+
+
+def _child_obligation_from_statement(statement: str, *, proposal_id: str) -> ResearchObligation:
+    kind = _classify_obligation_kind(statement)
+    return ResearchObligation(
+        proposal_id=proposal_id,
+        statement=statement,
+        kind=kind,
+        required_evidence=_required_evidence_for_kind(kind),
+    )
+
+
+def _classify_obligation_kind(text: str) -> str:
+    lowered = text.lower()
+    if any(word in lowered for word in ["citation", "literature", "paper", "theorem from"]):
+        return "literature"
+    if any(word in lowered for word in ["lean", "formal", "proof", "prove theorem"]):
+        return "proof"
+    if any(word in lowered for word in ["experiment", "simulation", "numerical", "small-instance"]):
+        return "experiment"
+    if any(word in lowered for word in ["complexity", "runtime", "asymptotic", "derive", "bound", "lemma"]):
+        return "derivation"
+    if any(word in lowered for word in ["consistent", "contradict", "conflict"]):
+        return "consistency"
+    return "derivation"
+
+
+def _required_evidence_for_kind(kind: str) -> list[EvidenceType]:
+    if kind == "literature":
+        return [EvidenceType.citation]
+    if kind == "proof":
+        return [EvidenceType.lean_proof]
+    if kind == "experiment":
+        return [EvidenceType.experiment]
+    if kind == "consistency":
+        return [EvidenceType.external_tool]
+    return [EvidenceType.informal_argument]
+
+
+def _unique_nonempty(items: list[str]) -> list[str]:
+    return list(dict.fromkeys(item.strip() for item in items if item and item.strip()))
+
+
 def _render_obligation_run_markdown(
-    run: ObligationRun, obligation: ResearchObligation, candidate_claim: CandidateClaim
+    run: ObligationRun, obligation: ResearchObligation
 ) -> str:
     lines = [f"# Obligation Run `{run.run_id}`", ""]
-    lines.append(f"**Claim:** `{candidate_claim.claim_id}`")
     lines.append(f"**Obligation:** `{obligation.obligation_id}`")
+    if obligation.proposal_id:
+        lines.append(f"**Proposal:** `{obligation.proposal_id}`")
     lines.append(f"**Outcome:** `{run.outcome}`")
-    lines.extend(["", "## Candidate claim", candidate_claim.statement, ""])
-    lines.extend(["## Obligation", obligation.statement, ""])
+    lines.extend(["", "## Obligation", obligation.statement, ""])
     lines.extend(["## Summary", run.summary, ""])
+    if run.claims_generated:
+        lines.append("## Claims generated")
+        for claim in run.claims_generated:
+            lines.append(f"- `{claim.claim_id}` [{claim.claim_type.value}/{claim.status.value}]: {claim.statement}")
+        lines.append("")
     if run.evidence:
         lines.append("## Evidence")
         for evidence in run.evidence:

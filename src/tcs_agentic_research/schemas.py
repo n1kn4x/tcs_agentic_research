@@ -183,10 +183,36 @@ class ProposalKind(str, Enum):
     formalization = "formalization"
 
 
-class ProposalRisk(StrictModel):
-    risk: str
-    mitigation: str = ""
-    severity: Literal["low", "medium", "high"] = "medium"
+class ProposalSubmission(StrictModel):
+    """Flat final-tool schema for proposal generation.
+
+    The tool-call interface intentionally asks the model for only simple strings/enums/lists.
+    The application deterministically hydrates this into a ResearchProposal and an obligation
+    board. This avoids brittle nested-object final calls.
+    """
+
+    title: str
+    proposal_kind: ProposalKind = ProposalKind.literature_audit
+    precise_goal: str
+    relevant_assumptions_and_model: list[str] = Field(default_factory=list)
+    expected_intermediate_lemmas: list[str] = Field(default_factory=list)
+    algorithmic_subgoals: list[str] = Field(default_factory=list)
+    hypotheses_to_test: list[str] = Field(default_factory=list)
+    questions_to_answer: list[str] = Field(default_factory=list)
+    assertions_used_as_assumptions: list[str] = Field(default_factory=list)
+    must_not_assume: list[str] = Field(default_factory=list)
+    critic_constraints: list[str] = Field(default_factory=list)
+    plausibility_argument: str = ""
+    success_criteria: list[str] = Field(default_factory=list)
+    partial_success_criteria: list[str] = Field(default_factory=list)
+    required_tools: list[str] = Field(default_factory=list)
+    known_risks_and_barriers: list[str] = Field(default_factory=list)
+    literature_queries: list[str] = Field(default_factory=list)
+    resource_model: str = ""
+    obligation_statements: list[str] = Field(
+        default_factory=list,
+        description="Concrete factual obligations to run next; do not state that the proposal succeeds.",
+    )
 
 
 class ResearchProposal(StrictModel):
@@ -224,9 +250,13 @@ class ResearchProposal(StrictModel):
     success_criteria: list[str] = Field(default_factory=list)
     partial_success_criteria: list[str] = Field(default_factory=list)
     required_tools: list[str] = Field(default_factory=list)
-    known_risks_and_barriers: list[ProposalRisk] = Field(default_factory=list)
+    known_risks_and_barriers: list[str] = Field(default_factory=list)
     literature_queries: list[str] = Field(default_factory=list)
     resource_model: str = ""
+    obligation_statements: list[str] = Field(
+        default_factory=list,
+        description="Concrete factual obligations spawned by this proposal.",
+    )
     created_at: str = Field(default_factory=utc_now)
 
 
@@ -313,6 +343,28 @@ class ProofObligation(StrictModel):
     artifact_refs: list[ArtifactRef] = Field(default_factory=list)
 
 
+class ResearchReportSubmission(StrictModel):
+    """Flat final-tool schema for legacy broad research reports.
+
+    The obligation-first graph primarily uses ObligationRunSubmission. This schema keeps the
+    non-obligation report path simple by avoiding nested ClaimRecord/EvidenceRecord objects in
+    final tool arguments.
+    """
+
+    outcome: ReportOutcome
+    executive_summary: str
+    claim_statements: list[str] = Field(default_factory=list)
+    claim_type: ClaimType = ClaimType.mathematical
+    evidence_type: EvidenceType = EvidenceType.informal_argument
+    evidence_summary: str = ""
+    tool_result_ids: list[str] = Field(default_factory=list)
+    citation_keys: list[str] = Field(default_factory=list)
+    proof_obligation_statements: list[str] = Field(default_factory=list)
+    unresolved_issues: list[str] = Field(default_factory=list)
+    proposed_next_steps: list[str] = Field(default_factory=list)
+    required_verifications: list[str] = Field(default_factory=list)
+
+
 class ResearchReport(StrictModel):
     report_id: str = Field(default_factory=lambda: new_id("report"))
     proposal_id: str = ""
@@ -345,39 +397,51 @@ class ValidationResult(StrictModel):
     created_at: str = Field(default_factory=utc_now)
 
 
-class CandidateClaim(StrictModel):
-    claim_id: str = Field(default_factory=lambda: new_id("claim"))
-    statement: str
-    claim_type: ClaimType = ClaimType.mathematical
-    status: Literal["candidate", "in_progress", "proven", "blocked", "refuted"] = "candidate"
-    source_proposal_id: str = ""
-    obligation_ids: list[str] = Field(default_factory=list)
-    evidence: list[EvidenceRecord] = Field(default_factory=list)
-    blocked_reason: str = ""
-    created_at: str = Field(default_factory=utc_now)
-    updated_at: str = Field(default_factory=utc_now)
-
-
 class ResearchObligation(StrictModel):
     obligation_id: str = Field(default_factory=lambda: new_id("obl"))
-    claim_id: str = ""
+    proposal_id: str = ""
     statement: str
     kind: Literal["literature", "derivation", "proof", "experiment", "consistency", "other"] = "other"
     required_evidence: list[EvidenceType] = Field(default_factory=list)
+    success_criteria: list[str] = Field(default_factory=list)
+    assumptions: list[str] = Field(default_factory=list)
     status: Literal["open", "in_progress", "fulfilled", "blocked", "failed"] = "open"
     last_run_id: str | None = None
     failure_reason: str = ""
+    generated_claim_ids: list[str] = Field(default_factory=list)
     evidence_refs: list[ArtifactRef] = Field(default_factory=list)
     created_at: str = Field(default_factory=utc_now)
     updated_at: str = Field(default_factory=utc_now)
 
 
+class ObligationRunSubmission(StrictModel):
+    """Flat final-tool schema for one obligation attempt.
+
+    The model submits factual findings as strings plus simple evidence handles. The system hydrates
+    this into ClaimRecord/EvidenceRecord objects and attaches real tool artifacts from the trace.
+    """
+
+    outcome: Literal["fulfilled", "blocked", "failed", "partial"] = "blocked"
+    summary: str
+    claim_statements: list[str] = Field(
+        default_factory=list,
+        description="Factual claims established by this obligation run; no proposal-success meta claims.",
+    )
+    evidence_type: EvidenceType = EvidenceType.informal_argument
+    evidence_summary: str = ""
+    tool_result_ids: list[str] = Field(default_factory=list)
+    citation_keys: list[str] = Field(default_factory=list)
+    unresolved_blockers: list[str] = Field(default_factory=list)
+    child_obligation_statements: list[str] = Field(default_factory=list)
+
+
 class ObligationRun(StrictModel):
     run_id: str = Field(default_factory=lambda: new_id("obl_run"))
     obligation_id: str = ""
-    claim_id: str = ""
+    proposal_id: str = ""
     outcome: Literal["fulfilled", "blocked", "failed", "partial"] = "blocked"
     summary: str
+    claims_generated: list[ClaimRecord] = Field(default_factory=list)
     evidence: list[EvidenceRecord] = Field(default_factory=list)
     artifact_refs: list[ArtifactRef] = Field(default_factory=list)
     child_obligations: list[ResearchObligation] = Field(default_factory=list)
@@ -387,7 +451,6 @@ class ObligationRun(StrictModel):
 
 
 class ObligationBoard(StrictModel):
-    candidate_claims: list[CandidateClaim] = Field(default_factory=list)
     obligations: list[ResearchObligation] = Field(default_factory=list)
     runs: list[ObligationRun] = Field(default_factory=list)
     updated_at: str = Field(default_factory=utc_now)
@@ -720,7 +783,6 @@ class GraphState(TypedDict):
     current_proposal_path: NotRequired[str | None]
     current_report_path: NotRequired[str | None]
     current_obligation_id: NotRequired[str | None]
-    current_claim_id: NotRequired[str | None]
     current_obligation_run_path: NotRequired[str | None]
     current_obligation_trace_path: NotRequired[str | None]
     last_verdict_path: NotRequired[str | None]

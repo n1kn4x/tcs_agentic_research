@@ -18,7 +18,6 @@ from .llm import LLMRouter
 from .obligations import CommitManager, ObligationBoardManager, ObligationRunValidator
 from .render import render_report_markdown, render_verdict_markdown
 from .schemas import (
-    CandidateClaim,
     GraphState,
     ObligationRun,
     ReplicationResult,
@@ -140,7 +139,6 @@ class ResearchGraph:
         board = board_manager.load()
         obligation = board_manager.next_open_obligation(board)
         proposal_path: str | None = None
-        candidate: CandidateClaim | None = None
 
         if obligation is None:
             proposal, _critique, proposal_path = ProposalAgent(
@@ -149,7 +147,7 @@ class ResearchGraph:
                 state,
                 max_revisions=self.max_proposal_revisions,
             )
-            candidate, _obligations, _created = board_manager.ensure_candidate_from_proposal(proposal)
+            board_manager.ensure_obligations_from_proposal(proposal)
             board = board_manager.load()
             obligation = board_manager.next_open_obligation(board)
             if obligation is None:
@@ -157,22 +155,16 @@ class ResearchGraph:
             state = self._require_state()
         else:
             # Count each obligation run as a graph iteration, even when it continues an
-            # existing proposal/candidate claim.
+            # existing proposal plan.
             state.iteration += 1
+            if obligation.proposal_id:
+                state.current_proposal_id = obligation.proposal_id
             self.store.save_state(state)
-            found_candidate = board_manager.get_claim(board, obligation.claim_id)
-            if found_candidate is None:
-                raise RuntimeError(f"Open obligation `{obligation.obligation_id}` has no candidate claim")
-            candidate = found_candidate
-
-        if candidate is None:
-            raise RuntimeError(f"Open obligation `{obligation.obligation_id}` has no candidate claim")
 
         return {
             "iteration": state.iteration,
             "current_proposal_id": state.current_proposal_id,
             "current_proposal_path": proposal_path,
-            "current_claim_id": candidate.claim_id,
             "current_obligation_id": obligation.obligation_id,
         }
 
@@ -186,20 +178,15 @@ class ResearchGraph:
         obligation = board_manager.get_obligation(board, obligation_id)
         if obligation is None:
             raise RuntimeError(f"No obligation `{obligation_id}` in ObligationBoard")
-        candidate = board_manager.get_claim(board, obligation.claim_id)
-        if candidate is None:
-            raise RuntimeError(f"No candidate claim `{obligation.claim_id}` in ObligationBoard")
         research_agent = ResearchAgent(self.store, self.router, prompt_dir=self.prompt_dir)
         run, run_path, trace_path = research_agent.run_obligation(
             obligation=obligation,
-            candidate_claim=candidate,
             state=state,
         )
         return {
             "current_obligation_run_path": run_path,
             "current_obligation_trace_path": trace_path,
             "current_obligation_id": run.obligation_id,
-            "current_claim_id": run.claim_id,
         }
 
     def _node_update_state(self, graph_state: GraphState) -> dict[str, Any]:
@@ -214,15 +201,11 @@ class ResearchGraph:
         obligation = board_manager.get_obligation(board, run.obligation_id)
         if obligation is None:
             raise RuntimeError(f"No obligation `{run.obligation_id}` in ObligationBoard")
-        candidate = board_manager.get_claim(board, obligation.claim_id)
-        if candidate is None:
-            raise RuntimeError(f"No candidate claim `{obligation.claim_id}` in ObligationBoard")
         trace_payload = self.store.read_json(trace_path) if trace_path else {}
         trace = trace_payload.get("trace", trace_payload) if isinstance(trace_payload, dict) else {}
         validation = ObligationRunValidator(self.store).validate(
             run=run,
             obligation=obligation,
-            candidate_claim=candidate,
             trace=trace,
         )
         run.validation = validation
@@ -313,10 +296,17 @@ class ResearchGraph:
         ]
         if validation.blocking_issues:
             summary_lines.append("Blocking issues: " + "; ".join(validation.blocking_issues))
+        latest_claims = self.store.latest_claims_by_id()
+        committed_claims = [
+            latest_claims[claim_id]
+            for claim_id in commit_result.get("accepted_claim_ids", [])
+            if claim_id in latest_claims
+        ]
         report = ResearchReport(
             proposal_id=state.current_proposal_id or "",
             outcome=outcome,
             executive_summary="\n".join(summary_lines),
+            claims_generated=committed_claims or list(run.claims_generated),
             evidence=list(run.evidence),
             unresolved_issues=list(validation.blocking_issues),
             artifact_refs=[self.store.artifact_ref(ArtifactStore.OBLIGATION_BOARD)],
@@ -366,8 +356,8 @@ class ResearchGraph:
             for claim_id, claim in latest_claims.items()
             if is_claim_acceptably_supported(claim, self.store)
         ]
-        # Keep ResearchState focused on accepted/proven claims. Draft, contradictory, or
-        # blocked candidate claims live on ObligationBoard.json, not in active_claim_ids.
+        # Keep ResearchState focused on accepted/proven claims. Draft findings and blocked
+        # attempts live on ObligationBoard.json, not in active_claim_ids.
         state.active_claim_ids = list(accepted_claim_ids)
         state.accepted_claim_ids = accepted_claim_ids
         state.rejected_claim_ids = [

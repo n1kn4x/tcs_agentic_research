@@ -19,10 +19,10 @@ Check:
 - whether forbidden shortcuts and hidden assumptions are listed in `must_not_assume` when relevant;
 - plausibility as a bounded research iteration;
 - risks from lower bounds, no-go theorems, hidden assumptions, or duplicate literature;
-- whether required tools and verification stages are identified.
+- whether required tools, verification stages, and concrete `obligation_statements` are identified.
 
 Decision policy:
-- `accept` if the proposal is safe to execute, has clear criteria, and turns missing or doubtful technical facts into explicit hypotheses/questions/obligations/checks;
+- `accept` if the proposal is safe to execute, has clear criteria, and turns missing or doubtful technical facts into explicit hypotheses/questions/obligation_statements/checks;
 - judge by whether the research agent would know what to do next, not by whether the proposed final theorem is already true;
 - do not demand final theorem statements, final complexity bounds, definitive literature answers, or a complete end-to-end success path at the proposal stage;
 - if a mathematically doubtful claim appears as a hypothesis to test, question to answer, or barrier to analyze, prefer `accept` or a narrow revision rather than requiring the generator to solve it immediately;

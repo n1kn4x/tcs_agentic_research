@@ -51,12 +51,12 @@ from tcs_agentic_research.schemas import (
     InitializationInterviewTurn,
     LiteratureExtract,
     LiteratureSource,
-    CandidateClaim,
     CriticDecision,
     ModelProfile,
     ObligationRun,
     PaperMetadata,
     ProposalCritique,
+    ProposalSubmission,
     ProposalKind,
     ReplicationResult,
     ReportOutcome,
@@ -64,6 +64,7 @@ from tcs_agentic_research.schemas import (
     ResearchObligation,
     ResearchProposal,
     ResearchReport,
+    ResearchReportSubmission,
     ResearchState,
     RouterSettings,
     StrictModel,
@@ -82,8 +83,8 @@ PROMPT_SCHEMAS = {
     "leap_reviser": FormalProofCandidate,
     "literature_researcher": LiteratureExtract,
     "proposal_critic": ProposalCritique,
-    "proposal_generator": ResearchProposal,
-    "research_agent": ResearchReport,
+    "proposal_generator": ProposalSubmission,
+    "research_agent": ResearchReportSubmission,
     "research_critic": ResearchCritique,
 }
 
@@ -613,17 +614,20 @@ def test_artifact_retrieval_tools_read_text_and_jsonl(tmp_path: Path) -> None:
 
 def test_obligation_validator_blocks_placeholder_and_unknown_tool_id(tmp_path: Path) -> None:
     store = _store(tmp_path)
-    claim = CandidateClaim(statement="Candidate theorem.")
     obligation = ResearchObligation(
-        claim_id=claim.claim_id,
         statement="Derive the theorem.",
         required_evidence=[EvidenceType.informal_argument],
     )
     run = ObligationRun(
         obligation_id=obligation.obligation_id,
-        claim_id=claim.claim_id,
         outcome="fulfilled",
         summary="test",
+        claims_generated=[
+            ClaimRecord(
+                claim_type=ClaimType.mathematical,
+                statement="A concrete theorem follows from the derivation.",
+            )
+        ],
         evidence=[
             EvidenceRecord(
                 evidence_type=EvidenceType.informal_argument,
@@ -636,7 +640,6 @@ def test_obligation_validator_blocks_placeholder_and_unknown_tool_id(tmp_path: P
     validation = ObligationRunValidator(store).validate(
         run=run,
         obligation=obligation,
-        candidate_claim=claim,
         trace={"tool_calls": []},
     )
 
@@ -645,29 +648,29 @@ def test_obligation_validator_blocks_placeholder_and_unknown_tool_id(tmp_path: P
     assert any("unknown tool_result_id" in issue for issue in validation.blocking_issues)
 
 
-def test_commit_manager_accepts_claim_only_after_all_obligations_pass(tmp_path: Path) -> None:
+def test_commit_manager_accepts_claim_from_validated_obligation(tmp_path: Path) -> None:
     store = _store(tmp_path)
     manager = ObligationBoardManager(store)
-    claim = CandidateClaim(statement="A checked derivation establishes the candidate claim.")
     obligation = ResearchObligation(
-        claim_id=claim.claim_id,
         statement="Give the checked derivation.",
         required_evidence=[EvidenceType.informal_argument],
     )
-    claim.obligation_ids = [obligation.obligation_id]
     board = store.load_obligation_board()
-    board.candidate_claims.append(claim)
     board.obligations.append(obligation)
     manager.save(board)
     run_ref = store.write_text("Reports/iterations/iteration_0001/manual_run.json", "{}\n")
+    claim = ClaimRecord(
+        claim_type=ClaimType.mathematical,
+        statement="A checked derivation establishes the candidate theorem.",
+    )
     run = ObligationRun(
         obligation_id=obligation.obligation_id,
-        claim_id=claim.claim_id,
         outcome="fulfilled",
         summary=(
             "This derivation is intentionally long enough for the deterministic evidence gate "
             "to treat it as a substantive informal derivation in this smoke test."
         ),
+        claims_generated=[claim],
         evidence=[
             EvidenceRecord(
                 evidence_type=EvidenceType.informal_argument,
@@ -691,41 +694,35 @@ def test_commit_manager_accepts_claim_only_after_all_obligations_pass(tmp_path: 
         run_ref=run_ref,
     )
 
-    assert result["outcome"] == "claim_accepted"
+    assert result["outcome"] == "claims_accepted"
     latest = store.latest_claims_by_id()
     assert claim.claim_id in latest
     assert is_claim_acceptably_supported(latest[claim.claim_id], store)
 
 
-def test_commit_manager_blocks_claim_on_failed_validation(tmp_path: Path) -> None:
+def test_commit_manager_blocks_obligation_on_failed_validation(tmp_path: Path) -> None:
     store = _store(tmp_path)
-    claim = CandidateClaim(statement="Unsafe candidate claim.")
-    obligation = ResearchObligation(claim_id=claim.claim_id, statement="Prove it.")
-    claim.obligation_ids = [obligation.obligation_id]
+    obligation = ResearchObligation(statement="Prove it.")
     board = store.load_obligation_board()
-    board.candidate_claims.append(claim)
     board.obligations.append(obligation)
     store.save_obligation_board(board)
     run_ref = store.write_text("Reports/iterations/iteration_0001/blocked_run.json", "{}\n")
     run = ObligationRun(
         obligation_id=obligation.obligation_id,
-        claim_id=claim.claim_id,
         outcome="blocked",
         summary="The attempt was blocked by missing evidence.",
     )
     validation = ValidationResult(
         ok=False,
-        gate_results=[ValidationGateStatus(gate="evidence", passed=False, issues=["missing"] )],
+        gate_results=[ValidationGateStatus(gate="evidence", passed=False, issues=["missing"])],
         blocking_issues=["missing"],
     )
 
     CommitManager(store).apply_obligation_run(run=run, validation=validation, run_ref=run_ref)
 
     board_after = store.load_obligation_board()
-    blocked_claim = next(item for item in board_after.candidate_claims if item.claim_id == claim.claim_id)
     blocked_obligation = next(
         item for item in board_after.obligations if item.obligation_id == obligation.obligation_id
     )
-    assert blocked_claim.status == "blocked"
     assert blocked_obligation.status == "blocked"
-    assert claim.claim_id not in store.latest_claims_by_id()
+    assert not store.latest_claims_by_id()

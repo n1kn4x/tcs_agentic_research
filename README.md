@@ -21,7 +21,7 @@ ResearchTask.md                 human-readable task, assumptions, criteria
 InitializationInterview.md      transcript of the adaptive initialization conversation
 Nomenclature.yml                canonical symbols and aliases
 ResearchState.json              compact machine state summary
-ObligationBoard.json            candidate claims, linked obligations, runs, and blocked reasons
+ObligationBoard.json            obligation-first work queue, runs, generated claims, and blocked reasons
 ClaimLedger.jsonl               accepted/proven mathematical/algorithmic/literature/resource claims
 ProposalLedger.jsonl            proposal events and critic decisions
 ModelCallLedger.jsonl           model routing, latency, token, validation logs
@@ -171,13 +171,13 @@ The LangGraph implements:
 state = LoadInitializedTask()  # run `tcs-research init` first
 while not state.solved:
     if no open obligation exists:
-        proposal = GenerateResearchProposal(state, blocked_claims_and_failed_obligations)
-        candidate_claim, obligations = CreateCandidateClaimAndObligations(proposal)
+        proposal = GenerateResearchProposal(state, blocked_or_failed_obligations)
+        obligations = CreateObligationsFromProposal(proposal)
 
     obligation = SelectNextOpenObligation()
     run = RunTCSResearchSubagentOnOneObligation(obligation)
     validation = DeterministicObligationGates(run)  # scope/provenance, evidence, consistency
-    state = CommitOnlyIfValidated(run, validation)
+    state = CommitGeneratedClaimsOnlyIfValidated(run, validation)
     solved_verdict = ComputeSolvedVerdict(state, derived_summary_report)
 
     if solved_verdict.possible_breakthrough:
@@ -188,13 +188,13 @@ while not state.solved:
         break
 ```
 
-Nodes durably write artifacts before returning. Reports are derived summaries; they are not the canonical path for accepting claims. Candidate claims live on `ObligationBoard.json` until every linked obligation is fulfilled and passes deterministic gates. Only the deterministic commit manager appends accepted claims to `ClaimLedger.jsonl`. The graph is resumable through `GraphCheckpoints.sqlite` using a LangGraph `thread_id`.
+Nodes durably write artifacts before returning. Reports are derived summaries; they are not the canonical path for accepting claims. Proposals create obligations, obligation runs generate factual claim statements, and only the deterministic commit manager appends claims from validated runs to `ClaimLedger.jsonl`. The graph is resumable through `GraphCheckpoints.sqlite` using a LangGraph `thread_id`.
 
 ## Agents
 
 - `InitializationAgent`: LLM-guided adaptive interview and synthesis of `ResearchTask.md`, `Nomenclature.yml`, initial state, and ledgers.
 - `ProposalAgent`: proposal generator using native OpenAI/vLLM tool calls plus proposal critic with revision/rejection logic. Private model reasoning is not replayed into future contexts; only committed proposal artifacts are.
-- `ResearchAgent`: executes a selected proposal in a native OpenAI/vLLM tool-call loop and finishes by calling `submit_research_report`; deterministic critics/evidence gates still decide which claims are accepted.
+- `ResearchAgent`: executes one selected obligation in a native OpenAI/vLLM tool-call loop and finishes with a flat obligation-run submission; deterministic gates decide which generated claim statements are committed.
 - `ResearchCriticAgent`: distinguishes proofs, citations, experiments, informal arguments, conjectures, refutations, and forced verification obligations.
 - `LiteratureResearcher`: modular literature pipeline for OpenAlex search/citation candidate discovery, arXiv/DOI/PDF import, PDF text extraction, theorem/algorithm extraction, nomenclature updates, duplicate detection, and quote-provenance query answers in mapped notation.
 - `TheoremProverAgent` / `LEAPHarness`: Lean proof search with local Lean declaration retrieval, direct formalization, revision, blueprint decomposition, AND-OR proof DAGs, and strict `sorry` discipline.
@@ -218,10 +218,10 @@ Partial LEAP results are still recorded: proved lemmas, open goals, blocked goal
 ## Prompts and schemas
 
 Prompts live in `src/tcs_agentic_research/prompts/*.md` and are intended to be edited.
-Structured prompts contain schema placeholders like `{{ResearchReport}}`. At runtime
+Structured prompts contain schema placeholders like `{{ProposalSubmission}}` and `{{ObligationRunSubmission}}`. At runtime
 each placeholder is replaced with the full Pydantic JSON Schema. The structured-call output
 schema is also sent to vLLM through `guided_json`/`response_format` when supported.
-Returned JSON is validated with the same Pydantic model.
+Returned JSON is validated with the same Pydantic model. Tool-call agents use flat submission schemas (for example `ProposalSubmission` and `ObligationRunSubmission`) that the application hydrates into durable proposal, obligation, evidence, and claim records.
 
 All state-changing agent outputs use Pydantic models in `src/tcs_agentic_research/schemas.py` and
 are serialized as JSON/JSONL/YAML artifacts. Native tool-call agents can use different toolsets 

@@ -16,7 +16,7 @@ from ..schemas import (
     LiteratureCandidate,
     LiteratureQueryAnswer,
     PaperMetadata,
-    ResearchReport,
+    ResearchReportSubmission,
     StrictModel,
 )
 from ..tooling import AgentTool, Toolset, final_submission_tool
@@ -263,7 +263,7 @@ def literature_toolset(
             (
                 "Query the local LiteratureDB in canonical notation. Use this before relying "
                 "on prior work, barriers, novelty, or known results. Returned result handles "
-                "may be referenced in EvidenceRecord.tool_result_ids."
+                "may be referenced in final-submission tool_result_ids."
             ),
             QueryLiteratureArgs,
             query_literature,
@@ -365,7 +365,7 @@ def research_execution_toolset(
     theorem_prover: TheoremProverAgent,
     experiment: ExperimentAgent,
     final_tool_name: str = "submit_research_report",
-    final_schema: type[BaseModel] = ResearchReport,
+    final_schema: type[BaseModel] = ResearchReportSubmission,
     final_tool_description: str | None = None,
 ) -> Toolset:
     """Toolset visible to the research agent's native thinking loop."""
@@ -395,9 +395,9 @@ def research_execution_toolset(
             "proof_dag_summary": result.proof_dag_summary,
             "recommended_next_steps": result.recommended_next_steps[:10],
             "instruction": (
-                "If you use this result in the final report, put the tool_result_id in "
-                "EvidenceRecord.tool_result_ids. A proved result can support matching Lean "
-                "proof evidence; partial/failed results should be reported as unresolved work."
+                "If you use this result in the final submission, put the tool_result_id in "
+                "tool_result_ids. A proved result can support Lean proof evidence; "
+                "partial/failed results should be reported as unresolved work."
             ),
         }
 
@@ -418,10 +418,9 @@ def research_execution_toolset(
             "experiment_result": result.model_dump(mode="json"),
             "artifact_refs": [ref.model_dump(mode="json") for ref in result.artifact_refs],
             "instruction": (
-                "If you use this result in the final report, include this ExperimentResult in "
-                "ResearchReport.experimental_results and put the tool_result_id in supporting "
-                "EvidenceRecord.tool_result_ids. Experiments support empirical claims only; "
-                "they do not prove mathematical claims."
+                "If you use this result in the final submission, put the tool_result_id in "
+                "tool_result_ids. The system will attach reproducible run artifacts from the "
+                "trace. Experiments support empirical claims only; they do not prove mathematical claims."
             ),
         }
 
@@ -467,9 +466,9 @@ def research_execution_toolset(
                 final_tool_name,
                 final_tool_description
                 or (
-                    "Commit the final structured ResearchReport. The arguments must be the "
-                    "ResearchReport object itself, not wrapped under another key. Reference any "
-                    "used tool_result_id values in EvidenceRecord.tool_result_ids."
+                    "Commit the final flat research-report submission. Use simple strings/lists "
+                    "rather than nested ClaimRecord/EvidenceRecord objects; reference any used "
+                    "tool_result_id values in tool_result_ids."
                 ),
                 final_schema,
             ),
@@ -519,8 +518,8 @@ def _compact_literature_answer(
         "limitations": answer.limitations[:5],
         "ledger_ref": ledger_ref.model_dump(mode="json"),
         "instruction": (
-            "If a final report uses this literature query, put answer_id/tool_result_id in "
-            "EvidenceRecord.tool_result_ids and cite returned citation_key values."
+            "If a final submission uses this literature query, put answer_id/tool_result_id in "
+            "tool_result_ids and cite returned citation_key values."
         ),
     }
 

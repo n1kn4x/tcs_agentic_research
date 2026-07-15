@@ -17,7 +17,7 @@ from ..schemas import (
     ProposalCritique,
     ProposalKind,
     ProposalLedgerEntry,
-    ProposalRisk,
+    ProposalSubmission,
     ResearchProposal,
     ResearchState,
 )
@@ -186,15 +186,18 @@ class ProposalAgent:
             {"role": "user", "content": compact_json_dumps(prompt_payload)},
         ]
         toolset = self._proposal_toolset()
-        proposal, trace = self.router.complete_structured_with_tools(
+        submission, trace = self.router.complete_structured_with_tools(
             task_type="proposal_generation",
             messages=messages,
             tools=toolset.openai_tools(),
             tool_executors=toolset.executors(),
-            schema=ResearchProposal,
+            schema=ProposalSubmission,
             final_tool_name=FINAL_PROPOSAL_TOOL_NAME,
-            mock_output=dry_run_seed if self.router.dry_run else None,
+            mock_output=_proposal_submission_from_research_proposal(dry_run_seed)
+            if self.router.dry_run
+            else None,
         )
+        proposal = _research_proposal_from_submission(submission)
         self._write_proposal_tool_trace(
             iteration_dir,
             attempt=attempt,
@@ -213,10 +216,11 @@ class ProposalAgent:
                 final_submission_tool(
                     FINAL_PROPOSAL_TOOL_NAME,
                     (
-                        "Commit the final concrete research proposal. The arguments must be the "
-                        "ResearchProposal object itself, not wrapped under another key."
+                        "Commit the final flat proposal submission. Use simple strings/lists, "
+                        "including obligation_statements for the factual work items to run next; "
+                        "do not submit nested objects or proposal-success claims."
                     ),
-                    ResearchProposal,
+                    ProposalSubmission,
                 )
             ]
         )
@@ -376,8 +380,8 @@ class ProposalAgent:
                 "Do not assume artifact contents that are not included in this prompt. "
                 "Use read_artifact or read_jsonl_records when details from prior proposals, "
                 "claims, literature answers, reports, obligation runs, or traces materially "
-                "affect the proposal. Accepted claims are established; blocked candidate "
-                "claims and failed obligations are diagnostic input only."
+                "affect the proposal. Accepted claims are established; blocked or failed "
+                "obligations are diagnostic input only."
             ),
         }
 
@@ -480,16 +484,8 @@ class ProposalAgent:
                 "Lean/LEAP only if a clean formal proposition emerges",
             ],
             known_risks_and_barriers=[
-                ProposalRisk(
-                    risk="The obstruction may show that the attempted positive route cannot work under the task model.",
-                    mitigation="Treat a clear bottleneck or negative-result statement as successful progress.",
-                    severity="medium",
-                ),
-                ProposalRisk(
-                    risk="The critic objections may be too broad to settle in one iteration.",
-                    mitigation="Prioritize the objections that invalidate correctness or asymptotic improvement, then record narrower open obligations.",
-                    severity="medium",
-                ),
+                "The obstruction may show that the attempted positive route cannot work under the task model; treat a clear bottleneck or negative-result statement as successful progress.",
+                "The critic objections may be too broad to settle in one iteration; prioritize correctness and asymptotic blockers first.",
             ],
             literature_queries=[
                 "local provenance for the central theorem or algorithm used in the criticised proposal",
@@ -501,6 +497,11 @@ class ProposalAgent:
                 "including sample count, classical preprocessing, quantum state preparation, quantum "
                 "gates/queries, repetitions/amplification, and candidate verification."
             ),
+            obligation_statements=[
+                "Classify each critic objection as resolved, refuted, or still open with explicit evidence.",
+                "Derive or counter-derive the central probability/resource calculation in the disputed route.",
+                "State the strongest factual conclusion justified by the obstruction analysis.",
+            ],
         )
 
     def _fallback_accept_critique(
@@ -590,11 +591,7 @@ class ProposalAgent:
                 "experiment_runner_if_needed",
             ],
             known_risks_and_barriers=[
-                ProposalRisk(
-                    risk="The pass may not produce a new theorem.",
-                    mitigation="Treat literature-vetted barriers and formalization targets as valid partial progress.",
-                    severity="low",
-                )
+                "The pass may not produce a new theorem; literature-vetted barriers and formalization targets still count as partial progress."
             ],
             literature_queries=[
                 "known best algorithms and lower bounds for the task",
@@ -602,6 +599,11 @@ class ProposalAgent:
                 "complexity-theoretic barriers and reductions",
             ],
             resource_model="Use explicit asymptotic time, space, query, circuit, proof-size, and quantum resources when relevant.",
+            obligation_statements=[
+                "Normalize the central problem statement and record which facts are cited, proved, conjectural, or open.",
+                "Identify literature barriers or baseline results that constrain the target problem.",
+                "Produce one concrete next factual obligation for proof, derivation, literature review, or experiment.",
+            ],
         )
 
     def _mock_critique(self, proposal: ResearchProposal) -> ProposalCritique:
@@ -618,6 +620,69 @@ class ProposalAgent:
             required_revisions=[],
             confidence=0.7,
         )
+
+
+def _research_proposal_from_submission(submission: ProposalSubmission) -> ResearchProposal:
+    """Hydrate the model-facing flat proposal into the durable internal proposal."""
+    obligations = list(dict.fromkeys(item.strip() for item in submission.obligation_statements if item.strip()))
+    if not obligations:
+        obligations = _default_obligation_statements(submission)
+    return ResearchProposal(
+        title=submission.title,
+        proposal_kind=submission.proposal_kind,
+        precise_goal=submission.precise_goal,
+        relevant_assumptions_and_model=submission.relevant_assumptions_and_model,
+        expected_intermediate_lemmas=submission.expected_intermediate_lemmas,
+        algorithmic_subgoals=submission.algorithmic_subgoals,
+        hypotheses_to_test=submission.hypotheses_to_test,
+        questions_to_answer=submission.questions_to_answer,
+        assertions_used_as_assumptions=submission.assertions_used_as_assumptions,
+        must_not_assume=submission.must_not_assume,
+        critic_constraints=submission.critic_constraints,
+        plausibility_argument=submission.plausibility_argument,
+        success_criteria=submission.success_criteria,
+        partial_success_criteria=submission.partial_success_criteria,
+        required_tools=submission.required_tools,
+        known_risks_and_barriers=submission.known_risks_and_barriers,
+        literature_queries=submission.literature_queries,
+        resource_model=submission.resource_model,
+        obligation_statements=obligations,
+    )
+
+
+def _proposal_submission_from_research_proposal(proposal: ResearchProposal) -> ProposalSubmission:
+    return ProposalSubmission(
+        title=proposal.title,
+        proposal_kind=proposal.proposal_kind,
+        precise_goal=proposal.precise_goal,
+        relevant_assumptions_and_model=proposal.relevant_assumptions_and_model,
+        expected_intermediate_lemmas=proposal.expected_intermediate_lemmas,
+        algorithmic_subgoals=proposal.algorithmic_subgoals,
+        hypotheses_to_test=proposal.hypotheses_to_test,
+        questions_to_answer=proposal.questions_to_answer,
+        assertions_used_as_assumptions=proposal.assertions_used_as_assumptions,
+        must_not_assume=proposal.must_not_assume,
+        critic_constraints=proposal.critic_constraints,
+        plausibility_argument=proposal.plausibility_argument,
+        success_criteria=proposal.success_criteria,
+        partial_success_criteria=proposal.partial_success_criteria,
+        required_tools=proposal.required_tools,
+        known_risks_and_barriers=proposal.known_risks_and_barriers,
+        literature_queries=proposal.literature_queries,
+        resource_model=proposal.resource_model,
+        obligation_statements=proposal.obligation_statements or _default_obligation_statements(proposal),
+    )
+
+
+def _default_obligation_statements(source: ProposalSubmission | ResearchProposal) -> list[str]:
+    items: list[str] = []
+    items.extend(source.expected_intermediate_lemmas[:6])
+    items.extend(source.questions_to_answer[:4])
+    if not items:
+        items.extend(source.success_criteria[:4])
+    if not items:
+        items.append(source.precise_goal)
+    return list(dict.fromkeys(item.strip() for item in items if item.strip()))
 
 
 def _critique_constraints(critique: ProposalCritique | None) -> list[str]:

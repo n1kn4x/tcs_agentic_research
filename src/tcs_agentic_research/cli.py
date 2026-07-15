@@ -221,12 +221,16 @@ def _cmd_status(args: argparse.Namespace) -> int:
     print(
         json.dumps(
             {
-                "candidate_claims": [claim.model_dump(mode="json") for claim in board.candidate_claims[-args.ledger_tail :]],
                 "open_obligations": [
                     obligation.model_dump(mode="json")
                     for obligation in board.obligations
                     if obligation.status == "open"
                 ][: args.ledger_tail],
+                "blocked_or_failed_obligations": [
+                    obligation.model_dump(mode="json")
+                    for obligation in board.obligations
+                    if obligation.status in {"blocked", "failed"}
+                ][-args.ledger_tail :],
                 "recent_runs": [run.model_dump(mode="json") for run in board.runs[-args.ledger_tail :]],
             },
             indent=2,

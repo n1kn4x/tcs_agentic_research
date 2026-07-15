@@ -6,10 +6,7 @@ from .schemas import ResearchProposal, ResearchReport, SolvedVerdict
 
 
 def render_proposal_markdown(proposal: ResearchProposal) -> str:
-    risks = "\n".join(
-        f"- **{r.severity}**: {r.risk}" + (f" Mitigation: {r.mitigation}" if r.mitigation else "")
-        for r in proposal.known_risks_and_barriers
-    ) or "- None recorded."
+    risks = _bullets(proposal.known_risks_and_barriers)
     return f"""# Research Proposal: {proposal.title}
 
 **Proposal ID:** `{proposal.proposal_id}`  
@@ -62,6 +59,9 @@ def render_proposal_markdown(proposal: ResearchProposal) -> str:
 
 ## Known risks and barriers
 {risks}
+
+## Obligation statements
+{_bullets(proposal.obligation_statements)}
 """
 
 
