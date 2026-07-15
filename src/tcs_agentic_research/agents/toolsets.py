@@ -42,16 +42,28 @@ class SearchPapersArgs(StrictModel):
 class ImportUrlArgs(StrictModel):
     url: str
     extract_text: bool = True
+    expected_title: str = ""
+    expected_authors: list[str] = Field(default_factory=list)
+    expected_year: int | None = None
+    expected_venue: str = ""
 
 
 class ImportArxivArgs(StrictModel):
     arxiv_id: str
     extract_text: bool = True
+    expected_title: str = ""
+    expected_authors: list[str] = Field(default_factory=list)
+    expected_year: int | None = None
+    expected_venue: str = ""
 
 
 class ImportDoiArgs(StrictModel):
     doi: str
     extract_text: bool = True
+    expected_title: str = ""
+    expected_authors: list[str] = Field(default_factory=list)
+    expected_year: int | None = None
+    expected_venue: str = ""
 
 
 class ImportCandidateArgs(StrictModel):
@@ -322,17 +334,39 @@ def literature_toolset(
 
         def import_url(arguments: dict[str, Any]) -> dict[str, Any]:
             args = ImportUrlArgs.model_validate(arguments)
-            paper = literature.import_url(args.url, extract_text=args.extract_text)
+            paper = literature.import_url(
+                args.url,
+                title=args.expected_title or None,
+                extract_text=args.extract_text,
+                expected_title=args.expected_title or None,
+                expected_authors=args.expected_authors or None,
+                expected_year=args.expected_year,
+                expected_venue=args.expected_venue or None,
+            )
             return _maybe_extract_imported_paper("import_url", paper, requested=args.extract_text)
 
         def import_arxiv(arguments: dict[str, Any]) -> dict[str, Any]:
             args = ImportArxivArgs.model_validate(arguments)
-            paper = literature.import_arxiv(args.arxiv_id, extract_text=args.extract_text)
+            paper = literature.import_arxiv(
+                args.arxiv_id,
+                extract_text=args.extract_text,
+                expected_title=args.expected_title or None,
+                expected_authors=args.expected_authors or None,
+                expected_year=args.expected_year,
+                expected_venue=args.expected_venue or None,
+            )
             return _maybe_extract_imported_paper("import_arxiv", paper, requested=args.extract_text)
 
         def import_doi(arguments: dict[str, Any]) -> dict[str, Any]:
             args = ImportDoiArgs.model_validate(arguments)
-            paper = literature.import_doi(args.doi, extract_text=args.extract_text)
+            paper = literature.import_doi(
+                args.doi,
+                extract_text=args.extract_text,
+                expected_title=args.expected_title or None,
+                expected_authors=args.expected_authors or None,
+                expected_year=args.expected_year,
+                expected_venue=args.expected_venue or None,
+            )
             return _maybe_extract_imported_paper("import_doi", paper, requested=args.extract_text)
 
         def import_candidate(arguments: dict[str, Any]) -> dict[str, Any]:
@@ -356,21 +390,31 @@ def literature_toolset(
                 ),
                 AgentTool(
                     "import_url",
-                    "Import a useful paper from a URL or PDF URL into LiteratureDB.",
+                    (
+                        "Import a useful paper from a URL or PDF URL into LiteratureDB. "
+                        "When targeting a known paper, provide expected_title/authors/year so "
+                        "the importer can reject wrong identifiers before committing metadata."
+                    ),
                     ImportUrlArgs,
                     import_url,
                     strip_system_owned_fields=False,
                 ),
                 AgentTool(
                     "import_arxiv",
-                    "Import an arXiv paper into LiteratureDB.",
+                    (
+                        "Import an arXiv paper into LiteratureDB. Provide expected_title/authors "
+                        "when known; mismatched arXiv IDs are rejected."
+                    ),
                     ImportArxivArgs,
                     import_arxiv,
                     strip_system_owned_fields=False,
                 ),
                 AgentTool(
                     "import_doi",
-                    "Import a DOI into LiteratureDB.",
+                    (
+                        "Import a DOI into LiteratureDB. Provide expected_title/authors when "
+                        "known; mismatched DOI metadata is rejected."
+                    ),
                     ImportDoiArgs,
                     import_doi,
                     strip_system_owned_fields=False,

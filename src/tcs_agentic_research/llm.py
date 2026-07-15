@@ -701,12 +701,20 @@ def _execute_openai_tool(
     arguments: dict[str, Any],
     executors: dict[str, Callable[[dict[str, Any]], Any]],
 ) -> dict[str, Any]:
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,63}", tool_name or ""):
+        return {
+            "status": "error",
+            "error_type": "InvalidToolName",
+            "error": "Tool name contains invalid characters; call exactly one of the advertised tool names.",
+            "available_tools": sorted(executors.keys())[:30],
+        }
     executor = executors.get(tool_name)
     if executor is None:
         return {
             "status": "error",
             "error_type": "UnknownTool",
             "error": f"No executor is registered for tool `{tool_name}`.",
+            "available_tools": sorted(executors.keys())[:30],
         }
     try:
         result = to_plain(executor(arguments))
@@ -728,12 +736,12 @@ def _tool_result_message(call_id: str, tool_name: str, observation: Any) -> dict
     }
 
 
-_MODEL_OBSERVATION_MAX_JSON_CHARS = 12_000
-_MODEL_OBSERVATION_STRING_CHARS = 4_000
-_MODEL_OBSERVATION_AGGRESSIVE_STRING_CHARS = 1_200
-_MODEL_OBSERVATION_LIST_ITEMS = 12
-_MODEL_OBSERVATION_AGGRESSIVE_LIST_ITEMS = 5
-_MODEL_OBSERVATION_SUMMARY_STRING_CHARS = 800
+_MODEL_OBSERVATION_MAX_JSON_CHARS = 8_000
+_MODEL_OBSERVATION_STRING_CHARS = 2_500
+_MODEL_OBSERVATION_AGGRESSIVE_STRING_CHARS = 900
+_MODEL_OBSERVATION_LIST_ITEMS = 8
+_MODEL_OBSERVATION_AGGRESSIVE_LIST_ITEMS = 4
+_MODEL_OBSERVATION_SUMMARY_STRING_CHARS = 600
 _MODEL_OBSERVATION_NOTE_KEY = "_model_visible_observation_note"
 
 

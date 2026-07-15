@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import time
 from typing import Any
 
 import httpx
@@ -21,8 +22,17 @@ class OpenAlexClient:
     It can later grow into cursor pagination, scoring policies, and provider abstraction.
     """
 
-    def __init__(self, *, timeout_seconds: float = 30.0):
+    def __init__(
+        self,
+        *,
+        timeout_seconds: float = 30.0,
+        max_retries: int = 3,
+        backoff_seconds: float = 1.0,
+    ):
         self.timeout_seconds = timeout_seconds
+        self.max_retries = max_retries
+        self.backoff_seconds = backoff_seconds
+        self._cache: dict[tuple[str, tuple[tuple[str, str], ...]], dict[str, Any]] = {}
 
     def search(self, query: str, *, limit: int = 10) -> list[LiteratureCandidate]:
         query = query.strip()
@@ -110,11 +120,40 @@ class OpenAlexClient:
         return self._get_json(f"/works/{short_id}")
 
     def _get_json(self, path: str, *, params: dict[str, str] | None = None) -> dict[str, Any]:
+        cache_key = (path, tuple(sorted((params or {}).items())))
+        if cache_key in self._cache:
+            return dict(self._cache[cache_key])
         headers = {"User-Agent": USER_AGENT}
+        last_exc: Exception | None = None
         with httpx.Client(timeout=self.timeout_seconds, headers=headers) as client:
-            response = client.get(OPENALEX_API.rstrip("/") + path, params=params)
-            response.raise_for_status()
-            return dict(response.json())
+            for attempt in range(self.max_retries + 1):
+                response = client.get(OPENALEX_API.rstrip("/") + path, params=params)
+                if response.status_code < 400:
+                    payload = dict(response.json())
+                    self._cache[cache_key] = payload
+                    return dict(payload)
+                try:
+                    response.raise_for_status()
+                except httpx.HTTPStatusError as exc:
+                    last_exc = exc
+                    if response.status_code not in {429, 500, 502, 503, 504} or attempt >= self.max_retries:
+                        raise
+                    retry_after = _retry_after_seconds(response)
+                    delay = retry_after if retry_after is not None else self.backoff_seconds * (2**attempt)
+                    time.sleep(min(delay, 30.0))
+            if last_exc is not None:
+                raise last_exc
+        raise RuntimeError(f"OpenAlex request failed for {path}")
+
+
+def _retry_after_seconds(response: httpx.Response) -> float | None:
+    value = response.headers.get("Retry-After")
+    if not value:
+        return None
+    try:
+        return max(0.0, float(value))
+    except ValueError:
+        return None
 
 
 def _candidate_from_work(

@@ -44,6 +44,7 @@ class LiteratureFetcher:
         citation_key: str | None = None,
         title: str | None = None,
         doi: str | None = None,
+        commit: bool = True,
     ) -> PaperMetadata:
         """Import a paper from a URL, DOI URL/string, arXiv URL, or direct PDF URL."""
         normalized = url.strip()
@@ -52,11 +53,13 @@ class LiteratureFetcher:
 
         arxiv_id = parse_arxiv_id(normalized)
         if arxiv_id:
-            return self.import_arxiv(arxiv_id, citation_key=citation_key)
+            return self.import_arxiv(arxiv_id, citation_key=citation_key, commit=commit)
 
         doi_value = doi or parse_doi(normalized)
         if doi_value:
-            return self.import_doi(doi_value, citation_key=citation_key, fallback_url=normalized)
+            return self.import_doi(
+                doi_value, citation_key=citation_key, fallback_url=normalized, commit=commit
+            )
 
         resource = self._download(normalized)
         key = citation_key or _citation_key_from_url(resource.final_url)
@@ -94,10 +97,13 @@ class LiteratureFetcher:
         paper.metadata_path = metadata_ref.path
         paper.artifact_refs.append(metadata_ref)
         self._rewrite_paper_metadata(paper)
-        self.store.append_jsonl("LiteratureDB/papers.jsonl", paper)
+        if commit:
+            self.store.append_jsonl("LiteratureDB/papers.jsonl", paper)
         return paper
 
-    def import_arxiv(self, arxiv_id: str, *, citation_key: str | None = None) -> PaperMetadata:
+    def import_arxiv(
+        self, arxiv_id: str, *, citation_key: str | None = None, commit: bool = True
+    ) -> PaperMetadata:
         """Fetch arXiv Atom metadata and the canonical arXiv PDF."""
         clean_id = normalize_arxiv_id(arxiv_id)
         metadata = self._fetch_arxiv_metadata(clean_id)
@@ -127,7 +133,8 @@ class LiteratureFetcher:
         paper.metadata_path = metadata_ref.path
         paper.artifact_refs.append(metadata_ref)
         self._rewrite_paper_metadata(paper)
-        self.store.append_jsonl("LiteratureDB/papers.jsonl", paper)
+        if commit:
+            self.store.append_jsonl("LiteratureDB/papers.jsonl", paper)
         return paper
 
     def import_doi(
@@ -136,6 +143,7 @@ class LiteratureFetcher:
         *,
         citation_key: str | None = None,
         fallback_url: str | None = None,
+        commit: bool = True,
     ) -> PaperMetadata:
         """Fetch DOI metadata through Crossref and download a PDF when a direct link exists."""
         clean_doi = normalize_doi(doi)
@@ -195,7 +203,8 @@ class LiteratureFetcher:
         paper.metadata_path = metadata_ref.path
         paper.artifact_refs.append(metadata_ref)
         self._rewrite_paper_metadata(paper)
-        self.store.append_jsonl("LiteratureDB/papers.jsonl", paper)
+        if commit:
+            self.store.append_jsonl("LiteratureDB/papers.jsonl", paper)
         return paper
 
     def _paper_dir(self, citation_key: str) -> str:

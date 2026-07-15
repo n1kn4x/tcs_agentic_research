@@ -45,6 +45,10 @@ from ..schemas import (
 )
 
 
+class PaperMetadataMismatchError(ValueError):
+    """Raised when fetched paper metadata does not match an expected target paper."""
+
+
 class LiteratureResearcher:
     """Independent literature pipeline.
 
@@ -80,16 +84,25 @@ class LiteratureResearcher:
         arxiv_id = parse_arxiv_id(token) or (token if source.source_type == "arxiv" else None)
         if arxiv_id:
             return self.import_arxiv(
-                str(arxiv_id), citation_key=citation_key, extract_text=source.extract_text
+                str(arxiv_id),
+                citation_key=citation_key,
+                extract_text=source.extract_text,
+                expected_title=source.title or None,
             )
         doi = parse_doi(token) or (token if source.source_type == "doi" else None)
         if doi:
-            return self.import_doi(str(doi), citation_key=citation_key, extract_text=source.extract_text)
+            return self.import_doi(
+                str(doi),
+                citation_key=citation_key,
+                extract_text=source.extract_text,
+                expected_title=source.title or None,
+            )
         return self.import_url(
             token,
             citation_key=citation_key,
             title=source.title or None,
             extract_text=source.extract_text,
+            expected_title=source.title or None,
         )
 
     def import_paper(self, paper: PaperMetadata) -> PaperMetadata:
@@ -101,6 +114,10 @@ class LiteratureResearcher:
         existing = self._find_existing_paper_for_metadata(paper)
         if existing is not None and existing.paper_id != paper.paper_id:
             self.index.add_alias(existing.paper_id, "citation_key", paper.citation_key)
+            merged, changed = _merge_duplicate_paper_metadata(existing, paper)
+            if changed:
+                self._update_paper_record(merged)
+                return merged
             return existing
         if paper.metadata_path:
             metadata_ref = self.store.write_json(paper.metadata_path, paper)
@@ -125,8 +142,16 @@ class LiteratureResearcher:
         title: str | None = None,
         doi: str | None = None,
         extract_text: bool = False,
+        expected_title: str | None = None,
+        expected_authors: list[str] | None = None,
+        expected_year: int | None = None,
+        expected_venue: str | None = None,
     ) -> PaperMetadata:
-        """Fetch a URL/DOI/arXiv/PDF source into ``LiteratureDB/papers/``."""
+        """Fetch a URL/DOI/arXiv/PDF source into ``LiteratureDB/papers/``.
+
+        When expected metadata is provided, the fetched record is rejected before it is committed
+        to the paper ledger if title/authors/year/venue disagree with the target paper.
+        """
         arxiv_id = parse_arxiv_id(url)
         doi_value = doi or parse_doi(url)
         existing = None
@@ -134,39 +159,101 @@ class LiteratureResearcher:
             existing = self.index.find_paper(arxiv_id=arxiv_id)
         elif doi_value:
             existing = self.index.find_paper(doi=doi_value)
+        elif citation_key:
+            existing = self.index.find_paper(citation_key=citation_key)
         if existing is not None:
+            self._validate_expected_metadata(
+                existing,
+                expected_title=expected_title,
+                expected_authors=expected_authors,
+                expected_year=expected_year,
+                expected_venue=expected_venue,
+            )
             if citation_key:
                 self.index.add_alias(existing.paper_id, "citation_key", citation_key)
             return self._extract_text_if_requested(existing, extract_text=extract_text)
-        paper = self.fetcher.import_url(url, citation_key=citation_key, title=title, doi=doi)
-        self.index.upsert_paper(paper)
-        return self._extract_text_if_requested(paper, extract_text=extract_text)
+        paper = self.fetcher.import_url(
+            url, citation_key=citation_key, title=title, doi=doi, commit=False
+        )
+        self._validate_expected_metadata(
+            paper,
+            expected_title=expected_title,
+            expected_authors=expected_authors,
+            expected_year=expected_year,
+            expected_venue=expected_venue,
+        )
+        canonical = self.import_paper(paper)
+        return self._extract_text_if_requested(canonical, extract_text=extract_text)
 
     def import_arxiv(
-        self, arxiv_id: str, *, citation_key: str | None = None, extract_text: bool = False
+        self,
+        arxiv_id: str,
+        *,
+        citation_key: str | None = None,
+        extract_text: bool = False,
+        expected_title: str | None = None,
+        expected_authors: list[str] | None = None,
+        expected_year: int | None = None,
+        expected_venue: str | None = None,
     ) -> PaperMetadata:
         clean_id = normalize_arxiv_id(arxiv_id)
         existing = self.index.find_paper(arxiv_id=clean_id)
         if existing is not None:
+            self._validate_expected_metadata(
+                existing,
+                expected_title=expected_title,
+                expected_authors=expected_authors,
+                expected_year=expected_year,
+                expected_venue=expected_venue,
+            )
             if citation_key:
                 self.index.add_alias(existing.paper_id, "citation_key", citation_key)
             return self._extract_text_if_requested(existing, extract_text=extract_text)
-        paper = self.fetcher.import_arxiv(clean_id, citation_key=citation_key)
-        self.index.upsert_paper(paper)
-        return self._extract_text_if_requested(paper, extract_text=extract_text)
+        paper = self.fetcher.import_arxiv(clean_id, citation_key=citation_key, commit=False)
+        self._validate_expected_metadata(
+            paper,
+            expected_title=expected_title,
+            expected_authors=expected_authors,
+            expected_year=expected_year,
+            expected_venue=expected_venue,
+        )
+        canonical = self.import_paper(paper)
+        return self._extract_text_if_requested(canonical, extract_text=extract_text)
 
     def import_doi(
-        self, doi: str, *, citation_key: str | None = None, extract_text: bool = False
+        self,
+        doi: str,
+        *,
+        citation_key: str | None = None,
+        extract_text: bool = False,
+        expected_title: str | None = None,
+        expected_authors: list[str] | None = None,
+        expected_year: int | None = None,
+        expected_venue: str | None = None,
     ) -> PaperMetadata:
         clean_doi = normalize_doi(doi)
         existing = self.index.find_paper(doi=clean_doi)
         if existing is not None:
+            self._validate_expected_metadata(
+                existing,
+                expected_title=expected_title,
+                expected_authors=expected_authors,
+                expected_year=expected_year,
+                expected_venue=expected_venue,
+            )
             if citation_key:
                 self.index.add_alias(existing.paper_id, "citation_key", citation_key)
             return self._extract_text_if_requested(existing, extract_text=extract_text)
-        paper = self.fetcher.import_doi(clean_doi, citation_key=citation_key)
-        self.index.upsert_paper(paper)
-        return self._extract_text_if_requested(paper, extract_text=extract_text)
+        paper = self.fetcher.import_doi(clean_doi, citation_key=citation_key, commit=False)
+        self._validate_expected_metadata(
+            paper,
+            expected_title=expected_title,
+            expected_authors=expected_authors,
+            expected_year=expected_year,
+            expected_venue=expected_venue,
+        )
+        canonical = self.import_paper(paper)
+        return self._extract_text_if_requested(canonical, extract_text=extract_text)
 
     def _extract_text_if_requested(
         self, paper: PaperMetadata, *, extract_text: bool
@@ -460,8 +547,21 @@ class LiteratureResearcher:
             candidate.status = "duplicate"
             self.store.append_jsonl("LiteratureDB/candidates.jsonl", candidate)
             raise ValueError(f"Candidate {candidate_id} already appears to be imported")
+        expected_title = candidate.title or None
+        expected_authors = candidate.authors or None
+        expected_year = candidate.year
+        # Venue metadata often differs between preprint and proceedings records; use it only
+        # when explicitly supplied through import_* tools, not for candidate auto-import.
+        expected_venue = None
         if candidate.arxiv_id:
-            paper = self.import_arxiv(candidate.arxiv_id, extract_text=extract_text)
+            paper = self.import_arxiv(
+                candidate.arxiv_id,
+                extract_text=extract_text,
+                expected_title=expected_title,
+                expected_authors=expected_authors,
+                expected_year=expected_year,
+                expected_venue=expected_venue,
+            )
         elif candidate.pdf_url:
             try:
                 paper = self.import_url(
@@ -469,7 +569,13 @@ class LiteratureResearcher:
                     title=candidate.title,
                     doi=candidate.doi or None,
                     extract_text=extract_text,
+                    expected_title=expected_title,
+                    expected_authors=expected_authors,
+                    expected_year=expected_year,
+                    expected_venue=expected_venue,
                 )
+            except PaperMetadataMismatchError:
+                raise
             except Exception:
                 if not candidate.doi:
                     raise
@@ -477,12 +583,29 @@ class LiteratureResearcher:
                     candidate.pdf_url,
                     title=candidate.title,
                     extract_text=extract_text,
+                    expected_title=expected_title,
+                    expected_authors=expected_authors,
+                    expected_year=expected_year,
+                    expected_venue=expected_venue,
                 )
         elif candidate.doi:
-            paper = self.import_doi(candidate.doi, extract_text=extract_text)
+            paper = self.import_doi(
+                candidate.doi,
+                extract_text=extract_text,
+                expected_title=expected_title,
+                expected_authors=expected_authors,
+                expected_year=expected_year,
+                expected_venue=expected_venue,
+            )
         elif candidate.landing_url:
             paper = self.import_url(
-                candidate.landing_url, title=candidate.title, extract_text=extract_text
+                candidate.landing_url,
+                title=candidate.title,
+                extract_text=extract_text,
+                expected_title=expected_title,
+                expected_authors=expected_authors,
+                expected_year=expected_year,
+                expected_venue=expected_venue,
             )
         else:
             raise ValueError(f"Candidate {candidate_id} has no importable arXiv/DOI/URL")
@@ -511,6 +634,30 @@ class LiteratureResearcher:
     # ------------------------------------------------------------------
     # Metadata helpers
     # ------------------------------------------------------------------
+    def _validate_expected_metadata(
+        self,
+        paper: PaperMetadata,
+        *,
+        expected_title: str | None = None,
+        expected_authors: list[str] | None = None,
+        expected_year: int | None = None,
+        expected_venue: str | None = None,
+    ) -> None:
+        """Reject imports whose fetched metadata clearly points at a different paper."""
+        issues = _metadata_mismatch_issues(
+            paper,
+            expected_title=expected_title,
+            expected_authors=expected_authors,
+            expected_year=expected_year,
+            expected_venue=expected_venue,
+        )
+        if issues:
+            raise PaperMetadataMismatchError(
+                "Imported metadata does not match expected paper: "
+                + "; ".join(issues)
+                + f". fetched_title={paper.title!r}, citation_key={paper.citation_key!r}"
+            )
+
     def list_papers(self) -> list[PaperMetadata]:
         papers = []
         for record in self.store.read_jsonl("LiteratureDB/papers.jsonl"):
@@ -737,20 +884,21 @@ class LiteratureResearcher:
         )
         if "literature" not in claim.tags:
             claim.tags.append("literature")
+        support_details = self._support_details_for_ids(support_ids)
         if not any(ev.evidence_type == EvidenceType.citation for ev in claim.evidence):
-            claim.evidence.append(
-                EvidenceRecord(
-                    evidence_type=EvidenceType.citation,
-                    summary=(
-                        f"Extracted from {citation_key} with quote-level literature provenance."
-                    ),
-                    artifact_refs=[text_ref] if text_ref else [],
-                    citation_keys=[citation_key],
-                    literature_support_ids=support_ids,
-                    verifier="LiteratureResearcher",
-                    confidence=0.7 if has_acceptance_statement and support_ids else 0.3,
-                )
+            evidence = EvidenceRecord(
+                evidence_type=EvidenceType.citation,
+                summary=(
+                    f"Extracted from {citation_key} with quote-level literature provenance."
+                ),
+                artifact_refs=[text_ref] if text_ref else [],
+                citation_keys=[citation_key],
+                literature_support_ids=support_ids,
+                verifier="LiteratureResearcher",
+                confidence=0.7 if has_acceptance_statement and support_ids else 0.3,
             )
+            self._apply_support_details_to_evidence(evidence, support_details)
+            claim.evidence.append(evidence)
         else:
             for ev in claim.evidence:
                 if ev.evidence_type == EvidenceType.citation:
@@ -761,6 +909,7 @@ class LiteratureResearcher:
                     for support_id in support_ids:
                         if support_id not in ev.literature_support_ids:
                             ev.literature_support_ids.append(support_id)
+                    self._apply_support_details_to_evidence(ev, support_details)
         if has_acceptance_statement and support_ids:
             claim.status = ClaimStatus.cited
         else:
@@ -779,6 +928,22 @@ class LiteratureResearcher:
         ]:
             refs = statement.provenance[0].artifact_refs if statement.provenance else []
             support_id = support_ids_by_statement.get(statement.statement_id, "")
+            quote = statement.provenance[0] if statement.provenance else None
+            quote_ranges = []
+            if quote is not None:
+                quote_ranges.append(
+                    {
+                        "support_id": support_id,
+                        "statement_id": statement.statement_id,
+                        "quote_id": quote.quote_id,
+                        "citation_key": extract.citation_key,
+                        "paper_id": statement.paper_id or extract.paper_id,
+                        "locator": quote.locator,
+                        "char_start": quote.char_start,
+                        "char_end": quote.char_end,
+                        "validated": quote.validated,
+                    }
+                )
             claims.append(
                 ClaimRecord(
                     claim_type=ClaimType.literature,
@@ -795,6 +960,9 @@ class LiteratureResearcher:
                             artifact_refs=refs,
                             citation_keys=[extract.citation_key],
                             literature_support_ids=[support_id] if support_id else [],
+                            literature_statement_ids=[statement.statement_id],
+                            literature_quote_ids=[quote.quote_id] if quote is not None else [],
+                            literature_quote_ranges=quote_ranges,
                             verifier="LiteratureResearcher",
                             confidence=statement.confidence or 0.7,
                         )
@@ -803,6 +971,41 @@ class LiteratureResearcher:
                 )
             )
         return claims
+
+    def _support_details_for_ids(self, support_ids: list[str]) -> list[dict[str, Any]]:
+        details: list[dict[str, Any]] = []
+        for support_id in support_ids:
+            item = self.index.support_details(support_id)
+            if item is not None:
+                details.append(item)
+        return details
+
+    def _apply_support_details_to_evidence(
+        self, evidence: EvidenceRecord, support_details: list[dict[str, Any]]
+    ) -> None:
+        for details in support_details:
+            support_id = str(details.get("support_id") or "")
+            statement_id = str(details.get("statement_id") or "")
+            quote_id = str(details.get("quote_id") or "")
+            if support_id and support_id not in evidence.literature_support_ids:
+                evidence.literature_support_ids.append(support_id)
+            if statement_id and statement_id not in evidence.literature_statement_ids:
+                evidence.literature_statement_ids.append(statement_id)
+            if quote_id and quote_id not in evidence.literature_quote_ids:
+                evidence.literature_quote_ids.append(quote_id)
+            range_payload = {
+                "support_id": support_id,
+                "statement_id": statement_id,
+                "quote_id": quote_id,
+                "citation_key": details.get("citation_key") or "",
+                "paper_id": details.get("paper_id") or "",
+                "locator": details.get("locator") or "",
+                "char_start": details.get("char_start"),
+                "char_end": details.get("char_end"),
+                "validated": bool(details.get("validated")),
+            }
+            if range_payload not in evidence.literature_quote_ranges:
+                evidence.literature_quote_ranges.append(range_payload)
 
     def _matching_support_ids_for_claim(
         self,
@@ -836,6 +1039,8 @@ class LiteratureResearcher:
             existing = self.index.find_paper(doi=paper.doi)
         if existing is None and paper.arxiv_id:
             existing = self.index.find_paper(arxiv_id=paper.arxiv_id)
+        if existing is None and paper.citation_key:
+            existing = self.index.find_paper(citation_key=paper.citation_key)
         if existing is None:
             existing = self.index.find_paper(title=paper.title)
         return existing
@@ -977,6 +1182,109 @@ def _statement_kind(label: str) -> str:
     if lowered.startswith("proposition"):
         return "proposition"
     return "theorem"
+
+
+def _merge_duplicate_paper_metadata(
+    existing: PaperMetadata, incoming: PaperMetadata
+) -> tuple[PaperMetadata, bool]:
+    """Merge useful artifacts/metadata from a duplicate import into the canonical paper."""
+    merged = existing.model_copy(deep=True)
+    changed = False
+    for field in [
+        "title",
+        "url",
+        "arxiv_id",
+        "doi",
+        "abstract",
+        "venue",
+        "pdf_path",
+        "text_path",
+        "metadata_path",
+    ]:
+        if not getattr(merged, field) and getattr(incoming, field):
+            setattr(merged, field, getattr(incoming, field))
+            changed = True
+    if merged.year is None and incoming.year is not None:
+        merged.year = incoming.year
+        changed = True
+    for author in incoming.authors:
+        if author and author not in merged.authors:
+            merged.authors.append(author)
+            changed = True
+    for url in incoming.source_urls:
+        if url and url not in merged.source_urls:
+            merged.source_urls.append(url)
+            changed = True
+    for ref in incoming.artifact_refs:
+        if ref.path not in {existing_ref.path for existing_ref in merged.artifact_refs}:
+            merged.artifact_refs.append(ref)
+            changed = True
+    return merged, changed
+
+
+def _metadata_mismatch_issues(
+    paper: PaperMetadata,
+    *,
+    expected_title: str | None = None,
+    expected_authors: list[str] | None = None,
+    expected_year: int | None = None,
+    expected_venue: str | None = None,
+) -> list[str]:
+    issues: list[str] = []
+    if expected_title and paper.title and not _titles_match(expected_title, paper.title):
+        issues.append(f"title mismatch: expected {expected_title!r}")
+    if expected_year is not None and paper.year is not None and int(expected_year) != int(paper.year):
+        issues.append(f"year mismatch: expected {expected_year}, got {paper.year}")
+    if expected_venue and paper.venue and not _venue_matches(expected_venue, paper.venue):
+        issues.append(f"venue mismatch: expected {expected_venue!r}, got {paper.venue!r}")
+    expected_authors = [author for author in (expected_authors or []) if author]
+    if expected_authors and paper.authors and not _authors_overlap(expected_authors, paper.authors):
+        issues.append(
+            "author mismatch: expected one of "
+            + repr(expected_authors[:4])
+            + ", got "
+            + repr(paper.authors[:4])
+        )
+    return issues
+
+
+def _titles_match(expected: str, actual: str) -> bool:
+    expected_norm = _normalize_title(expected)
+    actual_norm = _normalize_title(actual)
+    if not expected_norm or not actual_norm:
+        return True
+    if expected_norm in actual_norm or actual_norm in expected_norm:
+        return True
+    expected_terms = set(expected_norm.split())
+    actual_terms = set(actual_norm.split())
+    if not expected_terms or not actual_terms:
+        return True
+    return len(expected_terms & actual_terms) / len(expected_terms | actual_terms) >= 0.65
+
+
+def _venue_matches(expected: str, actual: str) -> bool:
+    expected_norm = _normalize_title(expected)
+    actual_norm = _normalize_title(actual)
+    return bool(
+        expected_norm
+        and actual_norm
+        and (expected_norm in actual_norm or actual_norm in expected_norm)
+    )
+
+
+def _authors_overlap(expected: list[str], actual: list[str]) -> bool:
+    expected_tokens = {_author_key(author) for author in expected if _author_key(author)}
+    actual_tokens = {_author_key(author) for author in actual if _author_key(author)}
+    if not expected_tokens or not actual_tokens:
+        return True
+    overlap = expected_tokens & actual_tokens
+    required = max(1, min(len(expected_tokens), 2))
+    return len(overlap) >= required
+
+
+def _author_key(author: str) -> str:
+    tokens = re.findall(r"[a-z]+", author.lower())
+    return tokens[-1] if tokens else ""
 
 
 def _openalex_lookup_value(paper: PaperMetadata) -> str:

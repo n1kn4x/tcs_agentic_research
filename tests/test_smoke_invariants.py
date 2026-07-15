@@ -13,7 +13,7 @@ from tcs_agentic_research.agents.critics import (
     is_claim_acceptably_supported,
 )
 from tcs_agentic_research.agents.initialization import WorkspaceInitializer
-from tcs_agentic_research.agents.literature import LiteratureResearcher
+from tcs_agentic_research.agents.literature import LiteratureResearcher, PaperMetadataMismatchError
 from tcs_agentic_research.agents.proposal import ProposalAgent
 from tcs_agentic_research.agents.research import ResearchAgent
 from tcs_agentic_research.agents.toolsets import artifact_retrieval_toolset, literature_toolset
@@ -882,3 +882,62 @@ def test_literature_registry_deduplicates_papers_by_arxiv_id(tmp_path: Path) -> 
     assert imported_second.paper_id == imported_first.paper_id
     assert len(store.read_jsonl("LiteratureDB/papers.jsonl")) == 1
     assert agent.index.find_paper(citation_key="GKZ17").paper_id == imported_first.paper_id
+
+
+def test_literature_import_rejects_expected_metadata_mismatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    store = _store(tmp_path)
+    agent = LiteratureResearcher(store, _router(store))
+
+    def fake_import_arxiv(*args: object, **kwargs: object) -> PaperMetadata:
+        assert kwargs.get("commit") is False
+        return PaperMetadata(
+            citation_key="arxiv_1005.4733",
+            title="A Unified Approach for Minimizing Composite Norms",
+            authors=["Necdet Serhat Aybat", "Garud Iyengar"],
+            year=2010,
+            source_type="arxiv",
+            arxiv_id="1005.4733",
+        )
+
+    monkeypatch.setattr(agent.fetcher, "import_arxiv", fake_import_arxiv)
+
+    with pytest.raises(PaperMetadataMismatchError):
+        agent.import_arxiv(
+            "1005.4733",
+            expected_title="Subcubic Equivalences Between Path, Matrix and Triangle Problems",
+            expected_authors=["Ryan Williams"],
+        )
+
+    assert store.read_jsonl("LiteratureDB/papers.jsonl") == []
+
+
+def test_literature_extraction_populates_claim_quote_fields_without_inferring_nomenclature(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    agent = LiteratureResearcher(store, _router(store))
+    text = (
+        "--- page 1 ---\n\n"
+        "Lemma 2.1. SETH implies OVH and UOVH.\n\n"
+        "Definition 2.2. Orthogonal Vectors Hypothesis states the OV lower-bound regime.\n"
+    )
+    text_ref = store.write_text("LiteratureDB/papers/OVHTest/paper.txt", text)
+    agent.import_paper(
+        PaperMetadata(
+            citation_key="OVHTest",
+            title="OVH Test Paper",
+            source_type="manual",
+            text_path=text_ref.path,
+        )
+    )
+
+    extract = agent.extract_paper(citation_key="OVHTest")
+    assert extract.extracted_claims
+    evidence = extract.extracted_claims[0].evidence[0]
+    assert evidence.literature_support_ids
+    assert evidence.literature_statement_ids
+    assert evidence.literature_quote_ids
+    assert evidence.literature_quote_ranges[0]["char_start"] is not None
+    nomenclature = store.read_text(ArtifactStore.NOMENCLATURE)
+    assert "SETH" not in nomenclature
+    assert "OVH" not in nomenclature

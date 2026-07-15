@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import logging
 import subprocess
 import tempfile
+from contextlib import contextmanager
 from pathlib import Path
 
 from ..artifact_store import ArtifactStore
@@ -19,6 +21,7 @@ class PDFTextExtractor:
 
     def __init__(self, store: ArtifactStore):
         self.store = store
+        self._last_pdf_warnings: list[str] = []
 
     def extract_pdf_text(
         self,
@@ -49,6 +52,16 @@ class PDFTextExtractor:
             raise FileNotFoundError(f"PDF not found: {pdf_path}")
 
         text = self._extract_with_pypdf(source, page_separator=page_separator)
+        if self._last_pdf_warnings:
+            self.store.append_jsonl(
+                "LiteratureDB/pdf_warnings.jsonl",
+                {
+                    "pdf_path": self.store.relpath(source) if workspace_source else str(source),
+                    "warning_count": len(self._last_pdf_warnings),
+                    "warnings": self._last_pdf_warnings[:20],
+                    "summary": "Non-fatal PDF parser warnings emitted by pypdf and suppressed from stderr.",
+                },
+            )
         if not text.strip():
             text = self._extract_with_pdftotext(source)
         if not text.strip():
@@ -69,17 +82,20 @@ class PDFTextExtractor:
         return self.store.relpath(self.store.resolve(output_path))
 
     def _extract_with_pypdf(self, pdf_path: Path, *, page_separator: str) -> str:
+        self._last_pdf_warnings = []
         try:
             from pypdf import PdfReader
         except Exception:
             return ""
         try:
-            reader = PdfReader(str(pdf_path))
-            pages = []
-            for idx, page in enumerate(reader.pages, start=1):
-                page_text = page.extract_text() or ""
-                if page_text.strip():
-                    pages.append(page_separator.format(page=idx) + page_text)
+            with _capture_pypdf_warnings() as warnings:
+                reader = PdfReader(str(pdf_path))
+                pages = []
+                for idx, page in enumerate(reader.pages, start=1):
+                    page_text = page.extract_text() or ""
+                    if page_text.strip():
+                        pages.append(page_separator.format(page=idx) + page_text)
+                self._last_pdf_warnings = list(dict.fromkeys(warnings))
             return "".join(pages).strip() + ("\n" if pages else "")
         except Exception:
             return ""
@@ -191,6 +207,32 @@ class PDFTextExtractor:
                 if page_text:
                     pages.append(page_separator.format(page=idx) + page_text)
             return "".join(pages).strip() + ("\n" if pages else "")
+
+
+@contextmanager
+def _capture_pypdf_warnings():
+    """Capture noisy non-fatal pypdf parser warnings without printing them to stderr."""
+    captured: list[str] = []
+
+    class _Handler(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:  # noqa: D401 - logging callback
+            if record.levelno >= logging.WARNING:
+                captured.append(record.getMessage())
+
+    loggers = [logging.getLogger("pypdf"), logging.getLogger("pypdf._reader")]
+    handler = _Handler(level=logging.WARNING)
+    previous = [(logger, logger.level, logger.propagate) for logger in loggers]
+    try:
+        for logger in loggers:
+            logger.addHandler(handler)
+            logger.setLevel(logging.WARNING)
+            logger.propagate = False
+        yield captured
+    finally:
+        for logger, level, propagate in previous:
+            logger.removeHandler(handler)
+            logger.setLevel(level)
+            logger.propagate = propagate
 
 
 def _page_image_sort_key(path: Path) -> tuple[int, str]:

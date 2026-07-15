@@ -337,20 +337,64 @@ class LiteratureIndex:
         return support_ids
 
     def support_exists(self, support_id: str) -> bool:
+        return self.support_details(support_id) is not None
+
+    def support_details(self, support_id: str) -> dict[str, Any] | None:
+        """Return statement/quote provenance for a support, statement, or quote handle."""
+        if not support_id:
+            return None
         with self._connect() as db:
             row = db.execute(
-                "SELECT 1 FROM supports WHERE support_id = ? LIMIT 1", (support_id,)
+                """
+                SELECT sup.support_id, s.statement_id, q.quote_id,
+                       COALESCE(s.paper_id, sup.paper_id, q.paper_id) AS paper_id,
+                       COALESCE(s.citation_key, sup.citation_key, q.citation_key) AS citation_key,
+                       s.kind, s.label, s.mapped_statement, q.locator, q.char_start,
+                       q.char_end, q.text_sha256, q.validated, sup.support_level, sup.relation
+                FROM supports sup
+                LEFT JOIN statements s ON s.statement_id = sup.statement_id
+                LEFT JOIN quotes q ON q.quote_id = sup.quote_id
+                WHERE sup.support_id = ?
+                LIMIT 1
+                """,
+                (support_id,),
             ).fetchone()
             if row:
-                return True
+                return dict(row)
             # Backward compatibility: statement/quote IDs are accepted as support handles too.
             row = db.execute(
-                "SELECT 1 FROM statements WHERE statement_id = ? LIMIT 1", (support_id,)
+                """
+                SELECT sup.support_id, s.statement_id, q.quote_id,
+                       COALESCE(s.paper_id, sup.paper_id, q.paper_id) AS paper_id,
+                       COALESCE(s.citation_key, sup.citation_key, q.citation_key) AS citation_key,
+                       s.kind, s.label, s.mapped_statement, q.locator, q.char_start,
+                       q.char_end, q.text_sha256, q.validated, sup.support_level, sup.relation
+                FROM statements s
+                LEFT JOIN supports sup ON sup.statement_id = s.statement_id
+                LEFT JOIN quotes q ON q.quote_id = s.quote_id
+                WHERE s.statement_id = ?
+                LIMIT 1
+                """,
+                (support_id,),
             ).fetchone()
             if row:
-                return True
-            row = db.execute("SELECT 1 FROM quotes WHERE quote_id = ? LIMIT 1", (support_id,)).fetchone()
-            return bool(row)
+                return dict(row)
+            row = db.execute(
+                """
+                SELECT sup.support_id, s.statement_id, q.quote_id,
+                       COALESCE(s.paper_id, sup.paper_id, q.paper_id) AS paper_id,
+                       COALESCE(s.citation_key, sup.citation_key, q.citation_key) AS citation_key,
+                       s.kind, s.label, s.mapped_statement, q.locator, q.char_start,
+                       q.char_end, q.text_sha256, q.validated, sup.support_level, sup.relation
+                FROM quotes q
+                LEFT JOIN supports sup ON sup.quote_id = q.quote_id
+                LEFT JOIN statements s ON s.statement_id = sup.statement_id
+                WHERE q.quote_id = ?
+                LIMIT 1
+                """,
+                (support_id,),
+            ).fetchone()
+            return dict(row) if row else None
 
     def search(self, query: str, *, limit: int = 10) -> list[dict[str, Any]]:
         """Return statement/passages ranked by local index relevance."""

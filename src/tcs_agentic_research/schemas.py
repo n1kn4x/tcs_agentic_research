@@ -69,6 +69,12 @@ class EvidenceRecord(StrictModel):
     # Stable handles from LiteratureDB/index.sqlite.  Literature evidence should cite these
     # statement/quote/support IDs rather than relying on citation keys alone.
     literature_support_ids: list[str] = Field(default_factory=list)
+    # Denormalized quote-level provenance copied from LiteratureDB for auditability of
+    # ClaimLedger records.  These are redundant with support IDs, but make claim-local evidence
+    # inspectable even when the SQLite index is not loaded.
+    literature_statement_ids: list[str] = Field(default_factory=list)
+    literature_quote_ids: list[str] = Field(default_factory=list)
+    literature_quote_ranges: list[dict[str, Any]] = Field(default_factory=list)
     verifier: str | None = None
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
     created_at: str = Field(default_factory=utc_now)

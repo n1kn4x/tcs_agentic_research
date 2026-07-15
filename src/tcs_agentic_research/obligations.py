@@ -235,6 +235,16 @@ class ObligationRunValidator:
         evidence_pool = [*run.evidence]
         for claim in run.claims_generated:
             evidence_pool.extend(claim.evidence)
+        if (
+            run.outcome == "fulfilled"
+            and obligation.kind == "literature"
+            and _requires_structured_literature_map(obligation.statement)
+            and not _contains_structured_literature_map(run)
+        ):
+            issues.append(
+                "Structured literature-map obligations must explicitly separate supported claims, "
+                "unsupported/gap claims, and follow-up obligations."
+            )
         for evidence_type in required:
             if evidence_type == EvidenceType.citation:
                 if not _has_citation_evidence(evidence_pool):
@@ -390,6 +400,7 @@ class CommitManager:
             if obligation.proposal_id and obligation.proposal_id not in prepared.related_proposal_ids:
                 prepared.related_proposal_ids.append(obligation.proposal_id)
             prepared.evidence.extend(ev.model_copy(deep=True) for ev in run.evidence)
+            _enrich_literature_evidence(self.store, prepared.evidence)
             prepared.evidence.append(certification.model_copy(deep=True))
             prepared.status = _status_from_evidence(prepared.evidence, prepared.claim_type)
             prepared.updated_at = utc_now()
@@ -606,6 +617,60 @@ def _literature_support_exists(store: ArtifactStore, support_id: str) -> bool:
                     if isinstance(quote, dict) and quote.get("quote_id") == support_id:
                         return True
     return False
+
+
+def _enrich_literature_evidence(store: ArtifactStore, evidence: Iterable[EvidenceRecord]) -> None:
+    """Copy quote/statement IDs and spans from LiteratureDB into claim-local evidence."""
+    try:
+        from .literature.index import LiteratureIndex
+
+        index = LiteratureIndex(store)
+    except Exception:
+        return
+    for ev in evidence:
+        if ev.evidence_type != EvidenceType.citation:
+            continue
+        for support_id in list(ev.literature_support_ids):
+            details = index.support_details(support_id)
+            if not details:
+                continue
+            statement_id = str(details.get("statement_id") or "")
+            quote_id = str(details.get("quote_id") or "")
+            if statement_id and statement_id not in ev.literature_statement_ids:
+                ev.literature_statement_ids.append(statement_id)
+            if quote_id and quote_id not in ev.literature_quote_ids:
+                ev.literature_quote_ids.append(quote_id)
+            range_payload = {
+                "support_id": details.get("support_id") or support_id,
+                "statement_id": statement_id,
+                "quote_id": quote_id,
+                "citation_key": details.get("citation_key") or "",
+                "paper_id": details.get("paper_id") or "",
+                "locator": details.get("locator") or "",
+                "char_start": details.get("char_start"),
+                "char_end": details.get("char_end"),
+                "validated": bool(details.get("validated")),
+            }
+            if range_payload not in ev.literature_quote_ranges:
+                ev.literature_quote_ranges.append(range_payload)
+
+
+def _requires_structured_literature_map(statement: str) -> bool:
+    lowered = statement.lower()
+    return "literature map" in lowered or (
+        "supported" in lowered and "unsupported" in lowered and "claim" in lowered
+    )
+
+
+def _contains_structured_literature_map(run: ObligationRun) -> bool:
+    text_parts = [run.summary]
+    text_parts.extend(claim.statement for claim in run.claims_generated)
+    text_parts.extend(child.statement for child in run.child_obligations)
+    text = "\n".join(text_parts).lower()
+    has_supported = "supported" in text
+    has_unsupported = "unsupported" in text or "gap" in text or "missing" in text
+    has_followup = "follow-up" in text or "follow up" in text or "obligation" in text
+    return has_supported and has_unsupported and has_followup
 
 
 def _has_citation_evidence(evidence: Iterable[EvidenceRecord]) -> bool:
