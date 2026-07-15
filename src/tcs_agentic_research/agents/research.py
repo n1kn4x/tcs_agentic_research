@@ -105,17 +105,30 @@ class ResearchAgent:
         deterministic validation and commit happen outside the agent.
         """
         task = self.store.read_text(ArtifactStore.RESEARCH_TASK)
+        literature_tools_enabled = _obligation_needs_literature_tools(obligation)
+        pre_obligation_literature_extraction = (
+            self._auto_extract_imported_literature() if literature_tools_enabled else None
+        )
         context = {
             "research_task_md": task,
             "research_state": state.model_dump(mode="json"),
             "assigned_obligation": obligation.model_dump(mode="json"),
             "artifact_manifest": self.store.artifact_manifest(max_items=120),
+            "pre_obligation_literature_extraction": pre_obligation_literature_extraction,
             "instructions": (
                 "Execute only the assigned obligation. Generate factual claim statements only "
                 "for findings established by this obligation; never submit a meta-claim that "
                 "the proposal succeeded. If the obligation cannot be fulfilled, return outcome "
                 "`blocked` or `failed` with precise blockers. Reference any used tool_result_id "
                 "values in the flat final submission's tool_result_ids."
+                + (
+                    " For literature obligations, search/import/extract tools are available. "
+                    "After importing a full-text paper, extract_paper is run automatically by "
+                    "the import tools when possible; use extract_imported_papers for older "
+                    "imports and query_literature after extraction to obtain support IDs."
+                    if literature_tools_enabled
+                    else ""
+                )
             ),
         }
         run, trace = self._generate_obligation_run_with_tools(obligation, context)
@@ -137,6 +150,23 @@ class ResearchAgent:
             _render_obligation_run_markdown(run, obligation),
         )
         return run, run_ref.path, trace_refs[0].path
+
+    def _auto_extract_imported_literature(self) -> dict[str, Any]:
+        """Best-effort deterministic extraction pass before a literature obligation.
+
+        This prevents the common failure mode where papers have already been imported with text
+        artifacts but no statement-level LiteratureDB support objects exist yet.
+        """
+        try:
+            summary = self.literature.extract_imported_papers(max_papers=8, only_missing=True)
+            summary["status"] = "ok"
+            return summary
+        except Exception as exc:  # noqa: BLE001 - do not fail the obligation prompt setup
+            return {
+                "status": "error",
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+            }
 
     def _build_research_context(
         self,
@@ -236,6 +266,7 @@ class ResearchAgent:
                 ),
             },
         ]
+        literature_tools_enabled = _obligation_needs_literature_tools(obligation)
         toolset = research_execution_toolset(
             store=self.store,
             literature=self.literature,
@@ -248,6 +279,8 @@ class ResearchAgent:
                 "Use strings/lists for claim_statements, evidence handles, blockers, and "
                 "child obligations; do not submit nested objects."
             ),
+            include_literature_discovery_tools=literature_tools_enabled,
+            include_literature_extraction_tools=literature_tools_enabled,
         )
         submission, trace = self.router.complete_structured_with_tools(
             task_type="research_execution",
@@ -431,12 +464,15 @@ class ResearchAgent:
                                 run.artifact_refs.append(ref)
                         evidence.verifier = evidence.verifier or "LEAPHarness"
                         evidence.confidence = max(evidence.confidence, 1.0)
-                elif name == "query_literature" and evidence.evidence_type == EvidenceType.citation:
+                elif _is_literature_tool_name(name) and evidence.evidence_type == EvidenceType.citation:
+                    refs = artifact_refs_from_observation(observation)
                     ledger_ref = _artifact_ref_from_plain(observation.get("ledger_ref"))
                     if ledger_ref is not None:
-                        self._append_evidence_ref(evidence, ledger_ref)
-                        if ledger_ref.path not in {existing.path for existing in run.artifact_refs}:
-                            run.artifact_refs.append(ledger_ref)
+                        refs.append(ledger_ref)
+                    for ref in refs:
+                        self._append_evidence_ref(evidence, ref)
+                        if ref.path not in {existing.path for existing in run.artifact_refs}:
+                            run.artifact_refs.append(ref)
                     for key in _citation_keys_from_literature_observation(observation):
                         if key not in evidence.citation_keys:
                             evidence.citation_keys.append(key)
@@ -489,13 +525,16 @@ class ResearchAgent:
                         self._append_report_ref(report, ref)
                     evidence.verifier = evidence.verifier or "LEAPHarness"
                     evidence.confidence = max(evidence.confidence, 1.0)
-                elif name == "query_literature":
+                elif _is_literature_tool_name(name):
                     if evidence.evidence_type != EvidenceType.citation:
                         continue
+                    refs = artifact_refs_from_observation(observation)
                     ledger_ref = _artifact_ref_from_plain(observation.get("ledger_ref"))
                     if ledger_ref is not None:
-                        self._append_evidence_ref(evidence, ledger_ref)
-                        self._append_report_ref(report, ledger_ref)
+                        refs.append(ledger_ref)
+                    for ref in refs:
+                        self._append_evidence_ref(evidence, ref)
+                        self._append_report_ref(report, ref)
                     for key in _citation_keys_from_literature_observation(observation):
                         if key not in evidence.citation_keys:
                             evidence.citation_keys.append(key)
@@ -919,6 +958,25 @@ def _evidence_from_flat_submission(
     )
 
 
+def _obligation_needs_literature_tools(obligation: ResearchObligation) -> bool:
+    lowered = obligation.statement.lower()
+    return obligation.kind == "literature" or any(
+        word in lowered
+        for word in [
+            "arxiv",
+            "citation",
+            "doi",
+            "extract",
+            "import",
+            "literature",
+            "paper",
+            "provenance",
+            "quote",
+            "source",
+        ]
+    )
+
+
 def _claim_type_for_obligation(obligation: ResearchObligation, evidence_type: EvidenceType) -> ClaimType:
     if evidence_type == EvidenceType.citation or obligation.kind == "literature":
         return ClaimType.literature
@@ -972,7 +1030,22 @@ def _child_obligation_from_statement(statement: str, *, proposal_id: str) -> Res
 
 def _classify_obligation_kind(text: str) -> str:
     lowered = text.lower()
-    if any(word in lowered for word in ["citation", "literature", "paper", "theorem from"]):
+    if any(
+        word in lowered
+        for word in [
+            "arxiv",
+            "citation",
+            "doi",
+            "extract",
+            "import",
+            "literature",
+            "paper",
+            "provenance",
+            "quote",
+            "source",
+            "theorem from",
+        ]
+    ):
         return "literature"
     if any(word in lowered for word in ["lean", "formal", "proof", "prove theorem"]):
         return "proof"
@@ -1038,8 +1111,39 @@ def _artifact_ref_from_plain(value: Any) -> ArtifactRef | None:
         return None
 
 
+def _is_literature_tool_name(name: str) -> bool:
+    return name in {
+        "query_literature",
+        "search_papers",
+        "import_url",
+        "import_arxiv",
+        "import_doi",
+        "import_candidate",
+        "extract_paper",
+        "extract_imported_papers",
+    }
+
+
 def _citation_keys_from_literature_observation(observation: dict[str, Any]) -> list[str]:
     keys: list[str] = []
+    for key in observation.get("citation_keys") or []:
+        if key:
+            keys.append(str(key))
+    if observation.get("citation_key"):
+        keys.append(str(observation["citation_key"]))
+    paper = observation.get("paper")
+    if isinstance(paper, dict) and paper.get("citation_key"):
+        keys.append(str(paper["citation_key"]))
+    extraction = observation.get("extraction")
+    if isinstance(extraction, dict):
+        for key in extraction.get("citation_keys") or []:
+            if key:
+                keys.append(str(key))
+        if extraction.get("citation_key"):
+            keys.append(str(extraction["citation_key"]))
+    for item in observation.get("processed") or []:
+        if isinstance(item, dict) and item.get("citation_key"):
+            keys.append(str(item["citation_key"]))
     for result in observation.get("results") or []:
         if isinstance(result, dict) and result.get("citation_key"):
             keys.append(str(result["citation_key"]))
@@ -1048,6 +1152,26 @@ def _citation_keys_from_literature_observation(observation: dict[str, Any]) -> l
 
 def _support_ids_from_literature_observation(observation: dict[str, Any]) -> list[str]:
     support_ids: list[str] = []
+    for support_id in observation.get("support_ids") or []:
+        if support_id:
+            support_ids.append(str(support_id))
+    extraction = observation.get("extraction")
+    if isinstance(extraction, dict):
+        for support_id in extraction.get("support_ids") or []:
+            if support_id:
+                support_ids.append(str(support_id))
+    for item in observation.get("processed") or []:
+        if isinstance(item, dict):
+            for support_id in item.get("support_ids") or []:
+                if support_id:
+                    support_ids.append(str(support_id))
+    for statement in observation.get("statements") or []:
+        if isinstance(statement, dict):
+            for key in ["support_id", "statement_id", "quote_id"]:
+                value = str(statement.get(key) or "")
+                if value:
+                    support_ids.append(value)
+                    break
     for result in observation.get("results") or []:
         if isinstance(result, dict):
             for key in ["support_id", "statement_id"]:

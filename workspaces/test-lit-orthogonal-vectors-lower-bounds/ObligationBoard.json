@@ -1,0 +1,1194 @@
+{
+  "obligations": [
+    {
+      "assumptions": [
+        "The Orthogonal Vectors problem is defined as: given two sets A, B \u2286 {0,1}^d of size n, decide if \u2203a \u2208 A, b \u2208 B such that a \u00b7 b = 0.",
+        "SETH implies that for every \u03b4 < 1, k-SAT cannot be solved in O(2^(\u03b4n)) time for any fixed k.",
+        "The imported paper arxiv_1312.6680 (Williams 2013) establishes faster APSP via circuit complexity, which is relevant background for the fine-grained complexity program.",
+        "The imported paper Abboud_2016_Simulating (Abboud, Hansen, Williams, Williams STOC 2016) extends SETH-based lower bounds from Edit Distance to other problems.",
+        "The imported paper arxiv_1502.01063 (Bringmann, K\u00fcnnemann 2015) proves quadratic conditional lower bounds for LCS and DTW under SETH.",
+        "The imported paper Carmosino_2016_Nondeterministic (Carmosino et al. ITCS 2016) introduces NSETH and discusses its consequences.",
+        "The imported paper Bhattacharya_2020_Coarse (Bhattacharya, Nanongkai, Saranurak SODA 2020) discusses coarse-grained complexity for dynamic algorithms and mentions dynamic OV.",
+        "We work in the standard fine-grained complexity framework: conditional lower bounds are of the form 'Problem X cannot be solved in time T(n) unless SETH fails.'",
+        "SETH: For every \u03b4 < 1, there exists k such that k-SAT cannot be solved in O(2^(\u03b4n)) time. Equivalently, lim_{k\u2192\u221e} sat-width(k-SAT) = 1.",
+        "OV (Orthogonal Vectors): Given two sets A, B \u2286 {0,1}^d of size n, decide if \u2203a \u2208 A, b \u2208 B such that a \u00b7 b = 0 (dot product over reals, i.e., no coordinate pair is (1,1)).",
+        "The OV conjecture: OV cannot be solved in O(n^(2-\u03b5)) time for any \u03b5 > 0, for dimension d = n (or d = poly(n))."
+      ],
+      "created_at": "2026-07-15T18:45:17.776475+00:00",
+      "evidence_refs": [],
+      "failure_reason": "Citation key `Bhattacharya Kasino_2020_Coarse` is not imported in LiteratureDB/papers.jsonl.; Obligation run outcome is `blocked`, not `fulfilled`.; Literature obligation lacks citation evidence with citation keys.; Citation key `Bhattacharya_2020_Coarse` has no extracted theorem/algorithm/lower-bound statement.; Citation key `arxiv_1502.01063` has no extracted theorem/algorithm/lower-bound statement.; Citation key `arxiv_1312.6680` has no extracted theorem/algorithm/lower-bound statement.; Citation key `arxiv_0811.3640` has no extracted theorem/algorithm/lower-bound statement.; Citation key `Bhattacharya Kasino_2020_Coarse` has no extracted theorem/algorithm/lower-bound statement.; Citation key `Carmosino_2016_Nondeterministic` has no extracted theorem/algorithm/lower-bound statement.",
+      "generated_claim_ids": [],
+      "kind": "literature",
+      "last_run_id": "obl_run_af6caad85fa3",
+      "obligation_id": "obl_17d32f10b171",
+      "proposal_id": "proposal_9362c675d10a",
+      "required_evidence": [
+        "citation"
+      ],
+      "statement": "Import Williams STOC 2009 'Finding, Minimizing, and Counting Weighted Subgraphs' via DOI or arXiv search; verify the correct arXiv ID (possibly 0811.3640 was incorrect - that was a QCD paper).",
+      "status": "blocked",
+      "success_criteria": [
+        "At least 5 core papers on OV/SETH are imported or queued for import, including Williams STOC 2009, Abboud-Williams STOC 2014, and Backurs-Indyk STOC 2015.",
+        "Extracted theorem statements with citation keys and quote-level provenance for the SETH-OV lower bound.",
+        "A normalized explanation of assumptions and parameter regimes (logarithmic, polylogarithmic, polynomial dimension)."
+      ],
+      "updated_at": "2026-07-15T18:47:29.776658+00:00"
+    },
+    {
+      "assumptions": [
+        "The Orthogonal Vectors problem is defined as: given two sets A, B \u2286 {0,1}^d of size n, decide if \u2203a \u2208 A, b \u2208 B such that a \u00b7 b = 0.",
+        "SETH implies that for every \u03b4 < 1, k-SAT cannot be solved in O(2^(\u03b4n)) time for any fixed k.",
+        "The imported paper arxiv_1312.6680 (Williams 2013) establishes faster APSP via circuit complexity, which is relevant background for the fine-grained complexity program.",
+        "The imported paper Abboud_2016_Simulating (Abboud, Hansen, Williams, Williams STOC 2016) extends SETH-based lower bounds from Edit Distance to other problems.",
+        "The imported paper arxiv_1502.01063 (Bringmann, K\u00fcnnemann 2015) proves quadratic conditional lower bounds for LCS and DTW under SETH.",
+        "The imported paper Carmosino_2016_Nondeterministic (Carmosino et al. ITCS 2016) introduces NSETH and discusses its consequences.",
+        "The imported paper Bhattacharya_2020_Coarse (Bhattacharya, Nanongkai, Saranurak SODA 2020) discusses coarse-grained complexity for dynamic algorithms and mentions dynamic OV.",
+        "We work in the standard fine-grained complexity framework: conditional lower bounds are of the form 'Problem X cannot be solved in time T(n) unless SETH fails.'",
+        "SETH: For every \u03b4 < 1, there exists k such that k-SAT cannot be solved in O(2^(\u03b4n)) time. Equivalently, lim_{k\u2192\u221e} sat-width(k-SAT) = 1.",
+        "OV (Orthogonal Vectors): Given two sets A, B \u2286 {0,1}^d of size n, decide if \u2203a \u2208 A, b \u2208 B such that a \u00b7 b = 0 (dot product over reals, i.e., no coordinate pair is (1,1)).",
+        "The OV conjecture: OV cannot be solved in O(n^(2-\u03b5)) time for any \u03b5 > 0, for dimension d = n (or d = poly(n))."
+      ],
+      "created_at": "2026-07-15T18:45:17.776649+00:00",
+      "evidence_refs": [],
+      "failure_reason": "Obligation run outcome is `blocked`, not `fulfilled`.",
+      "generated_claim_ids": [],
+      "kind": "derivation",
+      "last_run_id": "obl_run_6a57a679bd79",
+      "obligation_id": "obl_8a0a1c620341",
+      "proposal_id": "proposal_9362c675d10a",
+      "required_evidence": [
+        "informal_argument"
+      ],
+      "statement": "Import Abboud-Williams STOC 2Iterations 2014 'Tight Hardness for Several NP-Complete Problems' via DOI search (DOI may be 10.1145/2591796.2591810 or similar).",
+      "status": "blocked",
+      "success_criteria": [
+        "At least 5 core papers on OV/SETH are imported or queued for import, including Williams STOC 2009, Abboud-Williams STOC 2014, and Backurs-Indyk STOC 2015.",
+        "Extracted theorem statements with citation keys and quote-level provenance for the SETH-OV lower bound.",
+        "A normalized explanation of assumptions and parameter regimes (logarithmic, polylogarithmic, polynomial dimension)."
+      ],
+      "updated_at": "2026-07-15T18:56:09.103866+00:00"
+    },
+    {
+      "assumptions": [
+        "The Orthogonal Vectors problem is defined as: given two sets A, B \u2286 {0,1}^d of size n, decide if \u2203a \u2208 A, b \u2208 B such that a \u00b7 b = 0.",
+        "SETH implies that for every \u03b4 < 1, k-SAT cannot be solved in O(2^(\u03b4n)) time for any fixed k.",
+        "The imported paper arxiv_1312.6680 (Williams 2013) establishes faster APSP via circuit complexity, which is relevant background for the fine-grained complexity program.",
+        "The imported paper Abboud_2016_Simulating (Abboud, Hansen, Williams, Williams STOC 2016) extends SETH-based lower bounds from Edit Distance to other problems.",
+        "The imported paper arxiv_1502.01063 (Bringmann, K\u00fcnnemann 2015) proves quadratic conditional lower bounds for LCS and DTW under SETH.",
+        "The imported paper Carmosino_2016_Nondeterministic (Carmosino et al. ITCS 2016) introduces NSETH and discusses its consequences.",
+        "The imported paper Bhattacharya_2020_Coarse (Bhattacharya, Nanongkai, Saranurak SODA 2020) discusses coarse-grained complexity for dynamic algorithms and mentions dynamic OV.",
+        "We work in the standard fine-grained complexity framework: conditional lower bounds are of the form 'Problem X cannot be solved in time T(n) unless SETH fails.'",
+        "SETH: For every \u03b4 < 1, there exists k such that k-SAT cannot be solved in O(2^(\u03b4n)) time. Equivalently, lim_{k\u2192\u221e} sat-width(k-SAT) = 1.",
+        "OV (Orthogonal Vectors): Given two sets A, B \u2286 {0,1}^d of size n, decide if \u2203a \u2208 A, b \u2208 B such that a \u00b7 b = 0 (dot product over reals, i.e., no coordinate pair is (1,1)).",
+        "The OV conjecture: OV cannot be solved in O(n^(2-\u03b5)) time for any \u03b5 > 0, for dimension d = n (or d = poly(n))."
+      ],
+      "created_at": "2026-07-15T18:45:17.776934+00:00",
+      "evidence_refs": [],
+      "failure_reason": "Obligation run outcome is `blocked`, not `fulfilled`.",
+      "generated_claim_ids": [],
+      "kind": "derivation",
+      "last_run_id": "obl_run_0ef246319aba",
+      "obligation_id": "obl_c275e131fb04",
+      "proposal_id": "proposal_9362c675d10a",
+      "required_evidence": [
+        "informal_argument"
+      ],
+      "statement": "Import Backurs-Indyk STOC 2015 'Edit Distance Cannot Be Computed in Strongly Subquadratic Time' via DOI search.",
+      "status": "blocked",
+      "success_criteria": [
+        "At least 5 core papers on OV/SETH are imported or queued for import, including Williams STOC 2009, Abboud-Williams STOC 2014, and Backurs-Indyk STOC 2015.",
+        "Extracted theorem statements with citation keys and quote-level provenance for the SETH-OV lower bound.",
+        "A normalized explanation of assumptions and parameter regimes (logarithmic, polylogarithmic, polynomial dimension)."
+      ],
+      "updated_at": "2026-07-15T19:19:36.017534+00:00"
+    },
+    {
+      "assumptions": [
+        "The Orthogonal Vectors problem is defined as: given two sets A, B \u2286 {0,1}^d of size n, decide if \u2203a \u2208 A, b \u2208 B such that a \u00b7 b = 0.",
+        "SETH implies that for every \u03b4 < 1, k-SAT cannot be solved in O(2^(\u03b4n)) time for any fixed k.",
+        "The imported paper arxiv_1312.6680 (Williams 2013) establishes faster APSP via circuit complexity, which is relevant background for the fine-grained complexity program.",
+        "The imported paper Abboud_2016_Simulating (Abboud, Hansen, Williams, Williams STOC 2016) extends SETH-based lower bounds from Edit Distance to other problems.",
+        "The imported paper arxiv_1502.01063 (Bringmann, K\u00fcnnemann 2015) proves quadratic conditional lower bounds for LCS and DTW under SETH.",
+        "The imported paper Carmosino_2016_Nondeterministic (Carmosino et al. ITCS 2016) introduces NSETH and discusses its consequences.",
+        "The imported paper Bhattacharya_2020_Coarse (Bhattacharya, Nanongkai, Saranurak SODA 2020) discusses coarse-grained complexity for dynamic algorithms and mentions dynamic OV.",
+        "We work in the standard fine-grained complexity framework: conditional lower bounds are of the form 'Problem X cannot be solved in time T(n) unless SETH fails.'",
+        "SETH: For every \u03b4 < 1, there exists k such that k-SAT cannot be solved in O(2^(\u03b4n)) time. Equivalently, lim_{k\u2192\u221e} sat-width(k-SAT) = 1.",
+        "OV (Orthogonal Vectors): Given two sets A, B \u2286 {0,1}^d of size n, decide if \u2203a \u2208 A, b \u2208 B such that a \u00b7 b = 0 (dot product over reals, i.e., no coordinate pair is (1,1)).",
+        "The OV conjecture: OV cannot be solved in O(n^(2-\u03b5)) time for any \u03b5 > 0, for dimension d = n (or d = poly(n))."
+      ],
+      "created_at": "2026-07-15T18:45:17.777081+00:00",
+      "evidence_refs": [],
+      "failure_reason": "Obligation run outcome is `blocked`, not `fulfilled`.",
+      "generated_claim_ids": [],
+      "kind": "derivation",
+      "last_run_id": "obl_run_cb6bb43f770d",
+      "obligation_id": "obl_7f71ac8c7bf6",
+      "proposal_id": "proposal_9362c675d10a",
+      "required_evidence": [
+        "informal_argument"
+      ],
+      "statement": "Import Gao-Impagliazzo-Kolokolova-Williams SODA 2017 'Sparse Orthogonal Vectors' via DOI or arXiv search.",
+      "status": "blocked",
+      "success_criteria": [
+        "At least 5 core papers on OV/SETH are imported or queued for import, including Williams STOC 2009, Abboud-Williams STOC 2014, and Backurs-Indyk STOC 2015.",
+        "Extracted theorem statements with citation keys and quote-level provenance for the SETH-OV lower bound.",
+        "A normalized explanation of assumptions and parameter regimes (logarithmic, polylogarithmic, polynomial dimension)."
+      ],
+      "updated_at": "2026-07-15T19:23:53.668815+00:00"
+    },
+    {
+      "assumptions": [
+        "The Orthogonal Vectors problem is defined as: given two sets A, B \u2286 {0,1}^d of size n, decide if \u2203a \u2208 A, b \u2208 B such that a \u00b7 b = 0.",
+        "SETH implies that for every \u03b4 < 1, k-SAT cannot be solved in O(2^(\u03b4n)) time for any fixed k.",
+        "The imported paper arxiv_1312.6680 (Williams 2013) establishes faster APSP via circuit complexity, which is relevant background for the fine-grained complexity program.",
+        "The imported paper Abboud_2016_Simulating (Abboud, Hansen, Williams, Williams STOC 2016) extends SETH-based lower bounds from Edit Distance to other problems.",
+        "The imported paper arxiv_1502.01063 (Bringmann, K\u00fcnnemann 2015) proves quadratic conditional lower bounds for LCS and DTW under SETH.",
+        "The imported paper Carmosino_2016_Nondeterministic (Carmosino et al. ITCS 2016) introduces NSETH and discusses its consequences.",
+        "The imported paper Bhattacharya_2020_Coarse (Bhattacharya, Nanongkai, Saranurak SODA 2020) discusses coarse-grained complexity for dynamic algorithms and mentions dynamic OV.",
+        "We work in the standard fine-grained complexity framework: conditional lower bounds are of the form 'Problem X cannot be solved in time T(n) unless SETH fails.'",
+        "SETH: For every \u03b4 < 1, there exists k such that k-SAT cannot be solved in O(2^(\u03b4n)) time. Equivalently, lim_{k\u2192\u221e} sat-width(k-SAT) = 1.",
+        "OV (Orthogonal Vectors): Given two sets A, B \u2286 {0,1}^d of size n, decide if \u2203a \u2208 A, b \u2208 B such that a \u00b7 b = 0 (dot product over reals, i.e., no coordinate pair is (1,1)).",
+        "The OV conjecture: OV cannot be solved in O(n^(2-\u03b5)) time for any \u03b5 > 0, for dimension d = n (or d = poly(n))."
+      ],
+      "created_at": "2026-07-15T18:45:17.777232+00:00",
+      "evidence_refs": [],
+      "failure_reason": "Obligation run outcome is `blocked`, not `fulfilled`.",
+      "generated_claim_ids": [],
+      "kind": "derivation",
+      "last_run_id": "obl_run_ae4edc2e4885",
+      "obligation_id": "obl_5d3d97865215",
+      "proposal_id": "proposal_9362c675d10a",
+      "required_evidence": [
+        "informal_argument"
+      ],
+      "statement": "Import Williams FOCS 2005 'A New Look at NP-Complete Problems' via DOI search (DOI may be 10.1109/FOCS.2005.55).",
+      "status": "blocked",
+      "success_criteria": [
+        "At least 5 core papers on OV/SETH are imported or queued for import, including Williams STOC 2009, Abboud-Williams STOC 2014, and Backurs-Indyk STOC 2015.",
+        "Extracted theorem statements with citation keys and quote-level provenance for the SETH-OV lower bound.",
+        "A normalized explanation of assumptions and parameter regimes (logarithmic, polylogarithmic, polynomial dimension)."
+      ],
+      "updated_at": "2026-07-15T19:25:25.661309+00:00"
+    },
+    {
+      "assumptions": [
+        "The Orthogonal Vectors problem is defined as: given two sets A, B \u2286 {0,1}^d of size n, decide if \u2203a \u2208 A, b \u2208 B such that a \u00b7 b = 0.",
+        "SETH implies that for every \u03b4 < 1, k-SAT cannot be solved in O(2^(\u03b4n)) time for any fixed k.",
+        "The imported paper arxiv_1312.6680 (Williams 2013) establishes faster APSP via circuit complexity, which is relevant background for the fine-grained complexity program.",
+        "The imported paper Abboud_2016_Simulating (Abboud, Hansen, Williams, Williams STOC 2016) extends SETH-based lower bounds from Edit Distance to other problems.",
+        "The imported paper arxiv_1502.01063 (Bringmann, K\u00fcnnemann 2015) proves quadratic conditional lower bounds for LCS and DTW under SETH.",
+        "The imported paper Carmosino_2016_Nondeterministic (Carmosino et al. ITCS 2016) introduces NSETH and discusses its consequences.",
+        "The imported paper Bhattacharya_2020_Coarse (Bhattacharya, Nanongkai, Saranurak SODA 2020) discusses coarse-grained complexity for dynamic algorithms and mentions dynamic OV.",
+        "We work in the standard fine-grained complexity framework: conditional lower bounds are of the form 'Problem X cannot be solved in time T(n) unless SETH fails.'",
+        "SETH: For every \u03b4 < 1, there exists k such that k-SAT cannot be solved in O(2^(\u03b4n)) time. Equivalently, lim_{k\u2192\u221e} sat-width(k-SAT) = 1.",
+        "OV (Orthogonal Vectors): Given two sets A, B \u2286 {0,1}^d of size n, decide if \u2203a \u2208 A, b \u2208 B such that a \u00b7 b = 0 (dot product over reals, i.e., no coordinate pair is (1,1)).",
+        "The OV conjecture: OV cannot be solved in O(n^(2-\u03b5)) time for any \u03b5 > 0, for dimension d = n (or d = poly(n))."
+      ],
+      "created_at": "2026-07-15T18:45:17.777384+00:00",
+      "evidence_refs": [],
+      "failure_reason": "",
+      "generated_claim_ids": [],
+      "kind": "literature",
+      "last_run_id": null,
+      "obligation_id": "obl_df067cc678ce",
+      "proposal_id": "proposal_9362c675d10a",
+      "required_evidence": [
+        "citation"
+      ],
+      "statement": "Read the text of imported papers to extract precise theorem statements about OV lower bounds under SETH, with quote-level provenance.",
+      "status": "open",
+      "success_criteria": [
+        "At least 5 core papers on OV/SETH are imported or queued for import, including Williams STOC 2009, Abboud-Williams STOC 2014, and Backurs-Indyk STOC 2015.",
+        "Extracted theorem statements with citation keys and quote-level provenance for the SETH-OV lower bound.",
+        "A normalized explanation of assumptions and parameter regimes (logarithmic, polylogarithmic, polynomial dimension)."
+      ],
+      "updated_at": "2026-07-15T18:45:17.777416+00:00"
+    },
+    {
+      "assumptions": [
+        "The Orthogonal Vectors problem is defined as: given two sets A, B \u2286 {0,1}^d of size n, decide if \u2203a \u2208 A, b \u2208 B such that a \u00b7 b = 0.",
+        "SETH implies that for every \u03b4 < 1, k-SAT cannot be solved in O(2^(\u03b4n)) time for any fixed k.",
+        "The imported paper arxiv_1312.6680 (Williams 2013) establishes faster APSP via circuit complexity, which is relevant background for the fine-grained complexity program.",
+        "The imported paper Abboud_2016_Simulating (Abboud, Hansen, Williams, Williams STOC 2016) extends SETH-based lower bounds from Edit Distance to other problems.",
+        "The imported paper arxiv_1502.01063 (Bringmann, K\u00fcnnemann 2015) proves quadratic conditional lower bounds for LCS and DTW under SETH.",
+        "The imported paper Carmosino_2016_Nondeterministic (Carmosino et al. ITCS 2016) introduces NSETH and discusses its consequences.",
+        "The imported paper Bhattacharya_2020_Coarse (Bhattacharya, Nanongkai, Saranurak SODA 2020) discusses coarse-grained complexity for dynamic algorithms and mentions dynamic OV.",
+        "We work in the standard fine-grained complexity framework: conditional lower bounds are of the form 'Problem X cannot be solved in time T(n) unless SETH fails.'",
+        "SETH: For every \u03b4 < 1, there exists k such that k-SAT cannot be solved in O(2^(\u03b4n)) time. Equivalently, lim_{k\u2192\u221e} sat-width(k-SAT) = 1.",
+        "OV (Orthogonal Vectors): Given two sets A, B \u2286 {0,1}^d of size n, decide if \u2203a \u2208 A, b \u2208 B such that a \u00b7 b = 0 (dot product over reals, i.e., no coordinate pair is (1,1)).",
+        "The OV conjecture: OV cannot be solved in O(n^(2-\u03b5)) time for any \u03b5 > 0, for dimension d = n (or d = poly(n))."
+      ],
+      "created_at": "2026-07-15T18:45:17.777529+00:00",
+      "evidence_refs": [],
+      "failure_reason": "",
+      "generated_claim_ids": [],
+      "kind": "literature",
+      "last_run_id": null,
+      "obligation_id": "obl_4154472a14d1",
+      "proposal_id": "proposal_9362c675d10a",
+      "required_evidence": [
+        "citation"
+      ],
+      "statement": "Query LiteratureDB to verify coverage of imported papers and extract any pre-existing statements.",
+      "status": "open",
+      "success_criteria": [
+        "At least 5 core papers on OV/SETH are imported or queued for import, including Williams STOC 2009, Abboud-Williams STOC 2014, and Backurs-Indyk STOC 2015.",
+        "Extracted theorem statements with citation keys and quote-level provenance for the SETH-OV lower bound.",
+        "A normalized explanation of assumptions and parameter regimes (logarithmic, polylogarithmic, polynomial dimension)."
+      ],
+      "updated_at": "2026-07-15T18:45:17.777559+00:00"
+    },
+    {
+      "assumptions": [
+        "The Orthogonal Vectors problem is defined as: given two sets A, B \u2286 {0,1}^d of size n, decide if \u2203a \u2208 A, b \u2208 B such that a \u00b7 b = 0.",
+        "SETH implies that for every \u03b4 < 1, k-SAT cannot be solved in O(2^(\u03b4n)) time for any fixed k.",
+        "The imported paper arxiv_1312.6680 (Williams 2013) establishes faster APSP via circuit complexity, which is relevant background for the fine-grained complexity program.",
+        "The imported paper Abboud_2016_Simulating (Abboud, Hansen, Williams, Williams STOC 2016) extends SETH-based lower bounds from Edit Distance to other problems.",
+        "The imported paper arxiv_1502.01063 (Bringmann, K\u00fcnnemann 2015) proves quadratic conditional lower bounds for LCS and DTW under SETH.",
+        "The imported paper Carmosino_2016_Nondeterministic (Carmosino et al. ITCS 2016) introduces NSETH and discusses its consequences.",
+        "The imported paper Bhattacharya_2020_Coarse (Bhattacharya, Nanongkai, Saranurak SODA 2020) discusses coarse-grained complexity for dynamic algorithms and mentions dynamic OV.",
+        "We work in the standard fine-grained complexity framework: conditional lower bounds are of the form 'Problem X cannot be solved in time T(n) unless SETH fails.'",
+        "SETH: For every \u03b4 < 1, there exists k such that k-SAT cannot be solved in O(2^(\u03b4n)) time. Equivalently, lim_{k\u2192\u221e} sat-width(k-SAT) = 1.",
+        "OV (Orthogonal Vectors): Given two sets A, B \u2286 {0,1}^d of size n, decide if \u2203a \u2208 A, b \u2208 B such that a \u00b7 b = 0 (dot product over reals, i.e., no coordinate pair is (1,1)).",
+        "The OV conjecture: OV cannot be solved in O(n^(2-\u03b5)) time for any \u03b5 > 0, for dimension d = n (or d = poly(n))."
+      ],
+      "created_at": "2026-07-15T18:45:17.777792+00:00",
+      "evidence_refs": [],
+      "failure_reason": "",
+      "generated_claim_ids": [],
+      "kind": "literature",
+      "last_run_id": null,
+      "obligation_id": "obl_9ce4bd04848d",
+      "proposal_id": "proposal_9362c675d10a",
+      "required_evidence": [
+        "citation"
+      ],
+      "statement": "Produce a structured literature map distinguishing supported vs. unsupported claims about OV-SETH lower bounds across dimension regimes.",
+      "status": "open",
+      "success_criteria": [
+        "At least 5 core papers on OV/SETH are imported or queued for import, including Williams STOC 2009, Abboud-Williams STOC 2014, and Backurs-Indyk STOC 2015.",
+        "Extracted theorem statements with citation keys and quote-level provenance for the SETH-OV lower bound.",
+        "A normalized explanation of assumptions and parameter regimes (logarithmic, polylogarithmic, polynomial dimension)."
+      ],
+      "updated_at": "2026-07-15T18:45:17.777823+00:00"
+    }
+  ],
+  "runs": [
+    {
+      "artifact_refs": [
+        {
+          "created_at": "2026-07-15T18:45:20.342541+00:00",
+          "kind": "jsonl",
+          "path": "LiteratureDB/query_answers.jsonl",
+          "sha256": "762cdf4575350db8558c94dae8dc4047cb397b3c6df4173123514ac5a0833fa9",
+          "summary": ""
+        },
+        {
+          "created_at": "2026-07-15T18:47:29.740435+00:00",
+          "kind": "json",
+          "path": "Reports/iterations/iteration_0001/obligation_tool_trace_obl_run_af6caad85fa3.json",
+          "sha256": "539dd6564997833dcdb20d30878e6c2323b9c55bfe39153fb1ae6bcb0bc9d047",
+          "summary": "Wrote text artifact Reports/iterations/iteration_0001/obligation_tool_trace_obl_run_af6caad85fa3.json"
+        },
+        {
+          "created_at": "2026-07-15T18:47:29.747511+00:00",
+          "kind": "markdown",
+          "path": "Reports/iterations/iteration_0001/obligation_tool_trace_obl_run_af6caad85fa3.md",
+          "sha256": "dc0ec95b46b2758d3d705a1d1b77782d61fc2ffed8c23aab01b5bff0291ce9a6",
+          "summary": "Wrote text artifact Reports/iterations/iteration_0001/obligation_tool_trace_obl_run_af6caad85fa3.md"
+        },
+        {
+          "created_at": "2026-07-15T18:47:29.749654+00:00",
+          "kind": "json",
+          "path": "Reports/iterations/iteration_0001/obligation_run_obl_run_af6caad85fa3.json",
+          "sha256": "079ff6ca780a5e26dc78fafa877c35c2ee752450895e3c6dc4ff137aaa8fa08c",
+          "summary": "Wrote text artifact Reports/iterations/iteration_0001/obligation_run_obl_run_af6caad85fa3.json"
+        }
+      ],
+      "child_obligations": [],
+      "claims_generated": [
+        {
+          "assumptions": [],
+          "claim_id": "claim_7cdfe3db1c4e",
+          "claim_type": "literature",
+          "created_at": "2026-07-15T18:47:29.732176+00:00",
+          "depends_on_claim_ids": [],
+          "evidence": [],
+          "normalized_statement": "",
+          "related_proposal_ids": [
+            "proposal_9362c675d10a"
+          ],
+          "related_report_ids": [],
+          "statement": "arXiv ID 0811.3640 corresponds to a lattice QCD paper by Bailey et al. on B-meson semileptonic decay form factors, not the Williams STOC 2009 paper.",
+          "status": "cited",
+          "supersedes_claim_ids": [],
+          "tags": [],
+          "updated_at": "2026-07-15T18:47:29.732207+00:00"
+        },
+        {
+          "assumptions": [],
+          "claim_id": "claim_b687f51f8708",
+          "claim_type": "literature",
+          "created_at": "2026-07-15T18:47:29.732276+00:00",
+          "depends_on_claim_ids": [],
+          "evidence": [],
+          "normalized_statement": "",
+          "related_proposal_ids": [
+            "proposal_9362c675d10a"
+          ],
+          "related_report_ids": [],
+          "statement": "The correct arXiv ID for Williams STOC 2009 'Finding, Minimizing, and Counting Weighted Subgraphs' is arXiv:0903.5300.",
+          "status": "cited",
+          "supersedes_claim_ids": [],
+          "tags": [],
+          "updated_at": "2026-07-15T18:47:29.732306+00:00"
+        },
+        {
+          "assumptions": [],
+          "claim_id": "claim_efe28b74008e",
+          "claim_type": "literature",
+          "created_at": "2026-07-15T18:47:29.732372+00:00",
+          "depends_on_claim_ids": [],
+          "evidence": [],
+          "normalized_statement": "",
+          "related_proposal_ids": [
+            "proposal_9362c675d10a"
+          ],
+          "related_report_ids": [],
+          "statement": "The Williams STOC 2009 paper is not imported as a standalone record in the LiteratureDB; it is only referenced in the bibliography of arxiv_1312.6680.",
+          "status": "cited",
+          "supersedes_claim_ids": [],
+          "tags": [],
+          "updated_at": "2026-07-15T18:47:29.732402+00:00"
+        },
+        {
+          "assumptions": [],
+          "claim_id": "claim_0f67c459a20d",
+          "claim_type": "literature",
+          "created_at": "2026-07-15T18:47:29.732468+00:00",
+          "depends_on_claim_ids": [],
+          "evidence": [],
+          "normalized_statement": "",
+          "related_proposal_ids": [
+            "proposal_9362c675d10a"
+          ],
+          "related_report_ids": [],
+          "statement": "Only 4 papers relevant to OV/SETH are imported in the LiteratureDB: arxiv_1312.6680, arxiv_1502.01063, Bhattacharya_2020_Coarse, and Carmosino_2016_Nondeterministic.",
+          "status": "cited",
+          "supersedes_claim_ids": [],
+          "tags": [],
+          "updated_at": "2026-07-15T18:47:29.732498+00:00"
+        },
+        {
+          "assumptions": [],
+          "claim_id": "claim_ab6d598d90c5",
+          "claim_type": "literature",
+          "created_at": "2026-07-15T18:47:29.732563+00:00",
+          "depends_on_claim_ids": [],
+          "evidence": [],
+          "normalized_statement": "",
+          "related_proposal_ids": [
+            "proposal_9362c675d10a"
+          ],
+          "related_report_ids": [],
+          "statement": "Three core papers are missing from the LiteratureDB: Williams STOC 2009 (arXiv:0903.5300), Abboud-Williams STOC 2014, and Backurs-Indyk STOC 2015.",
+          "status": "cited",
+          "supersedes_claim_ids": [],
+          "tags": [],
+          "updated_at": "2026-07-15T18:47:29.732594+00:00"
+        }
+      ],
+      "created_at": "2026-07-15T18:47:29.732785+00:00",
+      "evidence": [
+        {
+          "artifact_refs": [
+            {
+              "created_at": "2026-07-15T18:45:20.342541+00:00",
+              "kind": "jsonl",
+              "path": "LiteratureDB/query_answers.jsonl",
+              "sha256": "762cdf4575350db8558c94dae8dc4047cb397b3c6df4173123514ac5a0833fa9",
+              "summary": ""
+            }
+          ],
+          "citation_keys": [
+            "arxiv_0811.3640",
+            "arxiv_1312.6680",
+            "arxiv_1502.01063",
+            "Bhattacharya Kasino_2020_Coarse",
+            "Carmosino_2016_Nondeterministic",
+            "Bhattacharya_2020_Coarse"
+          ],
+          "confidence": 0.5,
+          "created_at": "2026-07-15T18:47:29.732082+00:00",
+          "evidence_id": "ev_c43dd71b8fae",
+          "evidence_type": "citation",
+          "literature_support_ids": [],
+          "summary": "Verified that arxiv_0811.3640 is a QCD paper (Bailey et al., B-meson form factor), not the Williams STOC 2009 paper. The correct arXiv ID for Williams STOC 2009 \"Finding, Minimizing, and Counting Weighted Subgraphs\" is arXiv:0903.5300. This paper is referenced in arxiv_1312.6680 but not imported as a standalone record. Only 4 relevant OV/SETH papers are imported; 3 core papers (Williams STOC 2009, Abboud-Williams STOC 2014, Backurs-Indyk STOC 2015) are missing.",
+          "tool_result_ids": [
+            "lit_answer_5d2df0cd7d4f",
+            "lit_answer_2f59244fb72c",
+            "lit_answer_f4cd4f4df6a7",
+            "lit_answer_0ea9dcdbae96"
+          ],
+          "verifier": "LiteratureResearcher"
+        }
+      ],
+      "obligation_id": "obl_17d32f10b171",
+      "outcome": "blocked",
+      "proposal_id": "proposal_9362c675d10a",
+      "run_id": "obl_run_af6caad85fa3",
+      "summary": "Literature audit for SETH-based OV lower bounds. The Williams STOC 2009 paper \"Finding, Minimizing, and Counting Weighted Subgraphs\" is NOT imported in the LiteratureDB. The arXiv ID 0811.3640 was incorrectly associated with this paper \u2014 it is actually a lattice QCD paper by Bailey et al. (form factor f_+(q^2) for B-meson semileptonic decay). The correct arXiv ID for the Williams STOC 2009 paper is arXiv:0903.5300 (Virginia Vassilevska Williams and Ryan Williams, STOC 2009, later published in SIAM J. Comput. 42(3):831\u2013854, 2013 as [VW13]). This paper is referenced in the text of arxiv_1312.6680 (Williams 2013, \"Faster all-pairs shortest paths via circuit complexity\") but is not itself imported as a separate record.\n\nCurrently imported papers in LiteratureDB (18 total, only ~4 relevant to OV/SETH):\n1. arxiv_1312.6680 \u2014 Ryan Williams, \"Faster all-pairs shortest paths via circuit complexity\" (2013) \u2014 relevant\n2. arxiv_1502.01063 \u2014 Bringmann & K\u00fcnnemann, \"Quadratic Conditional Lower Bounds for String Problems and Dynamic Time Warping\" (2015) \u2014 relevant\n3. Bhattacharya_2020_Coarse \u2014 Bhattacharya, Nanongkai, Saranurak SODA 2020 \u2014 relevant\n4. Carmosino_2016_Nondeterministic \u2014 Carmosino et al. ITCS 2016 \u2014 relevant\n5. arxiv_0811.3640 \u2014 Bailey et al., QCD paper (WRONG \u2014 not relevant)\n6. arxiv_1305.4561 \u2014 (needs verification)\n7. arxiv_cs_0504066 \u2014 Schetinin et al., ML paper (not relevant)\n\nMissing from import: Williams STOC 2009 (arXiv:0903.5300), Abboud-Williams STOC 2014, Backurs-Indyk STOC 2015. Only 4 relevant papers imported, falling short of the 5-core-paper success criterion. The SETH-OV lower bound theorem statements and quote-level provenance cannot be extracted because the foundational Williams 2009 paper is not imported.",
+      "unresolved_blockers": [
+        "Williams STOC 2009 paper (arXiv:0903.5300) is not imported in the LiteratureDB \u2014 requires manual import or experimenter-based import.",
+        "Abboud-Williams STOC 2014 paper is not imported.",
+        "Backurs-Indyk STOC 2015 paper is not imported.",
+        "Cannot extract SETH-OV lower bound theorem statements with quote-level provenance without the foundational Williams 2009 paper.",
+        "Only 4 of required 5 core papers are imported."
+      ],
+      "validation": {
+        "blocking_issues": [
+          "Citation key `Bhattacharya Kasino_2020_Coarse` is not imported in LiteratureDB/papers.jsonl.",
+          "Obligation run outcome is `blocked`, not `fulfilled`.",
+          "Literature obligation lacks citation evidence with citation keys.",
+          "Citation key `Bhattacharya_2020_Coarse` has no extracted theorem/algorithm/lower-bound statement.",
+          "Citation key `arxiv_1502.01063` has no extracted theorem/algorithm/lower-bound statement.",
+          "Citation key `arxiv_1312.6680` has no extracted theorem/algorithm/lower-bound statement.",
+          "Citation key `arxiv_0811.3640` has no extracted theorem/algorithm/lower-bound statement.",
+          "Citation key `Bhattacharya Kasino_2020_Coarse` has no extracted theorem/algorithm/lower-bound statement.",
+          "Citation key `Carmosino_2016_Nondeterministic` has no extracted theorem/algorithm/lower-bound statement."
+        ],
+        "created_at": "2026-07-15T18:47:29.773007+00:00",
+        "gate_results": [
+          {
+            "gate": "scope_provenance",
+            "issues": [
+              "Citation key `Bhattacharya Kasino_2020_Coarse` is not imported in LiteratureDB/papers.jsonl."
+            ],
+            "passed": false
+          },
+          {
+            "gate": "evidence",
+            "issues": [
+              "Obligation run outcome is `blocked`, not `fulfilled`.",
+              "Literature obligation lacks citation evidence with citation keys.",
+              "Citation key `Bhattacharya_2020_Coarse` has no extracted theorem/algorithm/lower-bound statement.",
+              "Citation key `arxiv_1502.01063` has no extracted theorem/algorithm/lower-bound statement.",
+              "Citation key `arxiv_1312.6680` has no extracted theorem/algorithm/lower-bound statement.",
+              "Citation key `arxiv_0811.3640` has no extracted theorem/algorithm/lower-bound statement.",
+              "Citation key `Bhattacharya Kasino_2020_Coarse` has no extracted theorem/algorithm/lower-bound statement.",
+              "Citation key `Carmosino_2016_Nondeterministic` has no extracted theorem/algorithm/lower-bound statement."
+            ],
+            "passed": false
+          },
+          {
+            "gate": "consistency",
+            "issues": [],
+            "passed": true
+          }
+        ],
+        "ok": false,
+        "warnings": []
+      }
+    },
+    {
+      "artifact_refs": [
+        {
+          "created_at": "2026-07-15T18:47:32.687041+00:00",
+          "kind": "jsonl",
+          "path": "LiteratureDB/query_answers.jsonl",
+          "sha256": "662fbeba4dd0892d5921efd8d94534a9476031e40e5f2567a9870df619bb024e",
+          "summary": ""
+        },
+        {
+          "created_at": "2026-07-15T18:56:09.063219+00:00",
+          "kind": "json",
+          "path": "Reports/iterations/iteration_0002/obligation_tool_trace_obl_run_6a57a679bd79.json",
+          "sha256": "489923ba24ea7d2b5cc98d5ff52f22ab40646838065fdb95e138e782ae7bbc84",
+          "summary": "Wrote text artifact Reports/iterations/iteration_0002/obligation_tool_trace_obl_run_6a57a679bd79.json"
+        },
+        {
+          "created_at": "2026-07-15T18:56:09.080484+00:00",
+          "kind": "markdown",
+          "path": "Reports/iterations/iteration_0002/obligation_tool_trace_obl_run_6a57a679bd79.md",
+          "sha256": "8f6ac37bef77a4fd551d1c0f1cec4d59e64b66711adfb156aa6a8a76eec498ef",
+          "summary": "Wrote text artifact Reports/iterations/iteration_0002/obligation_tool_trace_obl_run_6a57a679bd79.md"
+        },
+        {
+          "created_at": "2026-07-15T18:56:09.082509+00:00",
+          "kind": "json",
+          "path": "Reports/iterations/iteration_0002/obligation_run_obl_run_6a57a679bd79.json",
+          "sha256": "5441f56dc2cfeb8be8ff71cdddfbb3d36c8463d5a8d54dd4901a392b5a3713a5",
+          "summary": "Wrote text artifact Reports/iterations/iteration_0002/obligation_run_obl_run_6a57a679bd79.json"
+        }
+      ],
+      "child_obligations": [],
+      "claims_generated": [
+        {
+          "assumptions": [],
+          "claim_id": "claim_57080f8a4e1b",
+          "claim_type": "literature",
+          "created_at": "2026-07-15T18:56:09.043530+00:00",
+          "depends_on_claim_ids": [],
+          "evidence": [],
+          "normalized_statement": "",
+          "related_proposal_ids": [
+            "proposal_9362c675d10a"
+          ],
+          "related_report_ids": [],
+          "statement": "The paper 'Tight Hardness for Several NP-Complete Problems' by Abboud and Williams (STOC 2014, DOI 10.1145/2591796.2591810) is not present in the LiteratureDB papers.jsonl or candidates.jsonl.",
+          "status": "cited",
+          "supersedes_claim_ids": [],
+          "tags": [],
+          "updated_at": "2026-07-15T18:56:09.043561+00:00"
+        },
+        {
+          "assumptions": [],
+          "claim_id": "claim_748ffd2a9bde",
+          "claim_type": "literature",
+          "created_at": "2026-07-15T18:56:09.043628+00:00",
+          "depends_on_claim_ids": [],
+          "evidence": [],
+          "normalized_statement": "",
+          "related_proposal_ids": [
+            "proposal_9362c675d10a"
+          ],
+          "related_report_ids": [],
+          "statement": "The LiteratureDB contains 18 imported papers but none match the title 'Tight Hardness for Several NP-Complete Problems'.",
+          "status": "cited",
+          "supersedes_claim_ids": [],
+          "tags": [],
+          "updated_at": "2026-07-15T18:56:09.043662+00:00"
+        },
+        {
+          "assumptions": [],
+          "claim_id": "claim_5b5e66d8c718",
+          "claim_type": "literature",
+          "created_at": "2026-07-15T18:56:09.043832+00:00",
+          "depends_on_claim_ids": [],
+          "evidence": [],
+          "normalized_statement": "",
+          "related_proposal_ids": [
+            "proposal_9362c675d10a"
+          ],
+          "related_report_ids": [],
+          "statement": "Williams STOC 2009 and Backurs-Indyk STOC 2015 are also not found in the LiteratureDB.",
+          "status": "cited",
+          "supersedes_claim_ids": [],
+          "tags": [],
+          "updated_at": "2026-07-15T18:56:09.043863+00:00"
+        },
+        {
+          "assumptions": [],
+          "claim_id": "claim_2d95aae5f144",
+          "claim_type": "literature",
+          "created_at": "2026-07-15T18:56:09.043928+00:00",
+          "depends_on_claim_ids": [],
+          "evidence": [],
+          "normalized_statement": "",
+          "related_proposal_ids": [
+            "proposal_9362c675d10a"
+          ],
+          "related_report_ids": [],
+          "statement": "The imported paper arxiv_1312.6680 (Williams 2013) on faster APSP via circuit complexity is present and relevant to the fine-grained complexity program.",
+          "status": "cited",
+          "supersedes_claim_ids": [],
+          "tags": [],
+          "updated_at": "2026-07-15T18:56:09.043958+00:00"
+        },
+        {
+          "assumptions": [],
+          "claim_id": "claim_61e035731235",
+          "claim_type": "literature",
+          "created_at": "2026-07-15T18:56:09.044022+00:00",
+          "depends_on_claim_ids": [],
+          "evidence": [],
+          "normalized_statement": "",
+          "related_proposal_ids": [
+            "proposal_9362c675d10a"
+          ],
+          "related_report_ids": [],
+          "statement": "The imported paper arxiv_1502.01063 (Bringmann-K\u00fcnnemann 2015) on quadratic conditional lower bounds for string problems is present.",
+          "status": "cited",
+          "supersedes_claim_ids": [],
+          "tags": [],
+          "updated_at": "2026-07-15T18:56:09.044052+00:00"
+        },
+        {
+          "assumptions": [],
+          "claim_id": "claim_48bea82a6d2c",
+          "claim_type": "literature",
+          "created_at": "2026-07-15T18:56:09.044116+00:00",
+          "depends_on_claim_ids": [],
+          "evidence": [],
+          "normalized_statement": "",
+          "related_proposal_ids": [
+            "proposal_9362c675d10a"
+          ],
+          "related_report_ids": [],
+          "statement": "The imported paper Abboud_2016_Simulating (Abboud et al. STOC 2016) on simulating branching programs with edit distance is present.",
+          "status": "cited",
+          "supersedes_claim_ids": [],
+          "tags": [],
+          "updated_at": "2026-07-15T18:56:09.044147+00:00"
+        }
+      ],
+      "created_at": "2026-07-15T18:56:09.044229+00:00",
+      "evidence": [
+        {
+          "artifact_refs": [
+            {
+              "created_at": "2026-07-15T18:47:32.687041+00:00",
+              "kind": "jsonl",
+              "path": "LiteratureDB/query_answers.jsonl",
+              "sha256": "662fbeba4dd0892d5921efd8d94534a9476031e40e5f2567a9870df619bb024e",
+              "summary": ""
+            }
+          ],
+          "citation_keys": [
+            "Bhattacharya_2020_Coarse",
+            "arxiv_1502.01063",
+            "arxiv_1312.6680"
+          ],
+          "confidence": 0.5,
+          "created_at": "2026-07-15T18:56:09.043421+00:00",
+          "evidence_id": "ev_983cfeeff1f1",
+          "evidence_type": "citation",
+          "literature_support_ids": [],
+          "summary": "Multiple literature queries and direct reads of papers.jsonl and candidates.jsonl confirmed the absence of the target paper. The DOI 10.1145/2591796.2591810 was not found in any imported or queued record.",
+          "tool_result_ids": [
+            "lit_answer_86aef36ec231",
+            "lit_answer_0cd7bf64d24e",
+            "lit_answer_38a9d8d04e11",
+            "lit_answer_e60ca656b139",
+            "lit_answer_f6aaedcdb0f3",
+            "lit_answer_073e0e544c0a",
+            "lit_answer_7048f7769a4e"
+          ],
+          "verifier": "LiteratureResearcher"
+        }
+      ],
+      "obligation_id": "obl_8a0a1c620341",
+      "outcome": "blocked",
+      "proposal_id": "proposal_9362c675d10a",
+      "run_id": "obl_run_6a57a679bd79",
+      "summary": "The assigned obligation to import Abboud-Williams STOC 2014 'Tight Hardness for Several NP-Complete Problems' (DOI 10.1145/2591796.2591810) could not be fulfilled because the paper is not present in the LiteratureDB. It was not imported during the initial literature ingestion, and it does not appear in the candidates queue either. Multiple searches by title, author names, and DOI confirmed its absence from both papers.jsonl and candidates.jsonl. The LiteratureDB contains 18 imported papers (including Williams 2013 on APSP, Bringmann-K\u00fcnnemann 2015 on string problem lower bounds, and Abboud et al. 2016 on branching programs) but none match the target paper. Additionally, Williams STOC 2009 and Backurs-Indyk STOC 2015 are also absent, failing the success criterion of importing at least 5 core papers including these three.",
+      "unresolved_blockers": [
+        "Paper 'Tight Hardness for Several NP-Complete Problems' by Abboud and Williams (STOC 2014) not found in LiteratureDB papers.jsonl or candidates.jsonl despite DOI 10.1145/2591796.2591810 search",
+        "Williams STOC 2009 not found in LiteratureDB",
+        "Backurs-Indyk STOC 2015 not found in LiteratureDB",
+        "Cannot extract theorem statements with citation keys and quote-level provenance without the paper",
+        "Cannot produce normalized explanation of assumptions and parameter regimes without the paper"
+      ],
+      "validation": {
+        "blocking_issues": [
+          "Obligation run outcome is `blocked`, not `fulfilled`."
+        ],
+        "created_at": "2026-07-15T18:56:09.100445+00:00",
+        "gate_results": [
+          {
+            "gate": "scope_provenance",
+            "issues": [],
+            "passed": true
+          },
+          {
+            "gate": "evidence",
+            "issues": [
+              "Obligation run outcome is `blocked`, not `fulfilled`."
+            ],
+            "passed": false
+          },
+          {
+            "gate": "consistency",
+            "issues": [],
+            "passed": true
+          }
+        ],
+        "ok": false,
+        "warnings": []
+      }
+    },
+    {
+      "artifact_refs": [
+        {
+          "created_at": "2026-07-15T18:56:11.595372+00:00",
+          "kind": "jsonl",
+          "path": "LiteratureDB/query_answers.jsonl",
+          "sha256": "8f00bda8b1ac6f5f030416a14e0db8db7f965ef218e6f5e60558b43c4e9ca2bc",
+          "summary": ""
+        },
+        {
+          "created_at": "2026-07-15T19:19:35.974074+00:00",
+          "kind": "json",
+          "path": "Reports/iterations/iteration_0003/obligation_tool_trace_obl_run_0ef246319aba.json",
+          "sha256": "418c7ee31b6fc2d51534f108edf8ae7b667b3c366475e98cb5b0f3778f205ff4",
+          "summary": "Wrote text artifact Reports/iterations/iteration_0003/obligation_tool_trace_obl_run_0ef246319aba.json"
+        },
+        {
+          "created_at": "2026-07-15T19:19:35.993111+00:00",
+          "kind": "markdown",
+          "path": "Reports/iterations/iteration_0003/obligation_tool_trace_obl_run_0ef246319aba.md",
+          "sha256": "0147c7da8618482d3c27a43387e3ca37ca60543876866d7f78a0753ddcdf4ff9",
+          "summary": "Wrote text artifact Reports/iterations/iteration_0003/obligation_tool_trace_obl_run_0ef246319aba.md"
+        },
+        {
+          "created_at": "2026-07-15T19:19:35.995137+00:00",
+          "kind": "json",
+          "path": "Reports/iterations/iteration_0003/obligation_run_obl_run_0ef246319aba.json",
+          "sha256": "d3ba017756ed36310b401823a7cace2bf7db5070662c32b7125d040acaba9841",
+          "summary": "Wrote text artifact Reports/iterations/iteration_0003/obligation_run_obl_run_0ef246319aba.json"
+        }
+      ],
+      "child_obligations": [],
+      "claims_generated": [
+        {
+          "assumptions": [],
+          "claim_id": "claim_b927872e87c3",
+          "claim_type": "literature",
+          "created_at": "2026-07-15T19:19:35.960602+00:00",
+          "depends_on_claim_ids": [],
+          "evidence": [],
+          "normalized_statement": "",
+          "related_proposal_ids": [
+            "proposal_9362c675d10a"
+          ],
+          "related_report_ids": [],
+          "statement": "The Backurs-Indyk STOC 2015 paper 'Edit Distance Cannot Be Computed in Strongly Subquadratic Time' is not present in the LiteratureDB papers.jsonl or candidates.jsonl.",
+          "status": "cited",
+          "supersedes_claim_ids": [],
+          "tags": [],
+          "updated_at": "2026-07-15T19:19:35.960632+00:00"
+        },
+        {
+          "assumptions": [],
+          "claim_id": "claim_fb856cecafde",
+          "claim_type": "literature",
+          "created_at": "2026-07-15T19:19:35.960811+00:00",
+          "depends_on_claim_ids": [],
+          "evidence": [],
+          "normalized_statement": "",
+          "related_proposal_ids": [
+            "proposal_9362c675d10a"
+          ],
+          "related_report_ids": [],
+          "statement": "The paper is referenced in the bibliography of the imported Bringmann-K\u00fcnnemann arxiv_1502.01063 as 'arXiv 1412.0348'.",
+          "status": "cited",
+          "supersedes_claim_ids": [],
+          "tags": [],
+          "updated_at": "2026-07-15T19:19:35.960841+00:00"
+        },
+        {
+          "assumptions": [],
+          "claim_id": "claim_2cf5a3310035",
+          "claim_type": "literature",
+          "created_at": "2026-07-15T19:19:35.960906+00:00",
+          "depends_on_claim_ids": [],
+          "evidence": [],
+          "normalized_statement": "",
+          "related_proposal_ids": [
+            "proposal_9362c675d10a"
+          ],
+          "related_report_ids": [],
+          "statement": "The LiteratureDB does not currently contain an imported record for the Backurs-Indyk STOC 2015 paper.",
+          "status": "cited",
+          "supersedes_claim_ids": [],
+          "tags": [],
+          "updated_at": "2026-07-15T19:19:35.960935+00:00"
+        }
+      ],
+      "created_at": "2026-07-15T19:19:35.961014+00:00",
+      "evidence": [
+        {
+          "artifact_refs": [
+            {
+              "created_at": "2026-07-15T18:56:11.595372+00:00",
+              "kind": "jsonl",
+              "path": "LiteratureDB/query_answers.jsonl",
+              "sha256": "8f00bda8b1ac6f5f030416a14e0db8db7f965ef218e6f5e60558b43c4e9ca2bc",
+              "summary": ""
+            }
+          ],
+          "citation_keys": [
+            "arxiv_1502.01063",
+            "arxiv_1312.6680",
+            "Bhattacharya_2020_Coarse",
+            "arxiv_1305.4561"
+          ],
+          "confidence": 0.5,
+          "created_at": "2026-07-15T19:19:35.960517+00:00",
+          "evidence_id": "ev_272cdf3b98c9",
+          "evidence_type": "citation",
+          "literature_support_ids": [],
+          "summary": "LiteratureDB query results confirm the paper is cited in other imported works (e.g., arxiv_1502.01063) but is not itself imported. The papers.jsonl and candidates.jsonl do not contain an entry for Backurs-Indyk STOC 2015.",
+          "tool_result_ids": [
+            "lit_answer_481b8324f320",
+            "lit_answer_eddea40f3aaf",
+            "lit_answer_5f5432699a0d",
+            "lit_answer_89a8be1eb12d",
+            "lit_answer_e94e0c9ac71d",
+            "lit_answer_aaa46f32f0fa"
+          ],
+          "verifier": "LiteratureResearcher"
+        }
+      ],
+      "obligation_id": "obl_c275e131fb04",
+      "outcome": "blocked",
+      "proposal_id": "proposal_9362c675d10a",
+      "run_id": "obl_run_0ef246319aba",
+      "summary": "The assigned obligation was to import the Backurs-Indyk STOC 2015 paper 'Edit Distance Cannot Be Computed in Strongly Subquadratic Time' via DOI search. I conducted extensive searches in the LiteratureDB (papers.jsonl, candidates.jsonl, query_answers.jsonl) for this paper. The paper is not\u043a\u043e\u0432 present in the imported papers list (papers.jsonl contains 18 papers, none by Backurs-Indyk STOC 2015). It is also not found in the candidates.jsonl (166 candidates, none matching the title/DOI). Literature queries for 'Backurs Indyk STOC 2015', 'Backurs Indyk Edit Distance', and 'arxiv 1412.0348' returned results referencing the paper (e.g., in the bibliography of arxiv_1502.01063 as '[6] Arturs Backurs and Piotr Indyk. Edit distance cannot be computed in strongly subquadratic time (unless SETH is false), 2014. arXiv 1412.0348.'), but did not result in the paper being imported or queued for import. The paper remains unimported. The obligation's success criteria (importing at least 5 core papers including this one) were not met. The paper is blocked by the lack of an automated import mechanism for this specific STOC 2015 paper via DOI in the current LiteratureDB state.",
+      "unresolved_blockers": [
+        "The Backurs-Indyk STOC 2015 paper could not be imported via DOI search; it is not in the papers.jsonl or candidates.jsonl.",
+        "The obligation requires importing this specific paper, which remains unimported."
+      ],
+      "validation": {
+        "blocking_issues": [
+          "Obligation run outcome is `blocked`, not `fulfilled`."
+        ],
+        "created_at": "2026-07-15T19:19:36.013954+00:00",
+        "gate_results": [
+          {
+            "gate": "scope_provenance",
+            "issues": [],
+            "passed": true
+          },
+          {
+            "gate": "evidence",
+            "issues": [
+              "Obligation run outcome is `blocked`, not `fulfilled`."
+            ],
+            "passed": false
+          },
+          {
+            "gate": "consistency",
+            "issues": [],
+            "passed": true
+          }
+        ],
+        "ok": false,
+        "warnings": []
+      }
+    },
+    {
+      "artifact_refs": [
+        {
+          "created_at": "2026-07-15T19:19:38.661418+00:00",
+          "kind": "jsonl",
+          "path": "LiteratureDB/query_answers.jsonl",
+          "sha256": "b4ae9f40f6263ed7f86ff3d4a846992427c2cdea96513a6ce3ca15c5df5a3ff9",
+          "summary": ""
+        },
+        {
+          "created_at": "2026-07-15T19:23:53.628895+00:00",
+          "kind": "json",
+          "path": "Reports/iterations/iteration_0004/obligation_tool_trace_obl_run_cb6bb43f770d.json",
+          "sha256": "bb408a4ce3e2599109b2f7da2e7a3fe263126dc00bf74d9f4a165ab3266e6d27",
+          "summary": "Wrote text artifact Reports/iterations/iteration_0004/obligation_tool_trace_obl_run_cb6bb43f770d.json"
+        },
+        {
+          "created_at": "2026-07-15T19:23:53.646022+00:00",
+          "kind": "markdown",
+          "path": "Reports/iterations/iteration_0004/obligation_tool_trace_obl_run_cb6bb43f770d.md",
+          "sha256": "146b93b701cc79a38d9ea1138532f7a206d79237475c01dce4cac261e1d870b6",
+          "summary": "Wrote text artifact Reports/iterations/iteration_0004/obligation_tool_trace_obl_run_cb6bb43f770d.md"
+        },
+        {
+          "created_at": "2026-07-15T19:23:53.648339+00:00",
+          "kind": "json",
+          "path": "Reports/iterations/iteration_0004/obligation_run_obl_run_cb6bb43f770d.json",
+          "sha256": "0564d7fa07082c02df773597798b02e7dfec51fe04443c546629b5ddf5033eda",
+          "summary": "Wrote text artifact Reports/iterations/iteration_0004/obligation_run_obl_run_cb6bb43f770d.json"
+        }
+      ],
+      "child_obligations": [],
+      "claims_generated": [
+        {
+          "assumptions": [],
+          "claim_id": "claim_773f19c0ce86",
+          "claim_type": "literature",
+          "created_at": "2026-07-15T19:23:53.619032+00:00",
+          "depends_on_claim_ids": [],
+          "evidence": [],
+          "normalized_statement": "",
+          "related_proposal_ids": [
+            "proposal_9362c675d10a"
+          ],
+          "related_report_ids": [],
+          "statement": "The SODA 2017 paper by Gao, Impagliazzo, Kolokolova, and Williams is titled 'Completeness for first-order properties on sparse structures with algorithmicduct applications', not 'Sparse Orthogonal Vectors'.",
+          "status": "cited",
+          "supersedes_claim_ids": [],
+          "tags": [],
+          "updated_at": "2026-07-15T19:23:53.619063+00:00"
+        },
+        {
+          "assumptions": [],
+          "claim_id": "claim_93e45b1ef2e9",
+          "claim_type": "literature",
+          "created_at": "2026-07-15T19:23:53.619130+00:00",
+          "depends_on_claim_ids": [],
+          "evidence": [],
+          "normalized_statement": "",
+          "related_proposal_ids": [
+            "proposal_9362c675d10a"
+          ],
+          "related_report_ids": [],
+          "statement": "The paper is cited in the LiteratureDB within the bibliographies of imported works such as Bhattacharya_2 \ud22c\uc5b4_2020_Coarse and Carmosino_2016_Nondeterministic.",
+          "status": "cited",
+          "supersedes_claim_ids": [],
+          "tags": [],
+          "updated_at": "2026-07-15T19:23:53.619161+00:00"
+        },
+        {
+          "assumptions": [],
+          "claim_id": "claim_798c90422cca",
+          "claim_type": "literature",
+          "created_at": "2026-07-15T19:23:53.619245+00:00",
+          "depends_on_claim_ids": [],
+          "evidence": [],
+          "normalized_statement": "",
+          "related_proposal_ids": [
+            "proposal_9362c675d10a"
+          ],
+          "related_report_ids": [],
+          "statement": "A direct standalone import with DOI/arXiv resolution and full-text extraction for this specific paper was not completed in this run.",
+          "status": "cited",
+          "supersedes_claim_ids": [],
+          "tags": [],
+          "updated_at": "2026-07-15T19:23:53.619276+00:00"
+        }
+      ],
+      "created_at": "2026-07-15T19:23:53.619362+00:00",
+      "evidence": [
+        {
+          "artifact_refs": [
+            {
+              "created_at": "2026-07-15T19:19:38.661418+00:00",
+              "kind": "jsonl",
+              "path": "LiteratureDB/query_answers.jsonl",
+              "sha256": "b4ae9f40f6263ed7f86ff3d4a846992427c2cdea96513a6ce3ca15c5df5a3ff9",
+              "summary": ""
+            }
+          ],
+          "citation_keys": [
+            "Bhattacharya_2020_Coarse",
+            "arxiv_1502.01063"
+          ],
+          "confidence": 0.5,
+          "created_at": "2026-07-15T19:23:53.618936+00:00",
+          "evidence_id": "ev_6afd4ec6a2c2",
+          "evidence_type": "citation",
+          "literature_support_ids": [],
+          "summary": "LiteratureDB queries located the paper by authors and year, confirming the correct title and venue. However, the paper exists only as a citation in other imported papers' bibliographies, not as a fully imported standalone record with extracted text. The title mismatch ('Sparse Orthogonal Vectors' vs 'Completeness for first-order properties...') and lack of a direct import tool in this scope prevented full fulfillment.",
+          "tool_result_ids": [
+            "lit_answer_0c3d8d7409e7",
+            "lit_answer_1be129a82814",
+            "lit_answer_321c90669a12",
+            "lit_answer_6b6f7491b627",
+            "lit_answer_3d2c3b667f29",
+            "lit_answer_35ff51422b6a"
+          ],
+          "verifier": "LiteratureResearcher"
+        }
+      ],
+      "obligation_id": "obl_7f71ac8c7bf6",
+      "outcome": "blocked",
+      "proposal_id": "proposal_9362c675d10a",
+      "run_id": "obl_run_cb6bb43f770d",
+      "summary": "The assigned obligation to import the Gao-Impagliazzo-Kolokolova-Williams SODA 2017 paper was partially investigated. LiteratureDB queries successfully located the paper, revealing that its actual title is 'Completeness for first-order properties on sparse structures with algorithmic applications' rather than 'Sparse Orthogonal Vectors'. The paper is present in the database only as a bibliographic citation within other imported works (e.g., Bhattacharya_2020_Coarse). A direct standalone import via DOI/arXiv with full-text extraction was not completed in this iteration, leaving the obligation blocked pending explicit import execution or text extraction.",
+      "unresolved_blockers": [
+        "Direct DOI/arXiv import tool not invoked in this run; paper exists only as a citation in other imported papers' bibliographies.",
+        "Title discrepancy: obligation references 'Sparse Orthogonal Vectors', but the actual SODA 2017 publication is 'Completeness for first-order properties on sparse structures with algorithmic applications'."
+      ],
+      "validation": {
+        "blocking_issues": [
+          "Obligation run outcome is `blocked`, not `fulfilled`."
+        ],
+        "created_at": "2026-07-15T19:23:53.665276+00:00",
+        "gate_results": [
+          {
+            "gate": "scope_provenance",
+            "issues": [],
+            "passed": true
+          },
+          {
+            "gate": "evidence",
+            "issues": [
+              "Obligation run outcome is `blocked`, not `fulfilled`."
+            ],
+            "passed": false
+          },
+          {
+            "gate": "consistency",
+            "issues": [],
+            "passed": true
+          }
+        ],
+        "ok": false,
+        "warnings": []
+      }
+    },
+    {
+      "artifact_refs": [
+        {
+          "created_at": "2026-07-15T19:25:25.625917+00:00",
+          "kind": "json",
+          "path": "Reports/iterations/iteration_0005/obligation_tool_trace_obl_run_ae4edc2e4885.json",
+          "sha256": "e01131ecbb61a0b489439c925f68d43bce7fb6517642d56f309697a70fba46b7",
+          "summary": "Wrote text artifact Reports/iterations/iteration_0005/obligation_tool_trace_obl_run_ae4edc2e4885.json"
+        },
+        {
+          "created_at": "2026-07-15T19:25:25.636921+00:00",
+          "kind": "markdown",
+          "path": "Reports/iterations/iteration_0005/obligation_tool_trace_obl_run_ae4edc2e4885.md",
+          "sha256": "81902d48e27e904550c6564a8ab20f2e983242caf5155870f6f68c59363a327a",
+          "summary": "Wrote text artifact Reports/iterations/iteration_0005/obligation_tool_trace_obl_run_ae4edc2e4885.md"
+        },
+        {
+          "created_at": "2026-07-15T19:25:25.638966+00:00",
+          "kind": "json",
+          "path": "Reports/iterations/iteration_0005/obligation_run_obl_run_ae4edc2e4885.json",
+          "sha256": "ec50431335f5acf39deea1348c307d8d95579ed3a68b66fcd63b017a45bfdbc4",
+          "summary": "Wrote text artifact Reports/iterations/iteration_0005/obligation_run_obl_run_ae4edc2e4885.json"
+        }
+      ],
+      "child_obligations": [],
+      "claims_generated": [
+        {
+          "assumptions": [],
+          "claim_id": "claim_4ade92c3d97e",
+          "claim_type": "mathematical",
+          "created_at": "2026-07-15T19:25:25.612506+00:00",
+          "depends_on_claim_ids": [],
+          "evidence": [],
+          "normalized_statement": "",
+          "related_proposal_ids": [
+            "proposal_9362c675d10a"
+          ],
+          "related_report_ids": [],
+          "statement": "The Williams FOCS 2005 paper 'A New Look at NP\u0e28\u0e35\u0e23\u0e29\u0e30Complete Problems' (DOI 10.1109/FOCS.2005.55) was not found in the LiteratureDB papers index after DOI and title-based searches.",
+          "status": "informal_argument",
+          "supersedes_claim_ids": [],
+          "tags": [],
+          "updated_at": "2026-07-15T19:25:25.612536+00:00"
+        },
+        {
+          "assumptions": [],
+          "claim_id": "claim_f9179fe6271e",
+          "claim_type": "mathematical",
+          "created_at": "2026-07-15T19:25:25.612602+00:00",
+          "depends_on_claim_ids": [],
+          "evidence": [],
+          "normalized_statement": "",
+          "related_proposal_ids": [
+            "proposal_9362c675d10a"
+          ],
+          "related_report_ids": [],
+          "statement": "The LiteratureDB contains 18 imported papers, none of which is Williams FOCS 2005.",
+          "status": "informal_argument",
+          "supersedes_claim_ids": [],
+          "tags": [],
+          "updated_at": "2026-07-15T19:25:25.612632+00:00"
+        },
+        {
+          "assumptions": [],
+          "claim_id": "claim_a25ed8bb9263",
+          "claim_type": "mathematical",
+          "created_at": "2026-07-15T19:25:25.612795+00:00",
+          "depends_on_claim_ids": [],
+          "evidence": [],
+          "normalized_statement": "",
+          "related_proposal_ids": [
+            "proposal_9362c675d10a"
+          ],
+          "related_report_ids": [],
+          "statement": "The LiteratureDB candidates list (166 entries) does not contain Williams FOCS 2005.",
+          "status": "informal_argument",
+          "supersedes_claim_ids": [],
+          "tags": [],
+          "updated_at": "2026-07-15T19:25:25.612825+00:00"
+        },
+        {
+          "assumptions": [],
+          "claim_id": "claim_533bca622b83",
+          "claim_type": "mathematical",
+          "created_at": "2026-07-15T19:25:25.612890+00:00",
+          "depends_on_claim_ids": [],
+          "evidence": [],
+          "normalized_statement": "",
+          "related_proposal_ids": [
+            "proposal_9362c675d10a"
+          ],
+          "related_report_ids": [],
+          "statement": "The success criteria require importing Williams STOC 2009, Abboud-Williams STOC 2014, and Backurs-Indyk STOC 2015; none of these three papers are in the imported papers list.",
+          "status": "informal_argument",
+          "supersedes_claim_ids": [],
+          "tags": [],
+          "updated_at": "2026-07-15T19:25:25.612920+00:00"
+        }
+      ],
+      "created_at": "2026-07-15T19:25:25.613086+00:00",
+      "evidence": [
+        {
+          "artifact_refs": [],
+          "citation_keys": [],
+          "confidence": 0.3,
+          "created_at": "2026-07-15T19:25:25.612399+00:00",
+          "evidence_id": "ev_c6015c63d72c",
+          "evidence_type": "informal_argument",
+          "literature_support_ids": [],
+          "summary": "Queried LiteratureDB via query_literature with multiple search terms: 'Williams FOCS 2005', 'Williams FOCS 2005 A New Look at NP-Complete Problems', 'DOI 10.1109/FOCS.2005.55', 'Williams STOC 2009 Foundations of Paradigm Losses', 'Abboud Williams FOCS 2014 Popular Conjectures', 'Backurs Indyk STOC 2015 Edit Distance'. Read papers.jsonl (18 records) and candidates.jsonl (166 records). None of the target papers were found.",
+          "tool_result_ids": [
+            "lit_answer_f771e1ab72de",
+            "lit_answer_bd3b998ef2f6",
+            "lit_answer_8cc7d1d25ccd",
+            "lit_answer_66927f74b31a",
+            "lit_answer_3d53a9fc075c",
+            "lit_answer_803aa6c04d5f",
+            "lit_answer_1f2b92258c31",
+            "lit_answer_a97fe803cd9e",
+            "lit_answer_e4c018f0eacc",
+            "lit_answer_eafbb3354499"
+          ],
+          "verifier": null
+        }
+      ],
+      "obligation_id": "obl_5d3d97865215",
+      "outcome": "blocked",
+      "proposal_id": "proposal_9362c675d10a",
+      "run_id": "obl_run_ae4edc2e4885",
+      "summary": "The Williams FOCS 2005 paper 'A New Look at NP-Complete Problems' could not be imported via DOI search. Multiple LiteratureDB queries (by DOI 10.1109/FOCS.2005.55, by title, by author+venue) returned no matching paper in the imported papers index or candidates list. The LiteratureDB contains 18 imported papers and 166 candidate records, none of which correspond to Williams FOCS 2005. Additionally, the success criteria require importing Williams STOC 2009, Abboud-Williams STOC 2014, and Backurs-Indyk STOC 2015, none of which are present in the imported papers list. The primary blocker is the inability to locate and import the target paper through the DOI search mechanism.",
+      "unresolved_blockers": [
+        "Williams FOCS 2005 'A New Look at NP-Complete Problems' (DOI 10.1109/FOCS.2005.55) not found in LiteratureDB papers or candidates",
+        "Williams STOC 2009 'Foundations of Paradigm Losses' not imported",
+        "Abboud-Williams FOCS 2014 'Popular Conjectures' not imported",
+        "Backurs-Indyk STOC 2015 'Edit Distance' not imported"
+      ],
+      "validation": {
+        "blocking_issues": [
+          "Obligation run outcome is `blocked`, not `fulfilled`."
+        ],
+        "created_at": "2026-07-15T19:25:25.656037+00:00",
+        "gate_results": [
+          {
+            "gate": "scope_provenance",
+            "issues": [],
+            "passed": true
+          },
+          {
+            "gate": "evidence",
+            "issues": [
+              "Obligation run outcome is `blocked`, not `fulfilled`."
+            ],
+            "passed": false
+          },
+          {
+            "gate": "consistency",
+            "issues": [],
+            "passed": true
+          }
+        ],
+        "ok": false,
+        "warnings": []
+      }
+    }
+  ],
+  "updated_at": "2026-07-15T19:25:25.661364+00:00"
+}

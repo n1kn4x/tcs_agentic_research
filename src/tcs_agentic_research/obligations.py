@@ -493,7 +493,22 @@ def _obligations_from_proposal(proposal: ResearchProposal) -> list[ResearchOblig
 
 def _classify_obligation_kind(text: str) -> str:
     lowered = text.lower()
-    if any(word in lowered for word in ["citation", "literature", "paper", "theorem from"]):
+    if any(
+        word in lowered
+        for word in [
+            "arxiv",
+            "citation",
+            "doi",
+            "extract",
+            "import",
+            "literature",
+            "paper",
+            "provenance",
+            "quote",
+            "source",
+            "theorem from",
+        ]
+    ):
         return "literature"
     if any(word in lowered for word in ["lean", "formal", "proof", "prove theorem"]):
         return "proof"

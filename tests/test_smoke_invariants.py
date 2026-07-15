@@ -16,7 +16,7 @@ from tcs_agentic_research.agents.initialization import WorkspaceInitializer
 from tcs_agentic_research.agents.literature import LiteratureResearcher
 from tcs_agentic_research.agents.proposal import ProposalAgent
 from tcs_agentic_research.agents.research import ResearchAgent
-from tcs_agentic_research.agents.toolsets import artifact_retrieval_toolset
+from tcs_agentic_research.agents.toolsets import artifact_retrieval_toolset, literature_toolset
 from tcs_agentic_research.artifact_store import ArtifactStore
 from tcs_agentic_research.obligations import (
     CommitManager,
@@ -755,6 +755,58 @@ def test_literature_extraction_indexes_support_ids_without_auto_claims(tmp_path:
     citation_key_only = supported.model_copy(deep=True)
     citation_key_only.evidence[0].literature_support_ids = []
     assert not is_claim_acceptably_supported(citation_key_only, store)
+
+
+def test_literature_toolset_can_import_and_extract_for_literature_obligations(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    agent = LiteratureResearcher(store, _router(store))
+    tools = literature_toolset(
+        store=store,
+        literature=agent,
+        include_discovery_tools=True,
+        include_extraction_tools=True,
+        auto_extract_after_import=True,
+    )
+    names = {tool["function"]["name"] for tool in tools.openai_tools()}
+
+    assert "search_papers" in names
+    assert "import_arxiv" in names
+    assert "import_doi" in names
+    assert "import_candidate" in names
+    assert "extract_paper" in names
+    assert "extract_imported_papers" in names
+
+
+def test_extract_imported_papers_processes_unextracted_full_text(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    agent = LiteratureResearcher(store, _router(store))
+    text = (
+        "--- page 1 ---\n\n"
+        "Theorem 2. Orthogonal Vectors has the stated conditional lower-bound role in this "
+        "smoke-test literature record.\n\n"
+        "Proof. This is a smoke test.\n"
+    )
+    text_ref = store.write_text("LiteratureDB/papers/OVSmoke/paper.txt", text)
+    agent.import_paper(
+        PaperMetadata(
+            citation_key="OVSmoke",
+            title="OV Smoke Test Paper",
+            source_type="manual",
+            text_path=text_ref.path,
+        )
+    )
+
+    assert not store.read_jsonl("LiteratureDB/extracted_claims.jsonl")
+    summary = agent.extract_imported_papers(max_papers=5, only_missing=True)
+
+    assert summary["processed_count"] == 1
+    assert summary["citation_keys"] == ["OVSmoke"]
+    assert summary["support_ids"]
+    assert store.read_jsonl("LiteratureDB/extracted_claims.jsonl")
+
+    again = agent.extract_imported_papers(max_papers=5, only_missing=True)
+    assert again["processed_count"] == 0
+    assert any(item["reason"] == "already extracted" for item in again["skipped"])
 
 
 def test_literature_registry_deduplicates_papers_by_arxiv_id(tmp_path: Path) -> None:

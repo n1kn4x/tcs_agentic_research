@@ -14,6 +14,7 @@ from ..schemas import (
     ArtifactRef,
     LeanStatement,
     LiteratureCandidate,
+    LiteratureExtract,
     LiteratureQueryAnswer,
     PaperMetadata,
     ResearchReportSubmission,
@@ -56,6 +57,16 @@ class ImportDoiArgs(StrictModel):
 class ImportCandidateArgs(StrictModel):
     candidate_id: str
     extract_text: bool = True
+
+
+class ExtractPaperArgs(StrictModel):
+    citation_key: str = ""
+    paper_id: str = ""
+
+
+class ExtractImportedPapersArgs(StrictModel):
+    max_papers: int = Field(default=8, ge=1, le=50)
+    only_missing: bool = True
 
 
 class AttemptLeanProofArgs(StrictModel):
@@ -242,11 +253,15 @@ def literature_toolset(
     store: ArtifactStore,
     literature: LiteratureResearcher,
     include_discovery_tools: bool = True,
+    include_extraction_tools: bool = False,
+    auto_extract_after_import: bool = False,
 ) -> Toolset:
     """Build literature tools for a single agent call.
 
-    The caller chooses whether discovery/import tools are visible. This keeps the interface
-    unified while preserving per-agent access control.
+    The caller chooses whether discovery/import/extraction tools are visible. This keeps the
+    interface unified while preserving per-agent access control.  For literature obligations,
+    ``auto_extract_after_import`` should be enabled so newly imported full-text papers are
+    immediately statement-extracted instead of sitting idle in LiteratureDB.
     """
 
     def query_literature(arguments: dict[str, Any]) -> dict[str, Any]:
@@ -271,85 +286,164 @@ def literature_toolset(
         )
     ]
 
-    if not include_discovery_tools:
-        return Toolset(tools)
+    def _maybe_extract_imported_paper(tool_name: str, paper: PaperMetadata, *, requested: bool) -> dict[str, Any]:
+        extraction: LiteratureExtract | None = None
+        extraction_error: str = ""
+        if auto_extract_after_import and requested and paper.text_path:
+            try:
+                extraction = literature.extract_paper(citation_key=paper.citation_key)
+            except Exception as exc:  # noqa: BLE001 - preserve the successful import observation
+                extraction_error = f"{type(exc).__name__}: {exc}"
+        return _compact_imported_paper(
+            tool_name,
+            paper,
+            extraction=extraction,
+            extraction_error=extraction_error,
+            extracted_claims_ref=store.artifact_ref("LiteratureDB/extracted_claims.jsonl")
+            if extraction is not None
+            else None,
+        )
 
-    def search_papers(arguments: dict[str, Any]) -> dict[str, Any]:
-        args = SearchPapersArgs.model_validate(arguments)
-        candidates = literature.search_papers(args.query, limit=8)
-        return {
-            "status": "ok",
-            "tool": "search_papers",
-            "query": args.query,
-            "candidate_count": len(candidates),
-            "candidates": [_compact_candidate(candidate) for candidate in candidates],
-            "ledger_ref": store.artifact_ref("LiteratureDB/candidates.jsonl").model_dump(
-                mode="json"
-            ),
-        }
+    if include_discovery_tools:
 
-    def import_url(arguments: dict[str, Any]) -> dict[str, Any]:
-        args = ImportUrlArgs.model_validate(arguments)
-        paper = literature.import_url(args.url, extract_text=args.extract_text)
-        return _compact_imported_paper("import_url", paper)
-
-    def import_arxiv(arguments: dict[str, Any]) -> dict[str, Any]:
-        args = ImportArxivArgs.model_validate(arguments)
-        paper = literature.import_arxiv(args.arxiv_id, extract_text=args.extract_text)
-        return _compact_imported_paper("import_arxiv", paper)
-
-    def import_doi(arguments: dict[str, Any]) -> dict[str, Any]:
-        args = ImportDoiArgs.model_validate(arguments)
-        paper = literature.import_doi(args.doi, extract_text=args.extract_text)
-        return _compact_imported_paper("import_doi", paper)
-
-    def import_candidate(arguments: dict[str, Any]) -> dict[str, Any]:
-        args = ImportCandidateArgs.model_validate(arguments)
-        paper = literature.import_candidate(args.candidate_id, extract_text=args.extract_text)
-        return _compact_imported_paper("import_candidate", paper)
-
-    tools.extend(
-        [
-            AgentTool(
-                "search_papers",
-                (
-                    "Search external paper metadata and queue candidate papers for possible "
-                    "import. This does not certify claims."
+        def search_papers(arguments: dict[str, Any]) -> dict[str, Any]:
+            args = SearchPapersArgs.model_validate(arguments)
+            candidates = literature.search_papers(args.query, limit=8)
+            return {
+                "status": "ok",
+                "tool": "search_papers",
+                "query": args.query,
+                "candidate_count": len(candidates),
+                "candidates": [_compact_candidate(candidate) for candidate in candidates],
+                "ledger_ref": store.artifact_ref("LiteratureDB/candidates.jsonl").model_dump(
+                    mode="json"
                 ),
-                SearchPapersArgs,
-                search_papers,
-                strip_system_owned_fields=False,
-            ),
-            AgentTool(
-                "import_url",
-                "Import a useful paper from a URL or PDF URL into LiteratureDB.",
-                ImportUrlArgs,
-                import_url,
-                strip_system_owned_fields=False,
-            ),
-            AgentTool(
-                "import_arxiv",
-                "Import an arXiv paper into LiteratureDB.",
-                ImportArxivArgs,
-                import_arxiv,
-                strip_system_owned_fields=False,
-            ),
-            AgentTool(
-                "import_doi",
-                "Import a DOI into LiteratureDB.",
-                ImportDoiArgs,
-                import_doi,
-                strip_system_owned_fields=False,
-            ),
-            AgentTool(
-                "import_candidate",
-                "Import a previously queued literature candidate into LiteratureDB.",
-                ImportCandidateArgs,
-                import_candidate,
-                strip_system_owned_fields=False,
-            ),
-        ]
-    )
+            }
+
+        def import_url(arguments: dict[str, Any]) -> dict[str, Any]:
+            args = ImportUrlArgs.model_validate(arguments)
+            paper = literature.import_url(args.url, extract_text=args.extract_text)
+            return _maybe_extract_imported_paper("import_url", paper, requested=args.extract_text)
+
+        def import_arxiv(arguments: dict[str, Any]) -> dict[str, Any]:
+            args = ImportArxivArgs.model_validate(arguments)
+            paper = literature.import_arxiv(args.arxiv_id, extract_text=args.extract_text)
+            return _maybe_extract_imported_paper("import_arxiv", paper, requested=args.extract_text)
+
+        def import_doi(arguments: dict[str, Any]) -> dict[str, Any]:
+            args = ImportDoiArgs.model_validate(arguments)
+            paper = literature.import_doi(args.doi, extract_text=args.extract_text)
+            return _maybe_extract_imported_paper("import_doi", paper, requested=args.extract_text)
+
+        def import_candidate(arguments: dict[str, Any]) -> dict[str, Any]:
+            args = ImportCandidateArgs.model_validate(arguments)
+            paper = literature.import_candidate(args.candidate_id, extract_text=args.extract_text)
+            return _maybe_extract_imported_paper(
+                "import_candidate", paper, requested=args.extract_text
+            )
+
+        tools.extend(
+            [
+                AgentTool(
+                    "search_papers",
+                    (
+                        "Search external paper metadata and queue candidate papers for possible "
+                        "import. This does not certify claims."
+                    ),
+                    SearchPapersArgs,
+                    search_papers,
+                    strip_system_owned_fields=False,
+                ),
+                AgentTool(
+                    "import_url",
+                    "Import a useful paper from a URL or PDF URL into LiteratureDB.",
+                    ImportUrlArgs,
+                    import_url,
+                    strip_system_owned_fields=False,
+                ),
+                AgentTool(
+                    "import_arxiv",
+                    "Import an arXiv paper into LiteratureDB.",
+                    ImportArxivArgs,
+                    import_arxiv,
+                    strip_system_owned_fields=False,
+                ),
+                AgentTool(
+                    "import_doi",
+                    "Import a DOI into LiteratureDB.",
+                    ImportDoiArgs,
+                    import_doi,
+                    strip_system_owned_fields=False,
+                ),
+                AgentTool(
+                    "import_candidate",
+                    "Import a previously queued literature candidate into LiteratureDB.",
+                    ImportCandidateArgs,
+                    import_candidate,
+                    strip_system_owned_fields=False,
+                ),
+            ]
+        )
+
+    if include_extraction_tools:
+
+        def extract_paper(arguments: dict[str, Any]) -> dict[str, Any]:
+            args = ExtractPaperArgs.model_validate(arguments)
+            if not args.citation_key and not args.paper_id:
+                raise ValueError("Provide citation_key or paper_id.")
+            extract = literature.extract_paper(
+                citation_key=args.citation_key or None,
+                paper_id=args.paper_id or None,
+            )
+            return _compact_literature_extract(
+                "extract_paper",
+                extract,
+                extracted_claims_ref=store.artifact_ref("LiteratureDB/extracted_claims.jsonl"),
+            )
+
+        def extract_imported_papers(arguments: dict[str, Any]) -> dict[str, Any]:
+            args = ExtractImportedPapersArgs.model_validate(arguments)
+            summary = literature.extract_imported_papers(
+                max_papers=args.max_papers,
+                only_missing=args.only_missing,
+            )
+            summary["tool"] = "extract_imported_papers"
+            summary["status"] = "ok"
+            summary["ledger_ref"] = store.artifact_ref(
+                "LiteratureDB/extracted_claims.jsonl"
+            ).model_dump(mode="json")
+            summary["instruction"] = (
+                "Use returned support_ids and citation_keys in a subsequent query_literature "
+                "call or in the final citation evidence handles."
+            )
+            return summary
+
+        tools.extend(
+            [
+                AgentTool(
+                    "extract_paper",
+                    (
+                        "Extract theorem/algorithm/lower-bound statements with quote provenance "
+                        "from one imported paper, indexing support IDs in LiteratureDB."
+                    ),
+                    ExtractPaperArgs,
+                    extract_paper,
+                    strip_system_owned_fields=False,
+                ),
+                AgentTool(
+                    "extract_imported_papers",
+                    (
+                        "Deterministically extract statements from imported papers that have PDF/text "
+                        "artifacts but no extracted statements yet. Use after imports and before "
+                        "query_literature."
+                    ),
+                    ExtractImportedPapersArgs,
+                    extract_imported_papers,
+                    strip_system_owned_fields=False,
+                ),
+            ]
+        )
+
     return Toolset(tools)
 
 
@@ -367,6 +461,8 @@ def research_execution_toolset(
     final_tool_name: str = "submit_research_report",
     final_schema: type[BaseModel] = ResearchReportSubmission,
     final_tool_description: str | None = None,
+    include_literature_discovery_tools: bool = False,
+    include_literature_extraction_tools: bool = False,
 ) -> Toolset:
     """Toolset visible to the research agent's native thinking loop."""
 
@@ -429,7 +525,9 @@ def research_execution_toolset(
         literature_toolset(
             store=store,
             literature=literature,
-            include_discovery_tools=False,
+            include_discovery_tools=include_literature_discovery_tools,
+            include_extraction_tools=include_literature_extraction_tools,
+            auto_extract_after_import=include_literature_extraction_tools,
         )
     )
     return Toolset(
@@ -550,12 +648,20 @@ def _compact_candidate(candidate: LiteratureCandidate) -> dict[str, Any]:
     }
 
 
-def _compact_imported_paper(tool: str, paper: PaperMetadata) -> dict[str, Any]:
+def _compact_imported_paper(
+    tool: str,
+    paper: PaperMetadata,
+    *,
+    extraction: LiteratureExtract | None = None,
+    extraction_error: str = "",
+    extracted_claims_ref: ArtifactRef | None = None,
+) -> dict[str, Any]:
     refs = [ref.model_dump(mode="json") for ref in paper.artifact_refs]
-    return {
+    payload: dict[str, Any] = {
         "status": "ok",
         "tool": tool,
         "tool_result_id": paper.paper_id,
+        "citation_keys": [paper.citation_key] if paper.citation_key else [],
         "paper": {
             "paper_id": paper.paper_id,
             "citation_key": paper.citation_key,
@@ -572,6 +678,67 @@ def _compact_imported_paper(tool: str, paper: PaperMetadata) -> dict[str, Any]:
             "metadata_path": paper.metadata_path,
             "artifact_refs": refs,
         },
+    }
+    if extraction is not None:
+        payload["extraction"] = _compact_literature_extract_payload(extraction)
+        if extracted_claims_ref is not None:
+            payload["extraction"]["ledger_ref"] = extracted_claims_ref.model_dump(mode="json")
+    if extraction_error:
+        payload["extraction_error"] = extraction_error
+    return payload
+
+
+def _compact_literature_extract(
+    tool: str,
+    extract: LiteratureExtract,
+    *,
+    extracted_claims_ref: ArtifactRef | None = None,
+) -> dict[str, Any]:
+    payload = _compact_literature_extract_payload(extract)
+    payload.update(
+        {
+            "status": "ok",
+            "tool": tool,
+            "tool_result_id": extract.extract_id,
+        }
+    )
+    if extracted_claims_ref is not None:
+        payload["ledger_ref"] = extracted_claims_ref.model_dump(mode="json")
+    return payload
+
+
+def _compact_literature_extract_payload(extract: LiteratureExtract) -> dict[str, Any]:
+    statements = [
+        *extract.theorem_statements,
+        *extract.algorithm_statements,
+        *extract.lower_bound_statements,
+    ]
+    support_ids = [statement.statement_id for statement in statements if statement.statement_id]
+    return {
+        "extract_id": extract.extract_id,
+        "citation_key": extract.citation_key,
+        "citation_keys": [extract.citation_key] if extract.citation_key else [],
+        "paper_id": extract.paper_id,
+        "support_ids": support_ids,
+        "theorem_count": len(extract.theorem_statements),
+        "algorithm_count": len(extract.algorithm_statements),
+        "lower_bound_count": len(extract.lower_bound_statements),
+        "claim_count": len(extract.extracted_claims),
+        "text_artifact_ref": extract.text_artifact_ref.model_dump(mode="json")
+        if extract.text_artifact_ref
+        else None,
+        "statements": [
+            {
+                "statement_id": statement.statement_id,
+                "support_id": statement.statement_id,
+                "kind": statement.kind,
+                "label": statement.label,
+                "mapped_statement": _compact_text(statement.mapped_statement, 900),
+                "quote_id": statement.provenance[0].quote_id if statement.provenance else "",
+                "locator": statement.provenance[0].locator if statement.provenance else "",
+            }
+            for statement in statements[:8]
+        ],
     }
 
 

@@ -41,6 +41,7 @@ from ..schemas import (
     LiteratureSource,
     LiteratureStatement,
     PaperMetadata,
+    new_id,
 )
 
 
@@ -224,6 +225,106 @@ class LiteratureResearcher:
             paper_id=paper.paper_id,
             text_artifact_path=paper.text_path,
         )
+
+    def extract_imported_papers(
+        self,
+        *,
+        max_papers: int = 8,
+        only_missing: bool = True,
+    ) -> dict[str, Any]:
+        """Deterministically extract statements from imported papers with available text/PDF.
+
+        This is the non-agentic extraction loop used by literature obligations: imported full-text
+        sources should not remain unindexed just because the model forgot to call ``extract_paper``.
+        The method is conservative, idempotent by citation key when ``only_missing`` is true, and
+        returns a compact audit payload suitable for a tool observation or prompt context.
+        """
+        batch_id = new_id("lit_extract_batch")
+        latest_by_key: dict[str, PaperMetadata] = {}
+        for paper in self.list_papers():
+            if paper.citation_key:
+                latest_by_key[paper.citation_key] = paper
+        already_extracted = self._citation_keys_with_extractions()
+        processed: list[dict[str, Any]] = []
+        skipped: list[dict[str, str]] = []
+        errors: list[dict[str, str]] = []
+        support_ids: list[str] = []
+        citation_keys: list[str] = []
+
+        for paper in latest_by_key.values():
+            if len(processed) >= max_papers:
+                skipped.append(
+                    {"citation_key": paper.citation_key, "reason": "max_papers limit reached"}
+                )
+                continue
+            if only_missing and paper.citation_key in already_extracted:
+                skipped.append({"citation_key": paper.citation_key, "reason": "already extracted"})
+                continue
+            try:
+                current = paper
+                if not current.text_path:
+                    if not current.pdf_path:
+                        skipped.append(
+                            {"citation_key": current.citation_key, "reason": "no text_path or pdf_path"}
+                        )
+                        continue
+                    self.extract_pdf_text(citation_key=current.citation_key)
+                    current = self.require_paper(citation_key=current.citation_key)
+                if not current.text_path or not self.store.exists(current.text_path):
+                    skipped.append(
+                        {"citation_key": current.citation_key, "reason": "text artifact missing"}
+                    )
+                    continue
+                extract = self.extract_paper(citation_key=current.citation_key)
+                statements = [
+                    *extract.theorem_statements,
+                    *extract.algorithm_statements,
+                    *extract.lower_bound_statements,
+                ]
+                statement_ids = [statement.statement_id for statement in statements]
+                support_ids.extend(statement_ids)
+                citation_keys.append(extract.citation_key)
+                processed.append(
+                    {
+                        "citation_key": extract.citation_key,
+                        "paper_id": extract.paper_id,
+                        "extract_id": extract.extract_id,
+                        "support_ids": statement_ids,
+                        "theorem_count": len(extract.theorem_statements),
+                        "algorithm_count": len(extract.algorithm_statements),
+                        "lower_bound_count": len(extract.lower_bound_statements),
+                    }
+                )
+                already_extracted.add(extract.citation_key)
+            except Exception as exc:  # noqa: BLE001 - batch extraction should continue
+                errors.append(
+                    {
+                        "citation_key": paper.citation_key,
+                        "error_type": type(exc).__name__,
+                        "error": str(exc),
+                    }
+                )
+
+        return {
+            "tool_result_id": batch_id,
+            "batch_id": batch_id,
+            "processed_count": len(processed),
+            "skipped_count": len(skipped),
+            "error_count": len(errors),
+            "citation_keys": list(dict.fromkeys(citation_keys)),
+            "support_ids": list(dict.fromkeys(support_ids)),
+            "processed": processed,
+            "skipped": skipped[:20],
+            "errors": errors[:20],
+        }
+
+    def _citation_keys_with_extractions(self) -> set[str]:
+        keys: set[str] = set()
+        for record in self.store.read_jsonl("LiteratureDB/extracted_claims.jsonl"):
+            key = str(record.get("citation_key") or "")
+            if key:
+                keys.add(key)
+        return keys
 
     def extract_from_text(
         self,
