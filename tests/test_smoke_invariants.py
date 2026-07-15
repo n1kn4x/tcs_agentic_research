@@ -12,7 +12,7 @@ from tcs_agentic_research.agents.critics import (
     check_solved_deterministically,
     is_claim_acceptably_supported,
 )
-from tcs_agentic_research.agents.initialization import InitializationAgent
+from tcs_agentic_research.agents.initialization import WorkspaceInitializer
 from tcs_agentic_research.agents.literature import LiteratureResearcher
 from tcs_agentic_research.agents.proposal import ProposalAgent
 from tcs_agentic_research.agents.research import ResearchAgent
@@ -48,10 +48,7 @@ from tcs_agentic_research.schemas import (
     ClaimType,
     EvidenceRecord,
     EvidenceType,
-    InitializationBundle,
-    InitializationInterviewTurn,
     LiteratureExtract,
-    LiteratureSource,
     CriticDecision,
     ModelProfile,
     ObligationRun,
@@ -76,8 +73,6 @@ from tcs_agentic_research.schemas import (
 
 PROMPT_SCHEMAS = {
     "independent_replication": ReplicationResult,
-    "initialization_interviewer": InitializationInterviewTurn,
-    "initialization_synthesizer": InitializationBundle,
     "leap_blueprint": BlueprintCandidate,
     "leap_decomposition_reviewer": DecompositionReview,
     "leap_direct_prover": FormalProofCandidate,
@@ -164,7 +159,7 @@ def test_repo_structured_prompts_intentionally_keep_schema_placeholders() -> Non
 
 def test_prompt_compaction_is_self_contained_and_lossless_for_duplicate_refs() -> None:
     ref = ArtifactRef(
-        path="ResearchTask.md",
+        path="InitialResearchTask.md",
         kind="markdown",
         sha256="abc123",
         summary="Core task artifact.",
@@ -431,38 +426,23 @@ def _schema_property_names(node: object) -> set[str]:
     return names
 
 
-def test_initialization_imports_declared_literature_sources(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_workspace_initializer_bootstraps_from_initial_research_task(tmp_path: Path) -> None:
     store = _store(tmp_path)
-    imported: list[LiteratureSource] = []
-
-    def fake_import_source(self, source: LiteratureSource) -> PaperMetadata:  # noqa: ANN001
-        imported.append(source)
-        ref = store.write_text("LiteratureDB/papers/example/paper.txt", "paper text")
-        paper = PaperMetadata(
-            citation_key="example",
-            title="Example",
-            source_type="url",
-            text_path=ref.path,
-            artifact_refs=[ref],
-        )
-        store.append_jsonl("LiteratureDB/papers.jsonl", paper)
-        return paper
-
-    monkeypatch.setattr(
-        "tcs_agentic_research.agents.literature.LiteratureResearcher.import_source",
-        fake_import_source,
-    )
-    bundle = InitializationBundle(
-        research_task_markdown="# Task",
-        literature_sources=[LiteratureSource(source="https://example.org/paper.pdf")],
+    store.write_text(
+        ArtifactStore.RESEARCH_TASK,
+        "# Task\n\nStudy a bounded-width branching program lower bound.\n",
     )
 
-    state = InitializationAgent(store, _router(store)).commit_bundle(bundle)
+    state = WorkspaceInitializer(store).ensure_initialized()
 
-    assert imported and imported[0].source == "https://example.org/paper.pdf"
-    assert any(ref.path == "LiteratureDB/papers.jsonl" for ref in state.artifact_refs)
+    assert state.task_summary.startswith("Task Study a bounded-width")
+    assert store.exists(ArtifactStore.RESEARCH_STATE)
+    assert any(ref.path == ArtifactStore.RESEARCH_TASK for ref in state.artifact_refs)
+    assert any(ref.path == ArtifactStore.NOMENCLATURE for ref in state.artifact_refs)
+    assert any(ref.path == ArtifactStore.OBLIGATION_BOARD for ref in state.artifact_refs)
+    assert store.read_jsonl(ArtifactStore.PROPOSAL_LEDGER)[-1]["proposal_id"] == (
+        "workspace_initialization"
+    )
 
 
 def test_latest_claim_replay_uses_newest_record(tmp_path: Path) -> None:

@@ -17,8 +17,7 @@ This repository is a scaffold that can run conservative dry-run iterations immed
 A research workspace contains:
 
 ```text
-ResearchTask.md                 human-readable task, assumptions, criteria
-InitializationInterview.md      transcript of the adaptive initialization conversation
+InitialResearchTask.md          user-authored research task, assumptions, criteria
 Nomenclature.yml                canonical symbols and aliases
 ResearchState.json              compact machine state summary
 ObligationBoard.json            obligation-first work queue, runs, generated claims, and blocked reasons
@@ -78,20 +77,24 @@ The router config passes Qwen3.6 sampling parameters per profile: thinking + pre
 
 ## Quick start
 
-Initialize a workspace with an adaptive interview. Dry-run mode uses deterministic mock outputs and does not call vLLM:
+Create a workspace folder and write the task yourself in `InitialResearchTask.md`.
+The first `run` deterministically creates the state, ledgers, notation file,
+obligation board, and other workspace directories from that Markdown file.
+No initialization interview is used.
 
 ```bash
-tcs-research init --workspace workspaces/demo --dry-run
+mkdir -p workspaces/demo
+cp examples/structured_sat_task.md workspaces/demo/InitialResearchTask.md
 
+# Dry-run mode uses deterministic mock outputs for agent steps and does not call vLLM.
 tcs-research run --workspace workspaces/demo --dry-run --max-iterations 1
 
 tcs-research status --workspace workspaces/demo
 ```
 
-With local vLLM, the `init` command is an LLM-guided conversation that asks only relevant follow-up questions before writing artifacts:
+With local vLLM:
 
 ```bash
-tcs-research init --workspace workspaces/demo --config config.yml
 tcs-research run --workspace workspaces/demo --config config.yml --max-iterations 3
 ```
 
@@ -172,7 +175,7 @@ tcs-research literature test --workspace workspaces/demo --dry-run
 The LangGraph implements:
 
 ```python
-state = LoadInitializedTask()  # run `tcs-research init` first
+state = EnsureWorkspaceInitializedFromInitialResearchTask()
 while not state.solved:
     if no open obligation exists:
         proposal = GenerateResearchProposal(state, blocked_or_failed_obligations)
@@ -196,7 +199,7 @@ Nodes durably write artifacts before returning. Reports are derived summaries; t
 
 ## Agents
 
-- `InitializationAgent`: LLM-guided adaptive interview and synthesis of `ResearchTask.md`, `Nomenclature.yml`, initial state, and ledgers.
+- `WorkspaceInitializer`: deterministic bootstrap from `InitialResearchTask.md` into `Nomenclature.yml`, `ResearchState.json`, ledgers, directories, and an empty obligation board.
 - `ProposalAgent`: proposal generator using native OpenAI/vLLM tool calls plus proposal critic with revision/rejection logic. Private model reasoning is not replayed into future contexts; only committed proposal artifacts are.
 - `ResearchAgent`: executes one selected obligation in a native OpenAI/vLLM tool-call loop and finishes with a flat obligation-run submission; deterministic gates decide which generated claim statements are committed.
 - `ResearchCriticAgent`: distinguishes proofs, citations, experiments, informal arguments, conjectures, refutations, and forced verification obligations.

@@ -7,7 +7,7 @@ import json
 import sys
 
 from .agents.experiment import ExperimentAgent
-from .agents.initialization import InitializationAgent
+from .agents.initialization import WorkspaceInitializer
 from .agents.literature import LiteratureResearcher
 from .agents.theorem_prover import TheoremProverAgent
 from .artifact_store import ArtifactStore
@@ -19,9 +19,6 @@ from .schemas import LeanStatement, PaperMetadata
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="tcs-research")
     sub = parser.add_subparsers(dest="command", required=True)
-
-    init_p = sub.add_parser("init", help="Create or update initialization artifacts")
-    _add_common(init_p)
 
     run_p = sub.add_parser("run", help="Run/resume the LangGraph research loop")
     _add_common(run_p)
@@ -146,8 +143,6 @@ def main(argv: list[str] | None = None) -> int:
 
     args = parser.parse_args(argv)
     try:
-        if args.command == "init":
-            return _cmd_init(args)
         if args.command == "run":
             return _cmd_run(args)
         if args.command == "status":
@@ -173,23 +168,9 @@ def _add_common(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--prompt-dir", help="Override prompt directory")
 
 
-def _cmd_init(args: argparse.Namespace) -> int:
-    store = ArtifactStore(args.workspace)
-    store.initialize_layout()
-    router = LLMRouter.from_config_file(args.config, store=store, dry_run=args.dry_run)
-    state = InitializationAgent(
-        store, router, prompt_dir=args.prompt_dir
-    ).initialize_interactively()
-    print(f"Initialized workspace: {store.root}")
-    print(f"Task ID: {state.task_id}")
-    return 0
-
-
 def _cmd_run(args: argparse.Namespace) -> int:
     store = ArtifactStore(args.workspace)
-    store.initialize_layout()
-    if store.load_state() is None or not store.exists(ArtifactStore.RESEARCH_TASK):
-        raise RuntimeError("Workspace is uninitialized; run `tcs-research init` first.")
+    WorkspaceInitializer(store).ensure_initialized()
     graph = ResearchGraph(
         workspace=args.workspace,
         config_path=args.config,
@@ -208,7 +189,10 @@ def _cmd_status(args: argparse.Namespace) -> int:
     state = store.load_state()
     print(f"Workspace: {store.root}")
     if state is None:
-        print("No ResearchState.json found. Run `tcs-research init`.")
+        print(
+            f"No ResearchState.json found. Create `{ArtifactStore.RESEARCH_TASK}` and run "
+            "`tcs-research run`."
+        )
         return 0
     print(state.model_dump_json(indent=2))
     print("\nRecent claims:")

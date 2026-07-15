@@ -10,6 +10,7 @@ from .agents.critics import (
     is_claim_acceptably_supported,
     is_claim_rejected,
 )
+from .agents.initialization import WorkspaceInitializer
 from .agents.proposal import ProposalAgent
 from .agents.replication import IndependentReplicationAgent
 from .agents.research import ResearchAgent
@@ -118,20 +119,18 @@ class ResearchGraph:
         return candidate
 
     def _node_initialize_task(self, graph_state: GraphState) -> dict[str, Any]:
-        existing = self.store.load_state()
-        if existing is not None and self.store.exists(ArtifactStore.RESEARCH_TASK):
-            self._refresh_state_from_claim_ledger(
-                existing, open_obligations=existing.open_proof_obligations
-            )
-            self.store.save_state(existing)
-            return {
-                "initialized": True,
-                "task_id": existing.task_id,
-                "iteration": existing.iteration,
-                "solved": existing.solved,
-                "confirmed_solved": existing.confirmed_by_replication,
-            }
-        raise RuntimeError("Workspace is uninitialized; run `tcs-research init` first.")
+        state = WorkspaceInitializer(self.store).ensure_initialized()
+        self._refresh_state_from_claim_ledger(
+            state, open_obligations=state.open_proof_obligations
+        )
+        self.store.save_state(state)
+        return {
+            "initialized": True,
+            "task_id": state.task_id,
+            "iteration": state.iteration,
+            "solved": state.solved,
+            "confirmed_solved": state.confirmed_by_replication,
+        }
 
     def _node_generate_proposal(self, graph_state: GraphState) -> dict[str, Any]:
         state = self._require_state()
@@ -278,7 +277,10 @@ class ResearchGraph:
     def _require_state(self) -> ResearchState:
         state = self.store.load_state()
         if state is None:
-            raise RuntimeError("ResearchState.json is missing; run initialization first")
+            raise RuntimeError(
+                "ResearchState.json is missing; create "
+                f"`{ArtifactStore.RESEARCH_TASK}` and run again"
+            )
         return state
 
     def _write_obligation_summary_report(

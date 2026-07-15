@@ -170,7 +170,7 @@ Filesystem contract:
 - Prefer user-level/project-local dependencies and caches under `/workspace`; system-level container mutations are not copied with the workspace.
 
 Research context to inspect if relevant:
-- `/research/ResearchTask.md`
+- `/research/InitialResearchTask.md`
 - `/research/ResearchState.json`
 - `/research/Nomenclature.yml`
 - `/research/ClaimLedger.jsonl`

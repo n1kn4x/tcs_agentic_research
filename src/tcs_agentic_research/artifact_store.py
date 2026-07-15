@@ -30,7 +30,8 @@ class ArtifactStore:
     under this store and referenced by relative paths and hashes.
     """
 
-    RESEARCH_TASK = "ResearchTask.md"
+    INITIAL_RESEARCH_TASK = "InitialResearchTask.md"
+    RESEARCH_TASK = INITIAL_RESEARCH_TASK
     NOMENCLATURE = "Nomenclature.yml"
     RESEARCH_STATE = "ResearchState.json"
     CLAIM_LEDGER = "ClaimLedger.jsonl"
@@ -80,7 +81,9 @@ class ArtifactStore:
                     "updated_at": utc_now(),
                     "symbols": [],
                     "conventions": [],
-                    "notes": ["Populate during initialization and literature ingestion."],
+                    "notes": [
+                        "Populate as needed from the user task, literature ingestion, and agent outputs."
+                    ],
                 },
             )
 
@@ -308,7 +311,7 @@ def _manifest_path_is_hidden_or_cache(rel: str) -> bool:
 
 def _manifest_summary(store: ArtifactStore, rel: str, path: Path) -> str:
     if rel == ArtifactStore.RESEARCH_TASK:
-        return "Canonical research task, assumptions, constraints, and success criteria."
+        return "User-authored canonical research task, assumptions, constraints, and success criteria."
     if rel == ArtifactStore.RESEARCH_STATE:
         return "Compact machine state for the current research workspace."
     if rel == ArtifactStore.CLAIM_LEDGER:

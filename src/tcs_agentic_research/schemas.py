@@ -139,25 +139,6 @@ class LiteratureSource(StrictModel):
     extract_text: bool = True
 
 
-class InitializationBundle(StrictModel):
-    research_task_markdown: str
-    nomenclature_entries: list[NomenclatureEntry] = Field(default_factory=list)
-    literature_sources: list[LiteratureSource] = Field(default_factory=list)
-    initial_state_notes: list[str] = Field(default_factory=list)
-    initial_claims: list[ClaimRecord] = Field(default_factory=list)
-    fallback_publishable_outcomes: list[str] = Field(default_factory=list)
-    assumptions: list[str] = Field(default_factory=list)
-    success_criteria: list[str] = Field(default_factory=list)
-
-
-class InitializationInterviewTurn(StrictModel):
-    ready_to_initialize: bool = False
-    assistant_message: str
-    missing_information: list[str] = Field(default_factory=list)
-    relevant_information: list[str] = Field(default_factory=list)
-    rationale: str = ""
-
-
 class ResearchState(StrictModel):
     task_id: str = Field(default_factory=lambda: new_id("task"))
     task_summary: str = ""

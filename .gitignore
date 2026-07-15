@@ -9,8 +9,11 @@ venv/
 .mypy_cache/
 
 # Research workspaces / generated state
-workspaces/
-ResearchTask.md
+workspaces/*
+!workspaces/test-integration-toy-algorithm-full-pipeline
+!workspaces/test-lit-orthogonal-vectors-lower-bounds
+!workspaces/test-exp-dpll-sat-benchmark
+!workspaces/test-leap-boolean-algebra-lemmas
 Nomenclature.yml
 ResearchState.json
 ClaimLedger.jsonl

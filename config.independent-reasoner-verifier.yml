@@ -78,9 +78,7 @@ router:
       model: deep-reasoner
       base_url: http://localhost:8000/v1
       api_key: EMPTY
-      # Initialization/interview calls are structured strict-json-schema calls.
-      # They benefit from enough reasoning to ask good clarifying questions, but not
-      # from high-entropy decoding.
+      # General structured strict-json-schema calls that are not tool-based.
       temperature: 0.2
       max_tokens: 32768
       supports_tools: false
@@ -96,8 +94,6 @@ router:
           enable_thinking: false
           preserve_thinking: false
       task_types:
-        - initialization
-        - initialization_interview
         - obstruction_search
 
     verifier:

@@ -77,8 +77,6 @@ router:
           enable_thinking: false
           preserve_thinking: false
       task_types:
-        - initialization
-        - initialization_interview
         - obstruction_search
 
     precise:

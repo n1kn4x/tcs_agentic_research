@@ -9,7 +9,7 @@ Use the complete JSON schema inserted below; the API may also provide guided JSO
 If you do not follow this schema, your answer will be rejected.
 
 Check:
-- consistency with `ResearchTask.md`;
+- consistency with `InitialResearchTask.md`;
 - whether the goal is safe and executable as a research step, not whether it already solves the task;
 - whether `proposal_kind` matches the proposed work;
 - clarity of success criteria and partial-success criteria;

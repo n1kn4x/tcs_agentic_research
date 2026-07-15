@@ -403,7 +403,7 @@ class ProposalAgent:
         critique_constraints = _critique_constraints(critique)
         failure_constraints = [f"Proposal-generation failure to account for: {item}" for item in generation_failures]
         prior_title = prior_proposal.title if prior_proposal is not None else "the attempted proposal"
-        task_header = next((line.strip() for line in task.splitlines() if line.strip()), "ResearchTask.md")
+        task_header = next((line.strip() for line in task.splitlines() if line.strip()), "InitialResearchTask.md")
         open_obligation_notes = [
             f"Carry forward open obligation: {obligation}"
             for obligation in state.open_proof_obligations[:5]
@@ -428,7 +428,7 @@ class ProposalAgent:
             ),
             relevant_assumptions_and_model=[
                 f"Primary task artifact consulted: {task_header}",
-                "Use exactly the model, assumptions, success criteria, and forbidden shortcuts stated in ResearchTask.md.",
+                "Use exactly the model, assumptions, success criteria, and forbidden shortcuts stated in InitialResearchTask.md.",
                 "Treat the previous proposal as a source of hypotheses, not as established truth.",
                 "A negative result, bottleneck theorem, or precise dead-end diagnosis is a valid successful outcome for this iteration.",
                 *open_obligation_notes,
@@ -439,7 +439,7 @@ class ProposalAgent:
                 "A statement of the strongest conclusion justified after the obstruction analysis: repaired route, conditional route, bottleneck, or dead end.",
             ],
             algorithmic_subgoals=[
-                "Read the latest proposal, critic review, ResearchTask.md, and relevant literature/query artifacts before deriving conclusions.",
+                "Read the latest proposal, critic review, InitialResearchTask.md, and relevant literature/query artifacts before deriving conclusions.",
                 "Convert each critic objection into a concrete verification task with evidence requirements.",
                 "Where algebraic or small-instance checks help, use the experimenter/bash environment to sanity-check formulas; treat experiments as heuristic support only.",
                 "Update claims and proof obligations so later proposal rounds can build on the obstruction analysis without repeating the same loop.",
@@ -452,11 +452,11 @@ class ProposalAgent:
                 "What exact next proposal kind should follow: repaired algorithm attempt, lemma derivation, literature audit, formalization, or stop/dead-end?",
             ],
             assertions_used_as_assumptions=[
-                "Only the assumptions explicitly recorded in ResearchTask.md and facts supported by local LiteratureDB provenance may be used as established premises.",
+                "Only the assumptions explicitly recorded in InitialResearchTask.md and facts supported by local LiteratureDB provenance may be used as established premises.",
                 "The fallback does not assume that the previous proposal's algorithmic claims or success probabilities are correct.",
             ],
             must_not_assume=[
-                "Do not assume any shortcut explicitly disallowed by ResearchTask.md.",
+                "Do not assume any shortcut explicitly disallowed by InitialResearchTask.md.",
                 "Do not assume an ideal quantum sample, index erasure, quantum oracle access, or uncosted classical-to-quantum state preparation unless the task explicitly permits it.",
                 "Do not claim an asymptotic improvement unless all preprocessing, state preparation, repetition, verification, and sample costs are included.",
             ],
@@ -544,7 +544,7 @@ class ProposalAgent:
                 "breakthrough claim."
             ),
             relevant_assumptions_and_model=[
-                "Use the computational model and assumptions in ResearchTask.md.",
+                "Use the computational model and assumptions in InitialResearchTask.md.",
                 "Do not introduce stronger assumptions without explicit ledger entries and critic review.",
             ],
             expected_intermediate_lemmas=[
@@ -563,7 +563,7 @@ class ProposalAgent:
                 "Which resource terms or hidden assumptions are most likely to invalidate a proposed route?",
             ],
             assertions_used_as_assumptions=[
-                "Only the computational model and assumptions in ResearchTask.md are established at the start of this pass."
+                "Only the computational model and assumptions in InitialResearchTask.md are established at the start of this pass."
             ],
             must_not_assume=[
                 "Do not introduce stronger assumptions without explicit ledger entries and critic review."

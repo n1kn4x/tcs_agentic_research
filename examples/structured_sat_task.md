@@ -1,4 +1,4 @@
-# Example Research Task Seed
+# Example Initial Research Task
 
 Investigate whether a restricted family of structured SAT instances arising from low-treewidth XOR-CNF hybrids admits improved classical or quantum algorithms beyond the obvious dynamic-programming baselines.
 
