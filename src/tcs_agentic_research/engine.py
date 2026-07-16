@@ -191,13 +191,23 @@ class ResearchEngine:
             {
                 "role": "system",
                 "content": (
-                    "Plan the next bounded research work. You have no tools. Return at most four "
-                    "independent work items through the enforced response format. Each item must "
-                    "be executable in one fresh step and must name observable success criteria. "
-                    "Use literature for source discovery/quotes, proof for one small Lean theorem, "
-                    "experiment for one bounded reproducible Python program, and analysis only "
-                    "for synthesis or an informal derivation. Never claim the task is solved; "
-                    "choose review when no distinct useful work remains."
+                    "Plan the next bounded research work. You have no tools; the deterministic "
+                    "application will execute the work items after your response, so lack of tools "
+                    "is expected and is never a reason to choose review. Return at most four "
+                    "independent work items through the enforced response format, with at most one "
+                    "item of each kind. Each item must be executable in one fresh step, cannot "
+                    "depend on a file another proposed item will create, and must name observable "
+                    "success criteria. An experiment item must combine implementation and execution "
+                    "in one self-contained program. Experiment instructions must describe output "
+                    "filenames relative to the program's current directory, not canonical workspace "
+                    "paths; the application imports them into ExperimentRuns. Use literature for "
+                    "source discovery/quotes, proof for one small Lean theorem, experiment for one "
+                    "bounded reproducible Python program, and analysis only for synthesis or an "
+                    "informal derivation. "
+                    "Schedule only kinds that directly advance the task's success criteria or an "
+                    "evidence gap in prior results; do not add unrelated cross-checks merely to use "
+                    "every subsystem. Never claim the task is solved; choose review when no distinct "
+                    "useful work remains."
                 ),
             },
             {
@@ -243,13 +253,47 @@ class ResearchEngine:
         # suggestion the planner may accidentally omit. Prefer the model's item for each required
         # kind, then fill missing kinds with conservative defaults.
         required_drafts = _default_plan(task, existing=existing).work_items
-        model_by_kind = {draft.kind: draft for draft in plan.work_items}
+        analysis_refresh = _analysis_needs_refresh(queue, self.store.read_findings())
+        if analysis_refresh and not any(
+            draft.kind == WorkKind.analysis for draft in required_drafts
+        ):
+            required_drafts.append(_analysis_work_draft())
+        remaining_model_drafts = list(plan.work_items)
+        if re.search(r"(?im)^##?\s*Required subsystem", task):
+            # A structured task's explicit subsystem section is a user contract. Do not let the
+            # planner add unrelated executors merely to demonstrate breadth.
+            allowed_kinds = {
+                draft.kind for draft in _default_plan(task, existing=[]).work_items
+            }
+            remaining_model_drafts = [
+                draft for draft in remaining_model_drafts if draft.kind in allowed_kinds
+            ]
         ordered_drafts: list[WorkItemDraft] = []
         for required in required_drafts:
-            ordered_drafts.append(model_by_kind.pop(required.kind, required))
-        ordered_drafts.extend(model_by_kind.values())
+            match = next(
+                (
+                    (index, draft)
+                    for index, draft in enumerate(remaining_model_drafts)
+                    if draft.kind == required.kind
+                ),
+                None,
+            )
+            if match is None:
+                ordered_drafts.append(required)
+            else:
+                index, draft = match
+                ordered_drafts.append(draft)
+                remaining_model_drafts.pop(index)
+        ordered_drafts.extend(remaining_model_drafts)
 
-        existing_keys = {_work_key(item.kind, item.instruction) for item in queue.items}
+        # A terminal failed/blocked/partial attempt must not permanently suppress a retry. Exact
+        # duplicate active or successful work is skipped; bounded later rounds may retry failures.
+        existing_keys = {
+            _work_key(item.kind, item.instruction)
+            for item in queue.items
+            if item.status in {WorkStatus.open, WorkStatus.running, WorkStatus.done}
+            and not (analysis_refresh and item.kind == WorkKind.analysis)
+        }
         new_items: list[WorkItem] = []
         for draft in ordered_drafts[: self.router.core.max_plan_items]:
             key = _work_key(draft.kind, draft.instruction)
@@ -469,6 +513,10 @@ class ResearchEngine:
         seen_supports: set[str] = set()
         for answer in answers:
             for result in answer.results:
+                # Passage retrieval is useful for human scouting but is not itself a bounded
+                # statement candidate. Promote only deterministic statement-extraction records.
+                if not result.statement_id:
+                    continue
                 key = result.support_id or result.statement_id or result.result_id
                 if key in seen_supports:
                     continue
@@ -555,14 +603,17 @@ class ResearchEngine:
             summary="Dry-run analysis recorded the available evidence without claiming a result.",
             unresolved_questions=[item.instruction],
         )
+        recent_results = _recent_result_context(self.store, limit=8)
         analysis_messages = [
             {
                 "role": "system",
                 "content": (
-                    "Perform one bounded TCS analysis. Use only the supplied findings as "
-                    "evidence. Return candidate claims with the finding IDs they rely on. "
-                    "Do not call tools, invent citations, claim novelty, or claim that the main "
-                    "task is solved. Candidate analysis remains a hypothesis until separately "
+                    "Perform one bounded TCS analysis. Use only the supplied findings as scientific "
+                    "evidence. Return candidate claims with the finding IDs they rely on. You may "
+                    "accurately summarize operational success, failure, and artifact availability "
+                    "from recent_work_results, but those records do not establish a scientific "
+                    "claim. Do not call tools, invent citations, claim novelty, or claim that the "
+                    "main task is solved. Candidate analysis remains a hypothesis until separately "
                     "verified by literature, Lean, or experiment."
                 ),
             },
@@ -573,6 +624,7 @@ class ResearchEngine:
                         "task": task[:10000],
                         "work_item": item.model_dump(mode="json"),
                         "findings": compact,
+                        "recent_work_results": recent_results,
                     },
                     ensure_ascii=False,
                 ),
@@ -604,7 +656,7 @@ class ResearchEngine:
         ]
         report_ref = self.store.write_text(
             f"{run_dir}/analysis.md",
-            _render_analysis(item, submission),
+            _render_analysis(item, submission, evidence=prior),
         )
         return WorkResult(
             work_id=item.work_id,
@@ -626,8 +678,20 @@ class ResearchEngine:
             {
                 "role": "system",
                 "content": (
-                    "Translate the bounded proof work into one small Lean goal. Return only "
-                    "the goal through response_format. Do not strengthen the mathematical claim."
+                    "Translate the bounded proof work into one small Lean goal. Return only the "
+                    "LeanGoalDraft JSON fields through response_format. `name` is one identifier. "
+                    "`statement` is only a theorem type with every variable explicitly bound; do "
+                    "not include `theorem`, `lemma`, `:=`, a proof, or a code fence. For equality "
+                    "of expressions containing infix operators, add explicit parentheses so Lean "
+                    "parses the intended equality (for example, `∀ (a b : Bool), (a && b) = "
+                    "(b && a)`). The type must elaborate using only the requested imports: do not "
+                    "refer to a task-specific helper that has not been defined. Prefer an equivalent "
+                    "standard-library operation (for example `List.count`) or encode a helper/predicate "
+                    "as a self-contained `let` inside the type. If the work asks to introduce a "
+                    "definition, state a small direct property of that `let`; never silently replace "
+                    "the requested definition with a stronger or mathematically different implication. "
+                    "Prefer the smallest useful statement likely to have a direct `rfl` or `simp` proof. "
+                    "Do not strengthen the mathematical claim."
                 ),
             },
             {
@@ -688,19 +752,39 @@ class ResearchEngine:
     def _run_experiment(self, item: WorkItem, run_dir: str) -> WorkResult:
         task = self.store.read_text(ArtifactStore.RESEARCH_TASK)
         mock = ExperimentProgram(
-            description=item.instruction,
-            python_code="print('dry-run: experiment was not executed')",
-            seed=0,
+            description=item.instruction[:1500],
+            python_lines=[
+                "open('dry_run.txt', 'w').write('dry-run: experiment was not executed')"
+            ],
+            seeds=[0],
+            expected_outputs=["dry_run.txt"],
         )
         experiment_messages = [
             {
                 "role": "system",
                 "content": (
-                    "Design one bounded reproducible Python experiment. Return a single "
-                    "self-contained program through response_format. It must use fixed seeds, "
-                    "write outputs only in the current directory, avoid network access and "
-                    "subprocesses, finish quickly, and print a concise factual summary. "
-                    "Experiments do not prove mathematical claims."
+                    "Design and implement one bounded reproducible Python experiment. Return a "
+                    "single self-contained program through response_format; it cannot rely on files "
+                    "from prior work items. Put the complete source in python_lines as an array with "
+                    "exactly one source line per string, preserving indentation and using no Markdown "
+                    "fences. Keep it under 10,000 characters and 250 lines; favor small functions and "
+                    "a text/CSV table over plotting boilerplate. List every fixed seed used by the code "
+                    "in seeds, and list generated relative file paths in expected_outputs. The program "
+                    "must use those fixed seeds, write outputs only in the current directory, avoid "
+                    "network access and subprocesses, and finish quickly. Size the workload for well "
+                    "under 60 seconds, with explicit operation or per-instance caps for potentially "
+                    "exponential algorithms; preserve partial rows and label capped runs rather than "
+                    "misreporting a cap as UNSAT. "
+                    "Do not import asyncio, httpx, multiprocessing, os, requests, shutil, socket, "
+                    "subprocess, or urllib. Use plain relative paths with open() instead. Produce the "
+                    "requested machine-readable results and table/plot when applicable, and print a "
+                    "concise factual summary. Include executable assertions or a tractable reference "
+                    "implementation that checks result correctness and key invariants before reporting; "
+                    "for algorithm benchmarks, cross-check a small subset against brute force when "
+                    "feasible, and exit nonzero on disagreement. Ensure compared variants are genuinely "
+                    "distinct. Prefer simple standard-library code unless "
+                    "a common scientific package is materially useful. Experiments do not prove "
+                    "mathematical claims."
                 ),
             },
             {
@@ -720,8 +804,56 @@ class ResearchEngine:
             messages=experiment_messages,
             schema=ExperimentProgram,
             mock_output=mock if self.router.dry_run else None,
+            allow_repair=False,
         )
-        _validate_experiment_program(program.python_code)
+        try:
+            _validate_experiment_program(program)
+        except ValueError as first_error:
+            if self.router.dry_run:
+                raise
+            self.store.write_json(f"{run_dir}/invalid_program.json", program)
+            repair_messages = [
+                {
+                    "role": "system",
+                    "content": (
+                        "Repair one self-contained Python experiment after deterministic validation "
+                        "failed. Preserve the experiment objective and output files, but return a "
+                        "compact syntactically valid program with none of the forbidden imports or "
+                        "builtins named in the error. Return complete source in python_lines with "
+                        "exactly one source line per array element and preserved indentation. Do not "
+                        "add Markdown fences, network access, or subprocess behavior."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": json.dumps(
+                        {
+                            "validation_error": str(first_error),
+                            "invalid_program": program.model_dump(mode="json"),
+                        },
+                        ensure_ascii=False,
+                    ),
+                },
+            ]
+            self.store.write_json(
+                f"{run_dir}/experiment_repair_model_input.json",
+                {"schema": "ExperimentProgram", "messages": repair_messages},
+            )
+            repaired_program = self.router.complete_structured(
+                task_type="experiment_revision",
+                messages=repair_messages,
+                schema=ExperimentProgram,
+                allow_repair=False,
+            )
+            # The repair owns source code only; preserve the already validated execution contract.
+            program = repaired_program.model_copy(
+                update={
+                    "description": program.description,
+                    "seeds": program.seeds,
+                    "expected_outputs": program.expected_outputs,
+                }
+            )
+            _validate_experiment_program(program)
         program_ref = self.store.write_json(f"{run_dir}/program.json", program)
         if self.router.dry_run:
             return WorkResult(
@@ -731,10 +863,75 @@ class ResearchEngine:
                 artifact_refs=[model_input_ref, program_ref],
                 next_steps=["Run again without --dry-run and with experimenter configuration."],
             )
-        result = ExperimentAgent(self.store, self.router.experimenter).run_program(
-            program=program,
-            name=item.title,
-        )
+        experiment_agent = ExperimentAgent(self.store, self.router.experimenter)
+        result = experiment_agent.run_program(program=program, name=item.title)
+        execution_refs = list(result.artifact_refs)
+        program_refs = [program_ref]
+        execution_errors = [] if result.success else [result.summary]
+        if not result.success:
+            runtime_repair_messages = [
+                {
+                    "role": "system",
+                    "content": (
+                        "Repair one self-contained Python experiment after a bounded execution "
+                        "failed. Use the traceback or missing-output report to correct the program, "
+                        "while preserving its objective, fixed seeds, metrics, and expected output "
+                        "files. Return complete source in python_lines with one source line per "
+                        "array element and preserved indentation. Keep the program compact and do "
+                        "not add forbidden imports, network access, or subprocess behavior."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": json.dumps(
+                        {
+                            "execution_failure": result.summary[-6000:],
+                            "program": program.model_dump(mode="json"),
+                        },
+                        ensure_ascii=False,
+                    ),
+                },
+            ]
+            self.store.write_json(
+                f"{run_dir}/experiment_runtime_repair_model_input.json",
+                {"schema": "ExperimentProgram", "messages": runtime_repair_messages},
+            )
+            try:
+                revision_output = self.router.complete_structured(
+                    task_type="experiment_revision",
+                    messages=runtime_repair_messages,
+                    schema=ExperimentProgram,
+                    allow_repair=False,
+                )
+                revised_program = revision_output.model_copy(
+                    update={
+                        "description": program.description,
+                        "seeds": program.seeds,
+                        "expected_outputs": program.expected_outputs,
+                    }
+                )
+                _validate_experiment_program(revised_program)
+                program_refs.append(
+                    self.store.write_json(f"{run_dir}/program_revision.json", revised_program)
+                )
+                result = experiment_agent.run_program(
+                    program=revised_program,
+                    name=f"{item.title} revision",
+                )
+                execution_refs.extend(result.artifact_refs)
+                if not result.success:
+                    execution_errors.append(result.summary)
+            except Exception as exc:  # noqa: BLE001 - preserve the initial execution evidence
+                repair_error = f"Runtime repair failed: {type(exc).__name__}: {exc}"
+                execution_errors.append(repair_error)
+                return WorkResult(
+                    work_id=item.work_id,
+                    outcome="failed",
+                    summary="Initial experiment execution failed and its bounded repair did not run.",
+                    artifact_refs=[model_input_ref, *program_refs, *execution_refs],
+                    errors=execution_errors,
+                    next_steps=["Inspect the preserved initial execution and repair diagnostics."],
+                )
         finding = Finding(
             work_id=item.work_id,
             kind=WorkKind.experiment,
@@ -749,8 +946,8 @@ class ResearchEngine:
             outcome="done" if result.success else "failed",
             summary=result.summary,
             findings=[finding] if result.success else [],
-            artifact_refs=[model_input_ref, program_ref, *result.artifact_refs],
-            errors=[] if result.success else [result.summary],
+            artifact_refs=[model_input_ref, *program_refs, *execution_refs],
+            errors=[] if result.success else execution_errors,
         )
 
     def _require_state(self) -> WorkspaceState:
@@ -767,7 +964,11 @@ class ResearchEngine:
 
 def _default_plan(task: str, *, existing: list[dict[str, Any]]) -> PlanSubmission:
     lowered = task.lower()
-    existing_kinds = {str(item.get("kind")) for item in existing}
+    existing_kinds = {
+        str(item.get("kind"))
+        for item in existing
+        if str(item.get("status")) in {"open", "running", "done"}
+    }
     drafts: list[WorkItemDraft] = []
     literature_requested = bool(
         re.search(
@@ -819,23 +1020,40 @@ def _default_plan(task: str, *, existing: list[dict[str, Any]]) -> PlanSubmissio
             )
         )
     if "analysis" not in existing_kinds:
-        drafts.append(
-            WorkItemDraft(
-                kind=WorkKind.analysis,
-                title="Evidence-bounded synthesis and gap analysis",
-                instruction=(
-                    "Synthesize only the evidence currently recorded, distinguish verified facts from "
-                    "hypotheses, and identify the smallest unresolved technical question."
-                ),
-                success_criteria=["Every candidate conclusion names its evidence basis and caveat."],
-            )
-        )
+        drafts.append(_analysis_work_draft())
     return PlanSubmission(
         decision="continue" if drafts else "review",
         objective="Make auditable progress through small evidence-producing work items.",
         work_items=drafts[:4],
         reason="Deterministic dry-run plan based on subsystem requirements in the task.",
     )
+
+
+def _analysis_work_draft() -> WorkItemDraft:
+    return WorkItemDraft(
+        kind=WorkKind.analysis,
+        title="Evidence-bounded synthesis and gap analysis",
+        instruction=(
+            "Synthesize only the evidence currently recorded, distinguish verified facts from "
+            "hypotheses, and identify the smallest unresolved technical question."
+        ),
+        success_criteria=["Every candidate conclusion names its evidence basis and caveat."],
+    )
+
+
+def _analysis_needs_refresh(queue: WorkQueue, findings: list[Finding]) -> bool:
+    if not findings or any(
+        item.kind == WorkKind.analysis and item.status in {WorkStatus.open, WorkStatus.running}
+        for item in queue.items
+    ):
+        return False
+    completed = [
+        item.updated_at
+        for item in queue.items
+        if item.kind == WorkKind.analysis and item.status == WorkStatus.done
+    ]
+    latest_analysis = max(completed, default="")
+    return max(finding.created_at for finding in findings) > latest_analysis
 
 
 def _recent_result_context(store: ArtifactStore, *, limit: int) -> list[dict[str, Any]]:
@@ -856,6 +1074,11 @@ def _recent_result_context(store: ArtifactStore, *, limit: int) -> list[dict[str
                 "errors": [str(value)[:300] for value in (row.get("errors") or [])[:2]],
                 "next_steps": [
                     str(value)[:300] for value in (row.get("next_steps") or [])[:3]
+                ],
+                "artifact_paths": [
+                    str(value.get("path") or "")
+                    for value in (row.get("artifact_refs") or [])[:8]
+                    if isinstance(value, dict) and value.get("path")
                 ],
                 "result_artifact": store.relpath(path),
             }
@@ -967,12 +1190,36 @@ def _rank_candidates(
     return sorted(unique.values(), key=rank_key, reverse=True)
 
 
-def _validate_experiment_program(code: str) -> None:
-    """Reject obvious escape/network primitives before untrusted code reaches Docker."""
+def _validate_experiment_program(program: ExperimentProgram) -> None:
+    """Reject incomplete output and obvious escape/network primitives before Docker."""
+    code = program.python_code
+    if len(code) > 20_000:
+        raise ValueError("generated experiment exceeds the 20,000-character source budget")
     try:
         tree = ast.parse(code)
     except SyntaxError as exc:
         raise ValueError(f"generated experiment is not valid Python: {exc}") from exc
+    if not tree.body:
+        raise ValueError("generated experiment contains no executable Python statements")
+    if not program.expected_outputs:
+        raise ValueError("generated experiment must declare at least one machine-readable output")
+    for output in program.expected_outputs:
+        if output not in code and Path(output).name not in code:
+            raise ValueError(f"expected output is not referenced by the program: {output}")
+    for top_node in tree.body:
+        if not isinstance(top_node, (ast.Assign, ast.AnnAssign)):
+            continue
+        targets = top_node.targets if isinstance(top_node, ast.Assign) else [top_node.target]
+        if not any(isinstance(target, ast.Name) and target.id.lower() == "seeds" for target in targets):
+            continue
+        if top_node.value is None:
+            continue
+        try:
+            declared_seeds = ast.literal_eval(top_node.value)
+        except (ValueError, TypeError):
+            continue
+        if isinstance(declared_seeds, (list, tuple)) and list(declared_seeds) != program.seeds:
+            raise ValueError("the seeds field does not match the program's SEEDS constant")
     forbidden_modules = {
         "asyncio",
         "httpx",
@@ -1054,8 +1301,29 @@ def _render_literature_report(
     return "\n".join(lines).rstrip() + "\n"
 
 
-def _render_analysis(item: WorkItem, submission: AnalysisSubmission) -> str:
-    lines = [f"# Analysis work: {item.title}", "", submission.summary, "", "## Candidate claims"]
+def _render_analysis(
+    item: WorkItem,
+    submission: AnalysisSubmission,
+    *,
+    evidence: list[Finding],
+) -> str:
+    lines = [
+        f"# Analysis work: {item.title}",
+        "",
+        submission.summary,
+        "",
+        "## Evidence inventory",
+    ]
+    if not evidence:
+        lines.append("- No evidence finding was available.")
+    for finding in evidence:
+        lines.append(
+            f"- **{finding.status.value} / {finding.kind.value}** `{finding.finding_id}`: "
+            f"{finding.statement}"
+        )
+        for caveat in finding.caveats:
+            lines.append(f"  - Caveat: {caveat}")
+    lines.extend(["", "## Candidate claims"])
     if not submission.candidate_claims:
         lines.append("- None. This is preferable to an unsupported claim.")
     for claim in submission.candidate_claims:

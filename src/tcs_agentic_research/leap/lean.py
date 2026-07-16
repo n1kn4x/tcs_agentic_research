@@ -46,6 +46,9 @@ end TCSResearch
 """,
                 encoding="utf-8",
             )
+        root_module = self.project_root / "TCSResearch.lean"
+        if not root_module.exists():
+            root_module.write_text("import TCSResearch.Basic\n", encoding="utf-8")
 
     def verify_code(self, code: str, *, rel_file: str | None = None) -> LeanCompilerLog:
         self.ensure_project()
@@ -84,18 +87,48 @@ end TCSResearch
             self.store.write_text(log_rel, stderr)
             log.artifact_ref = self.store.artifact_ref(log_rel)
             return log
+        build_stdout = ""
+        build_stderr = ""
         try:
-            completed = subprocess.run(
-                command,
-                cwd=cwd,
-                text=True,
-                capture_output=True,
-                check=False,
-                timeout=120,
-            )
+            if command[0] == "lake":
+                # `lake env lean` only searches compiled project modules. Build the small local
+                # library first so generated files can reliably import `TCSResearch.Basic`.
+                build = subprocess.run(
+                    ["lake", "build"],
+                    cwd=self.project_root,
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                    timeout=300,
+                )
+                build_stdout = build.stdout
+                build_stderr = build.stderr
+                if build.returncode != 0:
+                    command = ["lake", "build"]
+                    completed = build
+                    build_stdout = ""
+                    build_stderr = ""
+                else:
+                    completed = subprocess.run(
+                        command,
+                        cwd=cwd,
+                        text=True,
+                        capture_output=True,
+                        check=False,
+                        timeout=180,
+                    )
+            else:
+                completed = subprocess.run(
+                    command,
+                    cwd=cwd,
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                    timeout=180,
+                )
         except subprocess.TimeoutExpired as exc:
-            stdout = str(exc.stdout or "")
-            stderr = str(exc.stderr or "") + "\nLean verification timed out after 120 seconds."
+            stdout = build_stdout + str(exc.stdout or "")
+            stderr = build_stderr + str(exc.stderr or "") + "\nLean verification timed out."
             self.store.write_text(log_rel, "STDOUT:\n" + stdout + "\nSTDERR:\n" + stderr)
             return LeanCompilerLog(
                 command=command,
@@ -106,14 +139,16 @@ end TCSResearch
                 success=False,
                 artifact_ref=self.store.artifact_ref(log_rel),
             )
-        output = "STDOUT:\n" + completed.stdout + "\nSTDERR:\n" + completed.stderr
+        stdout = build_stdout + completed.stdout
+        stderr = build_stderr + completed.stderr
+        output = "STDOUT:\n" + stdout + "\nSTDERR:\n" + stderr
         self.store.write_text(log_rel, output)
         return LeanCompilerLog(
             command=command,
             cwd=str(cwd),
             exit_code=completed.returncode,
-            stdout=completed.stdout,
-            stderr=completed.stderr,
+            stdout=stdout,
+            stderr=stderr,
             success=completed.returncode == 0,
             artifact_ref=self.store.artifact_ref(log_rel),
         )

@@ -1,7 +1,7 @@
 # Bounded Qwen3.6 configuration. The core engine never exposes tools to a model.
 # Every request is fresh, response_format-constrained, and limited by the budgets below.
 core:
-  max_model_calls_per_step: 3
+  max_model_calls_per_step: 5
   max_plan_rounds: 3
   max_plan_items: 4
   literature_max_imports: 3
@@ -13,7 +13,7 @@ router:
   repair_profile: format
   timeout_seconds: 600
   max_input_chars: 30000
-  max_output_tokens: 4096
+  max_output_tokens: 12288
   repair_attempts: 1
   profiles:
     reasoning:
@@ -21,13 +21,10 @@ router:
       base_url: http://localhost:8000/v1
       api_key: EMPTY
       temperature: 0.6
-      max_tokens: 4096
+      max_tokens: 12288
       task_types:
-        - planning
         - analysis
-        - literature_planning
-        - proof_formulation
-        - experiment_design
+        - proof_revision
       extra_body:
         top_p: 0.95
         top_k: 20
@@ -38,12 +35,51 @@ router:
           enable_thinking: true
           preserve_thinking: false
 
+    control:
+      model: deep-reasoner
+      base_url: http://localhost:8000/v1
+      api_key: EMPTY
+      temperature: 0.6
+      max_tokens: 4096
+      task_types:
+        - planning
+        - literature_planning
+        - proof_formulation
+      extra_body:
+        top_p: 0.95
+        top_k: 20
+        min_p: 0.0
+        presence_penalty: 0.0
+        repetition_penalty: 1.0
+        chat_template_kwargs:
+          enable_thinking: false
+          preserve_thinking: false
+
+    coding:
+      model: deep-reasoner
+      base_url: http://localhost:8000/v1
+      api_key: EMPTY
+      temperature: 0.6
+      max_tokens: 12288
+      task_types:
+        - experiment_design
+        - experiment_revision
+      extra_body:
+        top_p: 0.95
+        top_k: 20
+        min_p: 0.0
+        presence_penalty: 0.0
+        repetition_penalty: 1.0
+        chat_template_kwargs:
+          enable_thinking: false
+          preserve_thinking: false
+
     format:
       model: routine-extractor
       base_url: http://localhost:8001/v1
       api_key: EMPTY
       temperature: 0.7
-      max_tokens: 4096
+      max_tokens: 8192
       task_types:
         - literature_extraction
       extra_body:
@@ -62,7 +98,7 @@ router:
       base_url: http://localhost:8003/v1
       api_key: EMPTY
       temperature: 0.6
-      max_tokens: 4096
+      max_tokens: 8192
       task_types:
         - theorem_proving
       extra_body:

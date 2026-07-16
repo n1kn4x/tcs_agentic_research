@@ -61,7 +61,7 @@ class BoundedExperimentRunner:
             {
                 "run_id": run_id,
                 "description": program.description,
-                "seed": program.seed,
+                "seeds": program.seeds,
                 "expected_outputs": program.expected_outputs,
                 "created_at": utc_now(),
                 "execution_contract": {
@@ -84,7 +84,10 @@ class BoundedExperimentRunner:
             ["sh", "-lc", shell_command],
             workdir=f"/workspace/runs/{run_id}",
             timeout=self.settings.timeout_seconds + 30,
-            env={"TCS_EXPERIMENT_SEED": str(program.seed), "MPLBACKEND": "Agg"},
+            env={
+                "TCS_EXPERIMENT_SEEDS": ",".join(str(seed) for seed in program.seeds),
+                "MPLBACKEND": "Agg",
+            },
             check=False,
         )
         stdout = _read_limited(portable_dir / "execution.stdout", self.settings.max_output_bytes)
@@ -93,6 +96,9 @@ class BoundedExperimentRunner:
             stderr += "\nDocker exec stderr:\n" + _limit_text(
                 completed.stderr, self.settings.max_output_bytes
             )
+        missing_outputs = [
+            path for path in program.expected_outputs if not (portable_dir / path).is_file()
+        ]
 
         shutil.copytree(portable_dir, canonical_dir, dirs_exist_ok=True)
         stdout_ref = self.store.write_text(Path(rel_dir) / "stdout.log", stdout)
@@ -102,7 +108,8 @@ class BoundedExperimentRunner:
             {
                 "run_id": run_id,
                 "exit_code": completed.returncode,
-                "success": completed.returncode == 0,
+                "success": completed.returncode == 0 and not missing_outputs,
+                "missing_expected_outputs": missing_outputs,
                 "stdout_tail": stdout[-4000:],
                 "stderr_tail": stderr[-4000:],
                 "finished_at": utc_now(),
@@ -112,12 +119,15 @@ class BoundedExperimentRunner:
         for ref in [request_ref, stdout_ref, stderr_ref, result_ref]:
             if ref.path not in {item.path for item in refs}:
                 refs.append(ref)
-        success = completed.returncode == 0
-        summary = (
-            "Experiment program completed successfully."
-            if success
-            else f"Experiment program failed with exit code {completed.returncode}."
-        )
+        success = completed.returncode == 0 and not missing_outputs
+        if success:
+            summary = "Experiment program completed successfully."
+        elif completed.returncode != 0:
+            summary = f"Experiment program failed with exit code {completed.returncode}."
+        else:
+            summary = "Experiment program did not create expected output(s): " + ", ".join(
+                missing_outputs
+            )
         output_tail = (stdout or stderr).strip()[-1500:]
         if output_tail:
             summary += " Output tail: " + output_tail
@@ -126,7 +136,7 @@ class BoundedExperimentRunner:
             success=success,
             summary=summary,
             artifact_refs=refs,
-            seeds=[program.seed],
+            seeds=program.seeds,
             caveats=["Experimental evidence is not a mathematical proof."],
         )
 

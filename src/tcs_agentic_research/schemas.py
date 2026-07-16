@@ -8,10 +8,12 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from enum import Enum
+from pathlib import PurePosixPath
+import re
 from typing import Any, Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 def utc_now() -> str:
@@ -84,6 +86,16 @@ class PlanSubmission(StrictModel):
     objective: str = Field(min_length=3, max_length=1000)
     work_items: list[WorkItemDraft] = Field(default_factory=list, max_length=4)
     reason: str = Field(default="", max_length=1200)
+
+    @model_validator(mode="after")
+    def work_kinds_are_unique(self) -> "PlanSubmission":
+        kinds = [item.kind for item in self.work_items]
+        if len(kinds) != len(set(kinds)):
+            raise ValueError(
+                "work_items must contain at most one item of each kind; combine dependent "
+                "work into one self-contained bounded item"
+            )
+        return self
 
 
 class WorkItem(StrictModel):
@@ -178,17 +190,168 @@ class LiteraturePlan(StrictModel):
 
 
 class LeanGoalDraft(StrictModel):
-    name: str = Field(min_length=1, max_length=80)
-    statement: str = Field(min_length=1, max_length=2000)
+    name: str = Field(
+        min_length=1,
+        max_length=80,
+        description="One unqualified Lean identifier, without `theorem` or binders.",
+    )
+    statement: str = Field(
+        min_length=1,
+        max_length=2000,
+        description=(
+            "Only the theorem type with every variable explicitly bound; never a theorem/lemma "
+            "declaration and never a proof. Example: `∀ (a b : Bool), (a && b) = (b && a)`."
+        ),
+    )
     imports: list[str] = Field(default_factory=lambda: ["TCSResearch.Basic"], max_length=6)
     namespace: str | None = "TCSResearch"
+
+    @model_validator(mode="before")
+    @classmethod
+    def unwrap_common_declaration_form(cls, value: Any) -> Any:
+        """Conservatively recover a type when a model wraps it in one Lean declaration."""
+        if not isinstance(value, dict) or not isinstance(value.get("statement"), str):
+            return value
+        data = dict(value)
+        parsed = _parse_lean_declaration(data["statement"])
+        if parsed is not None:
+            name, statement = parsed
+            data["name"] = name
+            data["statement"] = statement
+        return data
+
+    @field_validator("name")
+    @classmethod
+    def validate_declaration_name(cls, value: str) -> str:
+        name = value.strip()
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_']*", name):
+            raise ValueError("name must be one unqualified Lean identifier")
+        return name
+
+    @field_validator("statement")
+    @classmethod
+    def validate_type_only_statement(cls, value: str) -> str:
+        statement = value.strip()
+        if re.match(
+            r"^(?:```|theorem\b|lemma\b|example\b|def\b|axiom\b|import\b)",
+            statement,
+            flags=re.IGNORECASE,
+        ):
+            raise ValueError(
+                "statement must contain only the theorem type, not a Lean declaration or code fence"
+            )
+        if ":=" in statement or re.search(r"\b(?:sorry|admit)\b", statement):
+            raise ValueError("statement must not contain a proof body or placeholder")
+        return _parenthesize_bool_equality(statement)
+
+
+def _parenthesize_bool_equality(statement: str) -> str:
+    """Disambiguate a common Lean precedence trap without otherwise rewriting the goal."""
+    prefix = ""
+    body = statement
+    if statement.startswith("∀") or statement.startswith("forall "):
+        split = _first_top_level_character(statement, ",")
+        if split < 0:
+            return statement
+        prefix, body = statement[: split + 1], statement[split + 1 :].strip()
+    equality = _first_top_level_character(body, "=")
+    if equality < 0 or _first_top_level_character(body[equality + 1 :], "=") >= 0:
+        return statement
+    left = body[:equality].strip()
+    right = body[equality + 1 :].strip()
+    if not left or not right or not any(token in left + right for token in ("&&", "||", "!")):
+        return statement
+    if any(token in right for token in ("→", "↔", "<->")):
+        return statement
+    separator = " " if prefix else ""
+    return f"{prefix}{separator}({left}) = ({right})"
+
+
+def _first_top_level_character(text: str, wanted: str) -> int:
+    depth = 0
+    for index, character in enumerate(text):
+        if character in "([{":
+            depth += 1
+        elif character in ")]}":
+            depth = max(0, depth - 1)
+        elif character == wanted and depth == 0:
+            if wanted != "=" or (index == 0 or text[index - 1] not in ("!", ":", "<", ">")):
+                return index
+    return -1
+
+
+def _parse_lean_declaration(value: str) -> tuple[str, str] | None:
+    """Parse only a simple, single `theorem`/`lemma` wrapper; leave all other text untouched."""
+    text = value.strip()
+    match = re.match(r"^(?:theorem|lemma)\s+([A-Za-z_][A-Za-z0-9_']*)\s*(.*)$", text)
+    if match is None:
+        return None
+    name, remainder = match.groups()
+    depth = 0
+    separator = -1
+    pairs = {"(": ")", "[": "]", "{": "}"}
+    closing = set(pairs.values())
+    for index, character in enumerate(remainder):
+        if character in pairs:
+            depth += 1
+        elif character in closing:
+            depth = max(0, depth - 1)
+        elif character == ":" and depth == 0:
+            separator = index
+            break
+    if separator < 0:
+        return None
+    binders = remainder[:separator].strip()
+    statement = remainder[separator + 1 :].strip()
+    if ":=" in statement:
+        statement = statement.split(":=", 1)[0].strip()
+    if not statement:
+        return None
+    if binders:
+        statement = f"∀ {binders}, {statement}"
+    return name, statement
 
 
 class ExperimentProgram(StrictModel):
     description: str = Field(min_length=10, max_length=1500)
-    python_code: str = Field(min_length=20, max_length=30000)
-    seed: int = 0
+    python_lines: list[str] = Field(
+        min_length=1,
+        max_length=500,
+        description=(
+            "Complete Python source as an ordered array containing exactly one source line per "
+            "element. Preserve leading indentation; do not use Markdown fences."
+        ),
+    )
+    seeds: list[int] = Field(default_factory=lambda: [0], min_length=1, max_length=20)
     expected_outputs: list[str] = Field(default_factory=list, max_length=10)
+
+    @field_validator("python_lines", mode="before")
+    @classmethod
+    def normalize_python_lines(cls, value: Any) -> Any:
+        lines = value.splitlines() if isinstance(value, str) else value
+        if not isinstance(lines, list) or not all(isinstance(line, str) for line in lines):
+            return lines
+        normalized = list(lines)
+        if normalized and re.fullmatch(r"```(?:python|py)?\s*", normalized[0].strip()):
+            normalized.pop(0)
+        if normalized and normalized[-1].strip() == "```":
+            normalized.pop()
+        return normalized
+
+    @property
+    def python_code(self) -> str:
+        return "\n".join(self.python_lines).strip()
+
+    @field_validator("expected_outputs")
+    @classmethod
+    def validate_expected_output_paths(cls, values: list[str]) -> list[str]:
+        normalized: list[str] = []
+        for value in values:
+            path = PurePosixPath(value.strip())
+            if not value.strip() or path.is_absolute() or ".." in path.parts:
+                raise ValueError("expected_outputs must be relative paths inside the run directory")
+            normalized.append(str(path))
+        return normalized
 
 
 # ---------------------------------------------------------------------------
@@ -386,7 +549,7 @@ class ModelProfile(StrictModel):
     base_url: str = "http://localhost:8000/v1"
     api_key: str = "EMPTY"
     temperature: float = 0.6
-    max_tokens: int = 4096
+    max_tokens: int = 8192
     task_types: list[str] = Field(default_factory=list)
     extra_body: dict[str, Any] = Field(default_factory=dict)
 
@@ -396,13 +559,13 @@ class RouterSettings(StrictModel):
     repair_profile: str = "format"
     timeout_seconds: float = 600.0
     max_input_chars: int = 30000
-    max_output_tokens: int = 4096
+    max_output_tokens: int = 8192
     repair_attempts: int = Field(default=1, ge=0, le=1)
     profiles: dict[str, ModelProfile]
 
 
 class CoreSettings(StrictModel):
-    max_model_calls_per_step: int = Field(default=3, ge=1, le=8)
+    max_model_calls_per_step: int = Field(default=5, ge=1, le=8)
     max_plan_rounds: int = Field(default=3, ge=1, le=10)
     max_plan_items: int = Field(default=4, ge=1, le=4)
     literature_max_imports: int = Field(default=3, ge=0, le=10)

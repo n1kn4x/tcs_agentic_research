@@ -168,6 +168,7 @@ class LLMRouter:
         mock_output: T | None = None,
         temperature: float | None = None,
         max_tokens: int | None = None,
+        allow_repair: bool = True,
     ) -> T:
         """Return one validated JSON object, with at most one fresh formatter repair call."""
         if self.dry_run:
@@ -193,7 +194,7 @@ class LLMRouter:
             result = response.pop("_validated_model")
             return schema.model_validate(result)
         except _ResponseValidationError as first_error:
-            if self.settings.repair_attempts == 0:
+            if self.settings.repair_attempts == 0 or not allow_repair:
                 raise StructuredLLMError(
                     f"{schema.__name__} validation failed: "
                     f"{_truncate(str(first_error.validation_error), 2000)}"

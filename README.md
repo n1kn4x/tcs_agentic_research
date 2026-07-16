@@ -85,7 +85,9 @@ tcs-research run --workspace workspaces/demo --config config.yml --max-steps 1
 ## Model serving and Qwen3.6
 
 Qwen's advertised native context length is a capacity, not a target. The application limits a request
-to 30,000 characters and an output to 4,096 tokens by default. Long contexts make failures more
+to 30,000 characters and an output to 12,288 tokens in the example profile. The larger output
+allowance is for self-contained experiment programs; control and coding calls use non-thinking
+profiles, and prompts still request compact outputs. Long contexts make failures more
 expensive and do not repair bad orchestration.
 
 The default Qwen3.6 profile uses the vendor's precise-coding-style sampling (`temperature=0.6`,

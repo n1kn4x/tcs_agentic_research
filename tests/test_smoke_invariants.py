@@ -10,12 +10,22 @@ from tcs_agentic_research.agents.experiment import ExperimentAgent
 from tcs_agentic_research.agents.literature import LiteratureResearcher
 from tcs_agentic_research.artifact_store import ArtifactStore
 from tcs_agentic_research.cli import main
-from tcs_agentic_research.engine import ResearchEngine
+from tcs_agentic_research.engine import ResearchEngine, _validate_experiment_program
 from tcs_agentic_research.experimenter.docker_project import _diagnostic
 from tcs_agentic_research.experimenter.errors import ExperimenterConfigurationError
-from tcs_agentic_research.llm import InputBudgetExceeded, LLMRouter, ModelBudgetExceeded
+from tcs_agentic_research.leap.harness import FormalProofCandidate, LEAPHarness
+from tcs_agentic_research.leap.lean import LeanVerifier
+from tcs_agentic_research.llm import (
+    InputBudgetExceeded,
+    LLMRouter,
+    ModelBudgetExceeded,
+    StructuredLLMError,
+)
 from tcs_agentic_research.schemas import (
     AnalysisSubmission,
+    ExperimentProgram,
+    LeanGoalDraft,
+    LeanStatement,
     ModelProfile,
     PaperMetadata,
     PlanSubmission,
@@ -193,6 +203,36 @@ def test_structured_repair_is_fresh_and_bounded(tmp_path: Path) -> None:
     assert "structured_output_invalid" in calls[0]["failure"]
 
 
+def test_structured_code_call_can_disable_lossy_formatter_repair(tmp_path: Path) -> None:
+    store = ArtifactStore(tmp_path)
+    store.initialize_layout()
+    router = LLMRouter(
+        RouterSettings(
+            default_profile="reasoning",
+            repair_profile="reasoning",
+            profiles={"reasoning": ModelProfile(model="mock")},
+        ),
+        store=store,
+    )
+    call_count = 0
+
+    def fake_post(profile: ModelProfile, body: dict[str, object]) -> dict[str, object]:
+        nonlocal call_count
+        call_count += 1
+        return {"choices": [{"message": {"content": "not json"}}]}
+
+    router._post = fake_post  # type: ignore[method-assign]
+    with router.step_budget("no_lossy_repair", max_calls=2):
+        with pytest.raises(StructuredLLMError):
+            router.complete_structured(
+                task_type="experiment_design",
+                messages=[{"role": "user", "content": "write code"}],
+                schema=ExperimentProgram,
+                allow_repair=False,
+            )
+    assert call_count == 1
+
+
 def test_no_model_tool_interface_is_emitted(tmp_path: Path) -> None:
     store = ArtifactStore(tmp_path)
     store.initialize_layout()
@@ -233,7 +273,7 @@ def test_no_model_tool_interface_is_emitted(tmp_path: Path) -> None:
     )
 
     assert "tools" not in captured
-    assert captured["max_tokens"] == 4096
+    assert captured["max_tokens"] == 8192
     assert captured["response_format"]
 
 
@@ -279,6 +319,7 @@ def test_deterministic_literature_extraction_has_stable_exact_support(tmp_path: 
     assert answer.results
     assert answer.results[0].support_id == first_statement.support_id
     assert answer.results[0].provenance[0].validated
+    assert answer.results[0].provenance[0].artifact_refs[0].path == text_ref.path
 
 
 def test_literature_index_rebuilds_from_three_canonical_ledgers(tmp_path: Path) -> None:
@@ -299,6 +340,86 @@ def test_literature_index_rebuilds_from_three_canonical_ledgers(tmp_path: Path) 
     assert rebuilt.index.support_exists(support_id)
     assert store.exists("LiteratureDB/papers.jsonl")
     assert store.exists("LiteratureDB/statements.jsonl")
+
+
+def test_generated_code_and_proof_contracts_are_application_bound(tmp_path: Path) -> None:
+    program = ExperimentProgram(
+        description="A fenced model response is normalized before syntax validation.",
+        python_lines=["```python", "message = 'ok'", "print(message)", "```"],
+        expected_outputs=["results/data.json"],
+    )
+    assert program.python_code == "message = 'ok'\nprint(message)"
+    with pytest.raises(ValueError, match="machine-readable output"):
+        _validate_experiment_program(program.model_copy(update={"expected_outputs": []}))
+    with pytest.raises(ValueError, match="seeds field"):
+        _validate_experiment_program(
+            ExperimentProgram(
+                description="Seed provenance must match the executable source constant.",
+                python_lines=[
+                    "SEEDS = [1]",
+                    "open('result.json', 'w').write('{}')",
+                ],
+                seeds=[2],
+                expected_outputs=["result.json"],
+            )
+        )
+
+    normalized_goal = LeanGoalDraft(
+        name="target",
+        statement="theorem other (a : Bool) : a = a := by sorry",
+    )
+    assert normalized_goal.name == "other"
+    assert normalized_goal.statement == "∀ (a : Bool), a = a"
+    precedence_goal = LeanGoalDraft(
+        name="and_comm",
+        statement="∀ (a b : Bool), a && b = b && a",
+    )
+    assert precedence_goal.statement == "∀ (a b : Bool), (a && b) = (b && a)"
+    inequality_goal = LeanGoalDraft(name="neq", statement="∀ (a b : Bool), a != b")
+    assert inequality_goal.statement == "∀ (a b : Bool), a != b"
+    with pytest.raises(ValueError, match="only the theorem type"):
+        LeanGoalDraft(name="target", statement="```lean\ntheorem other : True\n```")
+    with pytest.raises(ValueError, match="must not contain Lean commands"):
+        FormalProofCandidate(
+            informal_proof="Attempt to replace the declaration.",
+            proof="by\n  exact True.intro\ntheorem unrelated : True := by trivial",
+        )
+
+    goal = LeanStatement(name="target", statement="True")
+    rendered = LEAPHarness._render_theorem(goal, "by\n  trivial")
+    assert "theorem target : True := by" in rendered
+    assert rendered.count("theorem") == 1
+    forall_rendered = LEAPHarness._render_theorem(
+        LeanStatement(name="id", statement="∀ (a : Bool), a = a"),
+        "by\n  rfl",
+    )
+    assert "theorem id (a : Bool) : a = a := by" in forall_rendered
+
+    store = ArtifactStore(_task(tmp_path))
+    store.initialize_layout()
+    LeanVerifier(store).ensure_project()
+    assert (tmp_path / "LeanProject" / "TCSResearch.lean").read_text() == (
+        "import TCSResearch.Basic\n"
+    )
+
+
+def test_plan_rejects_dependent_duplicate_subsystem_items() -> None:
+    with pytest.raises(ValueError, match="at most one item of each kind"):
+        PlanSubmission(
+            objective="Do bounded experiment work.",
+            work_items=[
+                {
+                    "kind": "experiment",
+                    "title": "Write a benchmark",
+                    "instruction": "Write the complete benchmark program in this fresh work item.",
+                },
+                {
+                    "kind": "experiment",
+                    "title": "Run that benchmark",
+                    "instruction": "Run a benchmark expected to have been written by another item.",
+                },
+            ],
+        )
 
 
 def test_experiment_agent_fails_fast_without_configuration(tmp_path: Path) -> None:

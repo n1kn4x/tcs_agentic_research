@@ -57,6 +57,10 @@ class LiteratureRetriever:
             paper_id = str(row.get("paper_id") or "")
             statement_text = str(row.get("statement_text") or "")
             quote = str(row.get("quote") or statement_text)
+            paper = self.index.find_paper(citation_key=citation_key)
+            source_refs = []
+            if paper is not None and paper.text_path and self.store.exists(paper.text_path):
+                source_refs.append(self.store.artifact_ref(paper.text_path))
             quote_obj = LiteratureQuote(
                 citation_key=citation_key,
                 paper_id=paper_id,
@@ -66,6 +70,7 @@ class LiteratureRetriever:
                 char_end=row.get("char_end"),
                 source_sha256=str(row.get("text_sha256") or ""),
                 validated=bool(row.get("quote_validated") or False),
+                artifact_refs=source_refs,
             )
             if row.get("quote_id"):
                 quote_obj.quote_id = str(row.get("quote_id"))

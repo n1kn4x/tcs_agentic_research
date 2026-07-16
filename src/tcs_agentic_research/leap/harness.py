@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from pydantic import Field
+import re
+
+from pydantic import Field, field_validator
 
 from ..artifact_store import ArtifactStore
 from ..llm import LLMRouter
@@ -14,8 +16,22 @@ from .sorry import find_placeholder_lines
 
 class FormalProofCandidate(StrictModel):
     informal_proof: str
-    lean_code: str
+    proof: str = Field(min_length=2, max_length=8000)
     notes: list[str] = Field(default_factory=list, max_length=6)
+
+    @field_validator("proof", mode="before")
+    @classmethod
+    def normalize_proof_term(cls, value: object) -> object:
+        if not isinstance(value, str):
+            return value
+        text = value.strip()
+        fenced = re.fullmatch(r"```(?:lean)?\s*\n(.*?)\n```", text, flags=re.DOTALL)
+        proof = fenced.group(1).strip() if fenced else text
+        if not proof.startswith("by"):
+            raise ValueError("proof must be one Lean proof term beginning with `by`")
+        if re.search(r"(?m)^\s*(?:import|namespace|theorem|lemma|axiom|def)\b", proof):
+            raise ValueError("proof must not contain Lean commands or declarations")
+        return proof
 
 
 class LEAPHarness:
@@ -47,18 +63,27 @@ class LEAPHarness:
 
         for revision in range(max_revisions + 1):
             rel_file = f"TCSResearch/Generated/{_safe_file_stem(goal.name)}_{revision}.lean"
-            log = self.verifier.verify_code(candidate.lean_code, rel_file=rel_file)
+            code = self._render_theorem(goal, candidate.proof)
+            log = self.verifier.verify_code(code, rel_file=rel_file)
             logs.append(log)
             code_ref = self.store.artifact_ref(f"LeanProject/{rel_file}")
             artifacts.append(code_ref)
-            if log.success and not find_placeholder_lines(candidate.lean_code):
+            if log.artifact_ref is not None:
+                artifacts.append(log.artifact_ref)
+            if log.success and not find_placeholder_lines(code):
+                proved_artifacts = [code_ref]
+                if log.artifact_ref is not None:
+                    proved_artifacts.append(log.artifact_ref)
                 return TheoremProverResult(
                     status="proved",
                     root_goal=goal,
-                    proved_artifacts=[code_ref],
+                    proved_artifacts=proved_artifacts,
                     artifact_refs=artifacts,
                     compiler_logs=logs,
-                    proof_dag_summary="Bounded direct proof verified; no hidden proof search was run.",
+                    proof_dag_summary=(
+                        "The application rendered the exact requested declaration around a bounded "
+                        "proof term, and Lean verified it without placeholders."
+                    ),
                     recommended_next_steps=["Use the verified Lean file as proof evidence."],
                 )
             if log.exit_code == 127:
@@ -93,7 +118,7 @@ class LEAPHarness:
     def _direct_candidate(self, goal: LeanStatement, context: str) -> FormalProofCandidate:
         mock = FormalProofCandidate(
             informal_proof="Dry-run candidate only; no proof is claimed.",
-            lean_code=self._placeholder_theorem(goal),
+            proof="by\n  sorry",
             notes=["Contains sorry and cannot be accepted."],
         )
         return self.router.complete_structured(
@@ -120,7 +145,7 @@ class LEAPHarness:
         context: str,
     ) -> FormalProofCandidate:
         return self.router.complete_structured(
-            task_type="theorem_proving",
+            task_type="proof_revision",
             messages=[
                 {
                     "role": "system",
@@ -140,14 +165,40 @@ class LEAPHarness:
         )
 
     @staticmethod
-    def _placeholder_theorem(goal: LeanStatement) -> str:
+    def _render_theorem(goal: LeanStatement, proof: str) -> str:
+        """Bind model output to the exact application-owned declaration."""
         imports = "\n".join(f"import {item}" for item in goal.imports)
         opening = f"namespace {goal.namespace}\n\n" if goal.namespace else ""
         closing = f"\nend {goal.namespace}\n" if goal.namespace else ""
+        binders, proposition = _leading_forall_parts(goal.statement)
+        binder_text = f" {binders}" if binders else ""
         return (
-            f"{imports}\n\n{opening}theorem {goal.name} : {goal.statement} := by\n"
-            f"  sorry\n{closing}"
+            f"{imports}\n\n{opening}theorem {goal.name}{binder_text} : {proposition} := "
+            f"{proof}\n{closing}"
         )
+
+
+def _leading_forall_parts(statement: str) -> tuple[str, str]:
+    """Move leading explicit binders into the declaration without changing its Lean type."""
+    text = statement.strip()
+    marker_length = 1 if text.startswith("∀") else 6 if text.startswith("forall ") else 0
+    if marker_length == 0:
+        return "", text
+    depth = 0
+    for index, character in enumerate(text[marker_length:], start=marker_length):
+        if character in "([{":
+            depth += 1
+        elif character in ")]}":
+            depth = max(0, depth - 1)
+        elif character == "," and depth == 0:
+            binders = text[marker_length:index].strip()
+            proposition = text[index + 1 :].strip()
+            if binders and proposition:
+                if not binders.startswith(("(", "{", "[")):
+                    binders = f"({binders})"
+                return binders, proposition
+            break
+    return "", text
 
 
 def _safe_file_stem(name: str) -> str:

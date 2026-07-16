@@ -258,8 +258,8 @@ def _experiment(args: argparse.Namespace) -> int:
         result = agent.run_program(
             program=ExperimentProgram(
                 description=args.description,
-                python_code=code,
-                seed=args.seed,
+                python_lines=code.splitlines(),
+                seeds=[args.seed],
             ),
             name=args.name,
         )
