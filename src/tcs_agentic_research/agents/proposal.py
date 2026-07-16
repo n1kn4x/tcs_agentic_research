@@ -120,25 +120,55 @@ class ProposalAgent:
                 reason="Accepted dry-run mock proposal after failed proposal revisions.",
             )
 
+        if critique is None:
+            fallback_proposal = self._engineering_fallback_proposal(state=state, task=task)
+            fallback_ref = self._write_proposal_artifacts(iteration_dir, fallback_proposal)
+            fallback_critique = self._engineering_fallback_accept_critique(fallback_proposal)
+            engineering_reason = (
+                "Accepted deterministic audit fallback after structured-output engineering "
+                "failure. The failure is recorded in ModelCallLedger.jsonl and is not treated "
+                "as a scientific critic objection."
+            )
+            self._record_proposal_event(
+                proposal_id=fallback_proposal.proposal_id,
+                event_type="generated",
+                artifact_refs=[fallback_ref],
+                proposal=fallback_proposal,
+                reason=engineering_reason,
+            )
+            self._record_proposal_event(
+                proposal_id=fallback_proposal.proposal_id,
+                event_type="critic_review",
+                artifact_refs=[fallback_ref],
+                critique=fallback_critique,
+                reason=fallback_critique.summary,
+            )
+            return self._accept_proposal(
+                state,
+                iteration,
+                fallback_proposal,
+                fallback_critique,
+                fallback_ref,
+                reason=engineering_reason,
+            )
+
         obstruction_proposal = self._critic_driven_obstruction_proposal(
             state=state,
             task=task,
             prior_proposal=proposal,
             critique=critique,
-            generation_failures=generation_failures,
         )
         obstruction_ref = self._write_proposal_artifacts(iteration_dir, obstruction_proposal)
         obstruction_critique = self._obstruction_accept_critique(
             obstruction_proposal,
             prior_critique=critique,
-            generation_failures=generation_failures,
         )
         self._record_proposal_event(
             proposal_id=obstruction_proposal.proposal_id,
             event_type="generated",
             artifact_refs=[obstruction_ref],
             proposal=obstruction_proposal,
-            reason="Deterministic obstruction-analysis proposal generated from critic objections.",
+            reason="Deterministic obstruction-analysis proposal generated from scientific critic objections.",
         )
         self._record_proposal_event(
             proposal_id=obstruction_proposal.proposal_id,
@@ -153,7 +183,7 @@ class ProposalAgent:
             obstruction_proposal,
             obstruction_critique,
             obstruction_ref,
-            reason="Accepted critic-driven obstruction-analysis proposal after failed proposal revisions.",
+            reason="Accepted critic-driven obstruction-analysis proposal after scientific critic objections.",
         )
 
     def _generate_proposal(
@@ -396,7 +426,6 @@ class ProposalAgent:
         task: str,
         prior_proposal: ResearchProposal | None,
         critique: ProposalCritique | None,
-        generation_failures: list[str],
     ) -> ResearchProposal:
         """Create an executable proposal from critic objections instead of oscillating.
 
@@ -405,7 +434,6 @@ class ProposalAgent:
         calculations, or literature gaps and to report a negative/bottleneck result if warranted.
         """
         critique_constraints = _critique_constraints(critique)
-        failure_constraints = [f"Proposal-generation failure to account for: {item}" for item in generation_failures]
         prior_title = prior_proposal.title if prior_proposal is not None else "the attempted proposal"
         task_header = next((line.strip() for line in task.splitlines() if line.strip()), "InitialResearchTask.md")
         open_obligation_notes = [
@@ -464,7 +492,7 @@ class ProposalAgent:
                 "Do not assume an ideal quantum sample, index erasure, quantum oracle access, or uncosted classical-to-quantum state preparation unless the task explicitly permits it.",
                 "Do not claim an asymptotic improvement unless all preprocessing, state preparation, repetition, verification, and sample costs are included.",
             ],
-            critic_constraints=list(dict.fromkeys([*critique_constraints, *failure_constraints])),
+            critic_constraints=list(dict.fromkeys(critique_constraints)),
             plausibility_argument=(
                 "The proposal loop failed because the critic identified unresolved technical assumptions. "
                 "Those assumptions are now the object of study. Executing this proposal should produce "
@@ -513,11 +541,8 @@ class ProposalAgent:
         proposal: ResearchProposal,
         *,
         prior_critique: ProposalCritique | None,
-        generation_failures: list[str],
     ) -> ProposalCritique:
         constraints = _critique_constraints(prior_critique)
-        if generation_failures:
-            constraints.extend(f"Account for generation failure: {item}" for item in generation_failures)
         return ProposalCritique(
             decision=CriticDecision.accept,
             summary=(
@@ -536,6 +561,110 @@ class ProposalAgent:
             unclear_success_criteria=[] if proposal.success_criteria else ["Success criteria missing."],
             required_revisions=[],
             confidence=0.8,
+        )
+
+    def _engineering_fallback_proposal(self, *, state: ResearchState, task: str) -> ResearchProposal:
+        task_header = next(
+            (line.strip() for line in task.splitlines() if line.strip()), "InitialResearchTask.md"
+        )
+        open_obligation_notes = [
+            f"Carry forward open obligation: {obligation}"
+            for obligation in state.open_proof_obligations[:5]
+        ]
+        return ResearchProposal(
+            title="Deterministic audit fallback after structured-output engineering failure",
+            proposal_kind=ProposalKind.literature_audit,
+            precise_goal=(
+                "Continue the user task through a conservative audit-first step after proposal "
+                "generation failed for engineering/schema reasons. Gather provenance, normalize "
+                "definitions and assumptions, and avoid making unsupported scientific claims."
+            ),
+            relevant_assumptions_and_model=[
+                f"Primary task artifact consulted: {task_header}",
+                "Use exactly the model, assumptions, success criteria, and forbidden shortcuts stated in InitialResearchTask.md.",
+                "Treat existing ledgers and imported literature as evidence only when they include durable provenance.",
+                *open_obligation_notes,
+            ],
+            expected_intermediate_lemmas=[
+                "A normalized statement of the central problem and parameter regimes named in the task.",
+                "A provenance table separating supported claims, conjectural assumptions, and unsupported or ambiguous claims.",
+                "A follow-up obligation list for missing sources, missing definitions, or unclear reductions.",
+            ],
+            algorithmic_subgoals=[
+                "Read InitialResearchTask.md and relevant local literature/provenance artifacts before making claims.",
+                "Use literature search/import/extraction when the task requires cited facts or quote-level provenance.",
+                "Record only factual claims supported by evidence; leave unsupported statements as blockers or follow-up obligations.",
+            ],
+            hypotheses_to_test=[
+                "The workspace contains or can import enough provenance to answer at least part of the task without relying on folklore.",
+            ],
+            questions_to_answer=[
+                "Which requested claims are supported by local quote-level provenance?",
+                "Which requested claims remain unsupported, ambiguous, or dependent on missing sources?",
+                "What concrete literature, derivation, or formalization obligation should run next?",
+            ],
+            assertions_used_as_assumptions=[
+                "Only the task text and locally validated evidence are established premises for this fallback step.",
+            ],
+            must_not_assume=[
+                "Do not reinterpret structured-output or tool-call failures as scientific objections or evidence.",
+                "Do not promote URL-only, folklore, or unsupported claims into the claim ledger.",
+            ],
+            critic_constraints=[],
+            plausibility_argument=(
+                "A schema/tool-call failure is an engineering issue, not a research critique. A conservative "
+                "literature-audit fallback can still make useful progress while preserving the distinction "
+                "between system reliability problems and scientific evidence."
+            ),
+            success_criteria=[
+                "A structured audit report or obligation run with at least one factual claim supported by durable evidence.",
+                "A clear separation between supported, conjectural, unsupported, and missing-source statements.",
+                "Concrete next obligations for any gaps that block the original task.",
+            ],
+            partial_success_criteria=[
+                "At least one relevant source or local provenance artifact is identified.",
+                "At least one missing-source or unsupported-claim gap is recorded precisely.",
+            ],
+            required_tools=[
+                "artifact_retrieval",
+                "literature_search/import/extract/query when the task requires literature provenance",
+            ],
+            known_risks_and_barriers=[
+                "The fallback may only produce a gap map if required papers cannot be imported automatically.",
+                "Existing LiteratureDB entries may be incomplete or irrelevant and must not be overinterpreted.",
+            ],
+            literature_queries=[
+                "central definitions, assumptions, and lower bounds named in the task",
+                "primary sources for each cited conjecture or reduction in the task",
+            ],
+            resource_model="Use the resource model requested by InitialResearchTask.md; if absent, state model assumptions explicitly before making complexity claims.",
+            obligation_statements=[
+                "Normalize the central task definitions and classify which claims are supported, conjectural, unsupported, or missing provenance.",
+                "Identify and import or queue primary literature sources needed for the task, with quote-level provenance where available.",
+                "Record concrete follow-up obligations for missing citations, unclear reductions, or unsupported parameter regimes.",
+            ],
+        )
+
+    def _engineering_fallback_accept_critique(self, proposal: ResearchProposal) -> ProposalCritique:
+        return ProposalCritique(
+            decision=CriticDecision.accept,
+            summary=(
+                "Accepted deterministic audit fallback after structured-output engineering failure; "
+                "the engineering failure is not treated as a scientific critic objection."
+            ),
+            consistency_with_task=(
+                "The fallback preserves the original task and asks for conservative provenance before "
+                "accepting scientific claims."
+            ),
+            plausibility=(
+                "High as a recovery step: it performs auditable scoping/literature work without relying "
+                "on malformed model outputs."
+            ),
+            barrier_risks=[],
+            missing_complexity_model=[] if proposal.resource_model else ["Resource model missing."],
+            unclear_success_criteria=[] if proposal.success_criteria else ["Success criteria missing."],
+            required_revisions=[],
+            confidence=0.75,
         )
 
     def _mock_proposal(self, state: ResearchState) -> ResearchProposal:

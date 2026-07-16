@@ -102,3 +102,4 @@ router:
           enable_thinking: false
       task_types:
         - literature_extraction
+        - structured_finalization

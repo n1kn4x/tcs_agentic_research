@@ -54,6 +54,7 @@ from tcs_agentic_research.schemas import (
     CriticDecision,
     ModelProfile,
     ObligationRun,
+    ObligationRunSubmission,
     PaperMetadata,
     ProposalCritique,
     ProposalSubmission,
@@ -338,6 +339,125 @@ def test_structured_tool_completion_uses_openai_tool_calls(tmp_path: Path) -> No
     assert store.read_jsonl(ArtifactStore.MODEL_LEDGER)[-1]["completion_tokens"] == 10
 
 
+def test_final_tool_payload_can_be_repaired_with_json_schema_formatter(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    router = LLMRouter(
+        RouterSettings(
+            default_task="routine",
+            profiles={
+                "deep": ModelProfile(
+                    model="tool-reasoner",
+                    supports_tools=True,
+                    task_types=["research_execution"],
+                ),
+                "routine": ModelProfile(
+                    model="formatter",
+                    temperature=0.7,
+                    task_types=["structured_finalization"],
+                ),
+            },
+        ),
+        store=store,
+    )
+    submit_tool = openai_tool_from_schema("submit", "", ObligationRunSubmission)
+    calls: list[dict[str, object]] = []
+
+    def fake_post_chat_completion(
+        profile: ModelProfile,
+        messages: list[dict[str, object]],
+        *,
+        temperature: float,
+        max_tokens: int,
+        json_schema: dict[str, object] | None = None,
+        tools: list[dict[str, object]] | None = None,
+        tool_choice: object | None = None,
+    ) -> dict[str, object]:
+        calls.append(
+            {
+                "model": profile.model,
+                "temperature": temperature,
+                "json_schema": json_schema,
+                "tools": tools,
+                "tool_choice": tool_choice,
+                "messages": messages,
+            }
+        )
+        if len(calls) == 1:
+            assert tools
+            assert json_schema is None
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "tool_calls": [
+                                {
+                                    "id": "call_submit_bad",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "submit",
+                                        "arguments": json.dumps(
+                                            {
+                                                "outcome": "fulfilled",
+                                                "summary": "classified",
+                                                "claim_statements": "![\"Claim A\"]",
+                                                "evidence_type": "informal_argument",
+                                                "tool_result_ids": "!",
+                                                "citation_keys": "!",
+                                                "unresolved_blockers": "!",
+                                                "child_obligation_statements": "!",
+                                            }
+                                        ),
+                                    },
+                                }
+                            ]
+                        }
+                    }
+                ],
+                "usage": {"prompt_tokens": 3, "completion_tokens": 4, "total_tokens": 7},
+            }
+        assert profile.model == "formatter"
+        assert tools is None
+        assert json_schema is not None
+        assert temperature == 0.0
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "content": json.dumps(
+                            {
+                                "outcome": "fulfilled",
+                                "summary": "classified",
+                                "claim_statements": ["Claim A"],
+                                "evidence_type": "informal_argument",
+                                "tool_result_ids": [],
+                                "citation_keys": [],
+                                "unresolved_blockers": [],
+                                "child_obligation_statements": [],
+                            }
+                        )
+                    }
+                }
+            ],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 6, "total_tokens": 11},
+        }
+
+    router._post_chat_completion = fake_post_chat_completion  # type: ignore[method-assign]
+    result, trace = router.complete_structured_with_tools(
+        task_type="research_execution",
+        messages=[{"role": "user", "content": "finish"}],
+        tools=[submit_tool],
+        tool_executors={},
+        schema=ObligationRunSubmission,
+        final_tool_name="submit",
+    )
+
+    assert result.claim_statements == ["Claim A"]
+    assert trace["tool_calls"][0]["status"] == "validation_error"
+    assert trace["finalization"]["mode"] == "json_schema_response_format_repair"
+    assert trace["finalization"]["repair_profile_name"] == "routine"
+    assert len(calls) == 2
+
+
 def test_proposal_generation_toolset_is_read_only(tmp_path: Path) -> None:
     store = _store(tmp_path)
     agent = ProposalAgent(store, _router(store))
@@ -359,6 +479,36 @@ def test_proposal_generation_toolset_is_read_only(tmp_path: Path) -> None:
             "attempt_lean_proof",
         }
     )
+
+
+def test_structured_llm_error_uses_engineering_fallback_not_critic_objection(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    store.write_text(ArtifactStore.RESEARCH_TASK, "# Task\nAudit the literature carefully.")
+    state = ResearchState()
+    store.save_state(state)
+    router = LLMRouter(RouterSettings(profiles={"deep": ModelProfile(model="mock")}), store=store)
+    agent = ProposalAgent(store, router)
+
+    def fake_generate_proposal(**kwargs: object) -> ResearchProposal:
+        raise StructuredLLMError(
+            "turn_3: final_tool_payload_invalid: relevant_assumptions_and_model should be a list"
+        )
+
+    agent._generate_proposal = fake_generate_proposal  # type: ignore[method-assign]
+
+    proposal, critique, proposal_path = agent.generate_and_review(state, max_revisions=1)
+
+    proposal_text = json.dumps(proposal.model_dump(mode="json"), sort_keys=True)
+    assert proposal.proposal_kind == ProposalKind.literature_audit
+    assert proposal.critic_constraints == []
+    assert "final_tool_payload_invalid" not in proposal_text
+    assert "StructuredLLMError" not in proposal_text
+    assert critique.barrier_risks == []
+    assert "not treated as a scientific critic objection" in critique.summary
+    assert store.exists(proposal_path)
+    assert store.load_state().current_proposal_id == proposal.proposal_id  # type: ignore[union-attr]
 
 
 def test_failed_proposal_revisions_convert_to_barrier_analysis(tmp_path: Path) -> None:

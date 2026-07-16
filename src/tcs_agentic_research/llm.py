@@ -22,6 +22,9 @@ T = TypeVar("T", bound=BaseModel)
 logger = logging.getLogger(__name__)
 
 
+STRUCTURED_FINALIZATION_TASK_TYPE = "structured_finalization"
+
+
 class StructuredLLMError(RuntimeError):
     pass
 
@@ -453,13 +456,6 @@ class LLMRouter:
                                         f"that validate as `{schema.__name__}`."
                                     ),
                                 }
-                                history.append(
-                                    _tool_result_message(
-                                        call_id,
-                                        tool_name,
-                                        _model_visible_tool_observation(observation),
-                                    )
-                                )
                                 trace["tool_calls"].append(
                                     {
                                         "turn": turn_index,
@@ -470,7 +466,55 @@ class LLMRouter:
                                         "observation": observation,
                                     }
                                 )
-                                continue
+                                try:
+                                    repair_result, repair_metadata, repair_response = (
+                                        self._repair_final_tool_payload_with_json_schema(
+                                            schema=schema,
+                                            final_tool_name=final_tool_name,
+                                            attempted_payload=arguments,
+                                            validation_error=exc,
+                                        )
+                                    )
+                                    _accumulate_usage(usage_totals, repair_response)
+                                    trace["finalization"] = {
+                                        "turn": turn_index,
+                                        "call_id": call_id,
+                                        "mode": "json_schema_response_format_repair",
+                                        "tool_name": final_tool_name,
+                                        **repair_metadata,
+                                    }
+                                    self._log_call(
+                                        task_type,
+                                        profile_name,
+                                        profile,
+                                        started,
+                                        True,
+                                        schema.__name__,
+                                        failures,
+                                        _usage_payload(usage_totals),
+                                    )
+                                    return repair_result, trace
+                                except Exception as repair_exc:  # noqa: BLE001 - retry through tool loop
+                                    failures.append(
+                                        "turn_"
+                                        f"{turn_index}: final_tool_json_schema_repair_failed: "
+                                        f"{type(repair_exc).__name__}: {repair_exc}"
+                                    )
+                                    observation["json_schema_repair_status"] = "error"
+                                    observation["json_schema_repair_error_type"] = type(
+                                        repair_exc
+                                    ).__name__
+                                    observation["json_schema_repair_error"] = _truncate(
+                                        str(repair_exc), 1200
+                                    )
+                                    history.append(
+                                        _tool_result_message(
+                                            call_id,
+                                            tool_name,
+                                            _model_visible_tool_observation(observation),
+                                        )
+                                    )
+                                    continue
 
                         observation = _execute_openai_tool(tool_name, arguments, tool_executors)
                         history.append(
@@ -555,6 +599,74 @@ class LLMRouter:
             response = client.post(url, headers=headers, json=body)
             _raise_for_status_with_body(response)
             return response.json()
+
+    def _repair_final_tool_payload_with_json_schema(
+        self,
+        *,
+        schema: type[T],
+        final_tool_name: str,
+        attempted_payload: Any,
+        validation_error: Exception,
+    ) -> tuple[T, dict[str, Any], dict[str, Any]]:
+        """Repair a malformed final tool payload through JSON-schema response_format.
+
+        Tool-call schemas are not enforced uniformly by every OpenAI-compatible backend,
+        especially for reasoning models.  When the final tool arguments are close to valid but
+        fail Pydantic validation, route the payload through a deterministic formatter task that
+        uses ``response_format={type: json_schema}`` instead of another tool call.
+        """
+        formatter_profile_name, formatter_profile = self.select_profile(
+            STRUCTURED_FINALIZATION_TASK_TYPE
+        )
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "You are a deterministic structured-output formatter. Convert an "
+                    "attempted final tool-call payload into a JSON object that validates "
+                    "against the response_format JSON schema. Preserve factual content and "
+                    "do not invent scientific claims. Decode JSON-looking strings for list "
+                    "fields when the target schema requires a list. Remove stray leading or "
+                    "trailing exclamation-mark artifacts only when they are clearly formatting "
+                    "corruption, such as `![...]`, `field!`, or `!value`. If a field cannot "
+                    "be recovered, use the schema default or a conservative empty value."
+                ),
+            },
+            {
+                "role": "user",
+                "content": json.dumps(
+                    {
+                        "final_tool_name": final_tool_name,
+                        "target_schema": schema.__name__,
+                        "validation_error": _truncate(str(validation_error), 6000),
+                        "attempted_payload": to_plain(attempted_payload),
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    default=str,
+                ),
+            },
+        ]
+        response_payload = self._post_chat_completion(
+            formatter_profile,
+            messages,
+            # Final schema repair should be deterministic even if the formatter profile is
+            # accidentally configured with non-zero temperature.
+            temperature=0.0,
+            max_tokens=formatter_profile.max_tokens,
+            json_schema=_llm_json_schema(schema),
+        )
+        content = response_payload["choices"][0]["message"].get("content", "")
+        payload = _extract_json(str(content))
+        _strip_system_owned_payload_fields(payload)
+        result = schema.model_validate(payload)
+        metadata = {
+            "repair_task_type": STRUCTURED_FINALIZATION_TASK_TYPE,
+            "repair_profile_name": formatter_profile_name,
+            "repair_model": formatter_profile.model,
+            "repair_response_format": "json_schema",
+        }
+        return result, metadata, response_payload
 
     def _log_call(
         self,
