@@ -85,8 +85,8 @@ class DockerProjectContainer:
     def reset(self) -> None:
         """Remove the project container and portable writable experimenter state.
 
-        This does not remove the global Docker image. The image is intentionally rebuildable
-        from config/Dockerfile rather than copied or deleted with a workspace.
+        This does not remove the global Docker image. The image is rebuildable from the
+        packaged Dockerfile or an explicitly configured Dockerfile.
         """
         self.stop(remove=True)
         if self.experimenter_dir.exists():
@@ -167,7 +167,7 @@ class DockerProjectContainer:
                     "baseUrl": pi.base_url,
                     "api": pi.api,
                     "apiKey": pi.api_key,
-                    "compat": pi.compat,
+                    "compat": pi.provider_capabilities,
                     "models": [
                         {
                             "id": pi.model,

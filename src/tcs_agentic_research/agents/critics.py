@@ -1,21 +1,16 @@
-"""Critic agents for scientific fidelity and deterministic solved verdicts."""
+"""Claim-evidence checks and deterministic solved verdicts."""
 
 from __future__ import annotations
 
-from typing import Any, TypeVar
+from typing import TypeVar
 
 from ..artifact_store import ArtifactStore
-from ..llm import LLMRouter
-from ..prompt_loader import render_prompt
-from ..prompt_serialization import compact_json_dumps
 from ..schemas import (
     ClaimRecord,
     ClaimStatus,
     ClaimType,
     EvidenceType,
-    ProofObligation,
     ReportOutcome,
-    ResearchCritique,
     ResearchReport,
     ResearchState,
     SolvedOutcome,
@@ -48,9 +43,9 @@ CENTRAL_SOLVED_CLAIM_TYPES = {
 def derive_claim_status_from_evidence(claim: ClaimRecord, store: ArtifactStore) -> ClaimStatus:
     """Return the conservative status justified by claim-local evidence.
 
-    This function is intentionally one-way: evidence can certify or refute a claim, but an LLM
-    critic cannot upgrade a claim beyond the evidence attached to that claim. Report-level context
-    is not enough; the relevant artifact/citation must be copied into the claim evidence first.
+    This function is intentionally one-way: evidence can certify or refute a claim, but report
+    context cannot upgrade a claim beyond the evidence attached to that claim. The relevant
+    artifact/citation must be copied into claim-local evidence first.
     """
     evidence_types = {ev.evidence_type for ev in claim.evidence}
     if EvidenceType.counterexample in evidence_types:
@@ -112,107 +107,6 @@ def is_claim_rejected(claim: ClaimRecord) -> bool:
         claim.status in REJECTED_CLAIM_STATUSES
         or any(ev.evidence_type == EvidenceType.counterexample for ev in claim.evidence)
     )
-
-
-class ResearchCriticAgent:
-    def __init__(self, store: ArtifactStore, router: LLMRouter, *, prompt_dir: str | None = None):
-        self.store = store
-        self.router = router
-        self.prompt_dir = prompt_dir
-
-    def review(
-        self, report: ResearchReport, context: Any = ""
-    ) -> tuple[ResearchReport, ResearchCritique]:
-        report = self.enforce_evidence_statuses(report)
-        mock_output = self._mock_critique(report)
-        prompt_payload = {
-            "context": context,
-            "report_to_critique": report.model_dump(mode="json"),
-        }
-        messages = [
-            {
-                "role": "system",
-                "content": render_prompt("research_critic", override_dir=self.prompt_dir),
-            },
-            {
-                "role": "user",
-                "content": "Context and report to critique:\n" + compact_json_dumps(prompt_payload),
-            },
-        ]
-        critique = self.router.complete_structured(
-            task_type="research_critique",
-            messages=messages,
-            schema=ResearchCritique,
-            mock_output=mock_output if self.router.dry_run else None,
-        )
-        report = self.reconcile_report_with_critique(report, critique)
-        return report, critique
-
-    def enforce_evidence_statuses(self, report: ResearchReport) -> ResearchReport:
-        for claim in report.claims_generated:
-            claim.status = derive_claim_status_from_evidence(claim, self.store)
-        return report
-
-    def reconcile_report_with_critique(
-        self, report: ResearchReport, critique: ResearchCritique
-    ) -> ResearchReport:
-        """Apply critic downgrades/refutations without allowing critic-only upgrades."""
-        claims = {claim.claim_id: claim for claim in report.claims_generated}
-        for claim_id in critique.refuted_claim_ids:
-            if claim_id in claims:
-                claims[claim_id].status = ClaimStatus.refuted
-                _add_tag(claims[claim_id], "critic_refuted")
-        for claim_id in critique.downgraded_claim_ids:
-            claim = claims.get(claim_id)
-            if claim is None or claim.status in {ClaimStatus.refuted, ClaimStatus.proved_by_lean}:
-                continue
-            # Do not upgrade or trust model acceptance. Keep the evidence-derived status, but ensure
-            # unsupported central claims remain visibly review-blocked.
-            if not is_claim_acceptably_supported(claim, self.store):
-                if claim.status in {ClaimStatus.cited, ClaimStatus.experimentally_supported}:
-                    claim.status = ClaimStatus.needs_review
-                _add_tag(claim, "critic_downgraded")
-        for claim_id in critique.accepted_claim_ids:
-            claim = claims.get(claim_id)
-            if claim is not None and not is_claim_acceptably_supported(claim, self.store):
-                _add_tag(claim, "critic_acceptance_not_certifying")
-        return report
-
-    def _mock_critique(self, report: ResearchReport) -> ResearchCritique:
-        accepted: list[str] = []
-        downgraded: list[str] = []
-        forced: list[ProofObligation] = []
-        for claim in report.claims_generated:
-            if is_claim_acceptably_supported(claim, self.store):
-                accepted.append(claim.claim_id)
-            else:
-                downgraded.append(claim.claim_id)
-                if claim.claim_type in {
-                    ClaimType.mathematical,
-                    ClaimType.algorithmic,
-                    ClaimType.complexity,
-                    ClaimType.theorem_statement,
-                }:
-                    forced.append(
-                        ProofObligation(
-                            statement=f"Verify or refute claim `{claim.claim_id}`: {claim.statement}",
-                            claim_ids=[claim.claim_id],
-                            suggested_tool="lean"
-                            if claim.claim_type in {ClaimType.mathematical, ClaimType.theorem_statement}
-                            else "informal",
-                        )
-                    )
-        return ResearchCritique(
-            accepted_claim_ids=accepted,
-            downgraded_claim_ids=downgraded,
-            forced_verifications=forced,
-            summary=(
-                "Dry-run mock critic classified claims by claim-local evidence. Unproved "
-                "mathematical, algorithmic, and complexity claims are not accepted as established facts."
-            ),
-            rejects_report=False,
-            reasons=[],
-        )
 
 
 def check_solved_deterministically(

@@ -457,7 +457,7 @@ class LiteratureIndex:
                 )
                 db.execute("INSERT OR IGNORE INTO meta(key, value) VALUES ('fts5', '1')")
             except sqlite3.Error:
-                # Some Python/SQLite builds omit FTS5. LIKE fallback remains correct.
+                # Some Python/SQLite builds omit FTS5; search methods use LIKE in that case.
                 pass
             db.commit()
 
@@ -562,7 +562,7 @@ class LiteratureIndex:
         value = _normalize_alias(alias_type, alias_value)
         if not value:
             return
-        # Preserve the first owner of an alias; duplicate imports then resolve to that paper.
+        # Keep the first owner of an alias; duplicate imports then resolve to that paper.
         db.execute(
             "INSERT OR IGNORE INTO paper_aliases(alias_type, alias_value, paper_id) VALUES (?, ?, ?)",
             (alias_type, value, paper_id),

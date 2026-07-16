@@ -103,7 +103,7 @@ class ProposalAgent:
                     artifact_refs=event_refs,
                     proposal=proposal,
                     critique=critique,
-                    reason="Rejected by proposal critic; converting objections into a barrier-analysis fallback.",
+                    reason="Rejected by proposal critic; converting objections into a barrier-analysis proposal.",
                 )
                 break
 
@@ -120,40 +120,40 @@ class ProposalAgent:
                 reason="Accepted dry-run mock proposal after failed proposal revisions.",
             )
 
-        fallback = self._critic_driven_obstruction_proposal(
+        obstruction_proposal = self._critic_driven_obstruction_proposal(
             state=state,
             task=task,
             prior_proposal=proposal,
             critique=critique,
             generation_failures=generation_failures,
         )
-        fallback_ref = self._write_proposal_artifacts(iteration_dir, fallback)
-        fallback_critique = self._fallback_accept_critique(
-            fallback,
+        obstruction_ref = self._write_proposal_artifacts(iteration_dir, obstruction_proposal)
+        obstruction_critique = self._obstruction_accept_critique(
+            obstruction_proposal,
             prior_critique=critique,
             generation_failures=generation_failures,
         )
         self._record_proposal_event(
-            proposal_id=fallback.proposal_id,
+            proposal_id=obstruction_proposal.proposal_id,
             event_type="generated",
-            artifact_refs=[fallback_ref],
-            proposal=fallback,
-            reason="Deterministic fallback generated from proposal critic objections.",
+            artifact_refs=[obstruction_ref],
+            proposal=obstruction_proposal,
+            reason="Deterministic obstruction-analysis proposal generated from critic objections.",
         )
         self._record_proposal_event(
-            proposal_id=fallback.proposal_id,
+            proposal_id=obstruction_proposal.proposal_id,
             event_type="critic_review",
-            artifact_refs=[fallback_ref],
-            critique=fallback_critique,
-            reason=fallback_critique.summary,
+            artifact_refs=[obstruction_ref],
+            critique=obstruction_critique,
+            reason=obstruction_critique.summary,
         )
         return self._accept_proposal(
             state,
             iteration,
-            fallback,
-            fallback_critique,
-            fallback_ref,
-            reason="Accepted critic-driven obstruction-analysis fallback after failed proposal revisions.",
+            obstruction_proposal,
+            obstruction_critique,
+            obstruction_ref,
+            reason="Accepted critic-driven obstruction-analysis proposal after failed proposal revisions.",
         )
 
     def _generate_proposal(
@@ -400,7 +400,7 @@ class ProposalAgent:
     ) -> ResearchProposal:
         """Create an executable proposal from critic objections instead of oscillating.
 
-        The fallback deliberately avoids claiming that the previous positive route is correct.
+        The proposal deliberately avoids claiming that the previous positive route is correct.
         It asks the research agent to resolve the disputed assumptions, probability/resource
         calculations, or literature gaps and to report a negative/bottleneck result if warranted.
         """
@@ -457,7 +457,7 @@ class ProposalAgent:
             ],
             assertions_used_as_assumptions=[
                 "Only the assumptions explicitly recorded in InitialResearchTask.md and facts supported by local LiteratureDB provenance may be used as established premises.",
-                "The fallback does not assume that the previous proposal's algorithmic claims or success probabilities are correct.",
+                "The obstruction analysis does not assume that the previous proposal's algorithmic claims or success probabilities are correct.",
             ],
             must_not_assume=[
                 "Do not assume any shortcut explicitly disallowed by InitialResearchTask.md.",
@@ -508,7 +508,7 @@ class ProposalAgent:
             ],
         )
 
-    def _fallback_accept_critique(
+    def _obstruction_accept_critique(
         self,
         proposal: ResearchProposal,
         *,
@@ -521,11 +521,11 @@ class ProposalAgent:
         return ProposalCritique(
             decision=CriticDecision.accept,
             summary=(
-                "Accepted deterministic fallback: the proposal converts unresolved critic objections "
-                "into a bounded barrier-analysis research step instead of requiring another proposal revision."
+                "Accepted deterministic obstruction analysis: the proposal converts unresolved critic "
+                "objections into a bounded research step instead of requiring another proposal revision."
             ),
             consistency_with_task=(
-                "The fallback preserves the original task assumptions and explicitly forbids disallowed shortcuts."
+                "The proposal keeps the original task assumptions and explicitly forbids disallowed shortcuts."
             ),
             plausibility=(
                 "High as a diagnostic research step: it does not assume the disputed route is correct and "
@@ -614,7 +614,7 @@ class ProposalAgent:
         return ProposalCritique(
             decision=CriticDecision.accept,
             summary="Dry-run mock proposal is conservative, auditable, and suitable for bootstrapping.",
-            consistency_with_task="It preserves the task assumptions and asks for provenance before strong claims.",
+            consistency_with_task="It keeps the task assumptions and asks for provenance before strong claims.",
             plausibility="High as a scoping and verification pass, not as a claimed breakthrough.",
             barrier_risks=[],
             missing_complexity_model=[]

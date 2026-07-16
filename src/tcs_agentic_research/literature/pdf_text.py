@@ -15,8 +15,8 @@ class PDFTextExtractor:
     """Extract text from imported PDFs and store it next to the paper.
 
     The preferred backend is ``pypdf`` because it is pure Python. If it is unavailable or
-    finds no embedded text, the extractor falls back to ``pdftotext`` and then OCR backends
-    when installed: first ``ocrmypdf`` plus text extraction, then ``pdftoppm`` + ``tesseract``.
+    finds no embedded text, the extractor tries ``pdftotext`` and then OCR backends when
+    installed: first ``ocrmypdf`` plus text extraction, then ``pdftoppm`` + ``tesseract``.
     """
 
     def __init__(self, store: ArtifactStore):
@@ -69,7 +69,7 @@ class PDFTextExtractor:
         if not text.strip():
             raise RuntimeError(
                 f"No extractable text found in {source}. Tried pypdf, pdftotext, and OCR "
-                "fallbacks. Install `ocrmypdf` or `pdftoppm` plus `tesseract` for scanned PDFs."
+                "backends. Install `ocrmypdf` or `pdftoppm` plus `tesseract` for scanned PDFs."
             )
 
         if output_path is None:
@@ -122,12 +122,12 @@ class PDFTextExtractor:
             return output.read_text(encoding="utf-8", errors="replace")
 
     def _extract_with_ocr(self, pdf_path: Path, *, page_separator: str) -> str:
-        """Best-effort OCR fallback for scanned PDFs.
+        """Best-effort OCR extraction for scanned PDFs.
 
         This method intentionally depends only on command-line tools, so OCR support is optional
-        and does not make the base Python package heavier.  It first tries ``ocrmypdf`` because
-        that preserves page layout well, then falls back to rendering pages with ``pdftoppm`` and
-        running ``tesseract`` on each page image.
+        and does not make the base Python package heavier. It first tries ``ocrmypdf`` because
+        it keeps page layout well, then renders pages with ``pdftoppm`` and runs ``tesseract``
+        on each page image.
         """
         text = self._extract_with_ocrmypdf(pdf_path, page_separator=page_separator)
         if text.strip():

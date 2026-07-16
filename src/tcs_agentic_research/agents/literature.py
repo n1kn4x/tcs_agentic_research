@@ -1375,6 +1375,6 @@ def _normalize_title(title: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", title.lower()).strip()
 
 
-def _safe_slug(value: str, *, fallback: str = "paper") -> str:
+def _safe_slug(value: str, *, default: str = "paper") -> str:
     slug = re.sub(r"[^A-Za-z0-9_.-]+", "_", value.strip()).strip("._-")
-    return (slug or fallback)[:120]
+    return (slug or default)[:120]

@@ -58,7 +58,7 @@ class LiteratureFetcher:
         doi_value = doi or parse_doi(normalized)
         if doi_value:
             return self.import_doi(
-                doi_value, citation_key=citation_key, fallback_url=normalized, commit=commit
+                doi_value, citation_key=citation_key, source_url=normalized, commit=commit
             )
 
         resource = self._download(normalized)
@@ -142,7 +142,7 @@ class LiteratureFetcher:
         doi: str,
         *,
         citation_key: str | None = None,
-        fallback_url: str | None = None,
+        source_url: str | None = None,
         commit: bool = True,
     ) -> PaperMetadata:
         """Fetch DOI metadata through Crossref and download a PDF when a direct link exists."""
@@ -166,7 +166,7 @@ class LiteratureFetcher:
                 # Restricted DOI PDFs are common. Keep metadata/landing-page provenance instead.
                 pass
 
-        landing_url = fallback_url or f"https://doi.org/{clean_doi}"
+        landing_url = source_url or f"https://doi.org/{clean_doi}"
         try:
             landing = self._download(landing_url)
             source_urls.append(landing.final_url)
@@ -283,7 +283,7 @@ class LiteratureFetcher:
 
 def parse_arxiv_id(value: str) -> str | None:
     text = value.strip()
-    # New-style and old-style IDs, optionally embedded in abs/pdf URLs.
+    # arXiv identifiers, optionally embedded in abs/pdf URLs.
     patterns = [
         r"arxiv\.org/(?:abs|pdf)/([^?#/]+)",
         r"^arXiv:([^\s]+)$",
@@ -319,9 +319,9 @@ def normalize_doi(doi: str) -> str:
     return urllib.parse.unquote(text).strip()
 
 
-def _safe_slug(value: str, *, fallback: str = "paper") -> str:
+def _safe_slug(value: str, *, default: str = "paper") -> str:
     slug = re.sub(r"[^A-Za-z0-9_.-]+", "_", value.strip()).strip("._-")
-    return (slug or fallback)[:120]
+    return (slug or default)[:120]
 
 
 def _citation_key_from_url(url: str) -> str:
@@ -347,7 +347,7 @@ def _citation_key_from_doi(doi: str, metadata: dict[str, Any]) -> str:
     title_word = re.sub(r"[^A-Za-z0-9]+", " ", title).split()
     stem = title_word[0] if title_word else doi.split("/")[-1]
     pieces = [p for p in [first_author, str(year or ""), stem] if p]
-    return _safe_slug("_".join(pieces), fallback="doi_" + _safe_slug(doi))
+    return _safe_slug("_".join(pieces), default="doi_" + _safe_slug(doi))
 
 
 def _crossref_title(metadata: dict[str, Any]) -> str:

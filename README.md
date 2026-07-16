@@ -2,7 +2,7 @@
 
 Artifact-driven research workflow for hard theoretical computer science problems. The system uses **LangGraph** for resumable orchestration, **vLLM** for local LLM serving, persistent files as canonical state, critic stages for scientific fidelity, and a LEAP-inspired **Lean** harness for formal verification.
 
-This repository is a scaffold that can run conservative dry-run iterations immediately after installing dependencies, then be connected to local vLLM models for real agentic research attempts.
+This repository can run conservative dry-run iterations immediately after installing dependencies, then be connected to local vLLM models for real agentic research attempts.
 
 ## Design goals
 
@@ -73,14 +73,13 @@ vllm serve Qwen/Qwen3-8B --served-model-name routine-extractor --port 8001 \
   --default-chat-template-kwargs '{"enable_thinking":false}'
 ```
 
-The router config passes Qwen3.6 sampling parameters per profile: thinking + preserve-thinking for deep agentic/verifier tasks, lower-temperature thinking for precise Lean/code-style tasks, and non-thinking for routine extraction/formatting. The router logs model choice, latency, token usage, structured-output validity, dry-run mock-output usage, and failure modes to `ModelCallLedger.jsonl`.
+The router config passes Qwen3.6 sampling parameters per profile: thinking for deep tool-using tasks, deterministic verifier settings, Lean/code-style proof settings, and non-thinking routine extraction. The router logs model choice, latency, token usage, structured-output validity, dry-run mock-output usage, and failure modes to `ModelCallLedger.jsonl`.
 
 ## Quick start
 
 Create a workspace folder and write the task yourself in `InitialResearchTask.md`.
 The first `run` deterministically creates the state, ledgers, notation file,
 obligation board, and other workspace directories from that Markdown file.
-No initialization interview is used.
 
 ```bash
 mkdir -p workspaces/demo
@@ -119,9 +118,9 @@ Key properties:
 - copying the research workspace to another machine copies experimenter state; the Docker image is rebuilt from the bundled Dockerfile if absent on the new machine;
 - completed run artifacts are imported back into `ExperimentRuns/`;
 - the bundled image includes `pi`, Python, NumPy, pandas, SciPy, SymPy, matplotlib, seaborn, scikit-learn, statsmodels, NetworkX, IPython/Jupyter, git, curl, and build tools;
-- no placeholder fallback is used: if the experimenter is invoked without working Docker/configuration, the command fails.
+- if the experimenter is invoked without working Docker/configuration, the command fails.
 
-The Docker image is global to the local Docker daemon and is intentionally not stored in the workspace. The portable unit is the workspace itself: canonical artifacts, `ExperimentRuns/`, and `.experimenter/workspace/`. If you delete a workspace, its portable experimenter state is deleted with it; stopped/running Docker containers should still be cleaned up with `tcs-research experiment reset` or Docker tooling because a plain filesystem delete cannot notify the Docker daemon. The Dockerfile is available in `src/experimenter/Dockerfile` and packaged as `src/tcs_agentic_research/experimenter/Dockerfile`.
+The Docker image is global to the local Docker daemon and is intentionally not stored in the workspace. The portable unit is the workspace itself: canonical artifacts, `ExperimentRuns/`, and `.experimenter/workspace/`. If you delete a workspace, its portable experimenter state is deleted with it; stopped/running Docker containers should still be cleaned up with `tcs-research experiment reset` or Docker tooling because a plain filesystem delete cannot notify the Docker daemon. The Dockerfile is packaged at `src/tcs_agentic_research/experimenter/Dockerfile`.
 
 Configure the `experimenter:` block in `config.yml`, then manage it with:
 
@@ -185,7 +184,7 @@ while not state.solved:
         obligations = CreateObligationsFromProposal(proposal)
 
     obligation = SelectNextOpenObligation()
-    run = RunTCSResearchSubagentOnOneObligation(obligation)
+    run = RunResearchAgentOnOneObligation(obligation)
     validation = DeterministicObligationGates(run)  # scope/provenance, evidence, consistency
     state = CommitGeneratedClaimsOnlyIfValidated(run, validation)
     solved_verdict = ComputeSolvedVerdict(state, derived_summary_report)
@@ -205,7 +204,6 @@ Nodes durably write artifacts before returning. Reports are derived summaries; t
 - `WorkspaceInitializer`: deterministic bootstrap from `InitialResearchTask.md` into `Nomenclature.yml`, `ResearchState.json`, ledgers, directories, and an empty obligation board.
 - `ProposalAgent`: proposal generator using native OpenAI/vLLM tool calls plus proposal critic with revision/rejection logic. Private model reasoning is not replayed into future contexts; only committed proposal artifacts are.
 - `ResearchAgent`: executes one selected obligation in a native OpenAI/vLLM tool-call loop and finishes with a flat obligation-run submission; deterministic gates decide which generated claim statements are committed.
-- `ResearchCriticAgent`: distinguishes proofs, citations, experiments, informal arguments, conjectures, refutations, and forced verification obligations.
 - `LiteratureResearcher`: modular literature pipeline for optional OpenAlex candidate discovery, transactional arXiv/DOI/PDF import, PDF text extraction, theorem/algorithm extraction, duplicate detection, flat statement rows, and quote-provenance query answers.
 - `TheoremProverAgent` / `LEAPHarness`: Lean proof search with local Lean declaration retrieval, direct formalization, revision, blueprint decomposition, AND-OR proof DAGs, and strict `sorry` discipline.
 - `ExperimentAgent`: Dockerized pi-backed experiment runner for simulations, brute-force searches, numerical checks, plots, and data-gathering tasks. It mounts canonical artifacts read-only and imports run artifacts into `ExperimentRuns/`.
@@ -230,11 +228,11 @@ Partial LEAP results are still recorded: proved lemmas, open goals, blocked goal
 Prompts live in `src/tcs_agentic_research/prompts/*.md` and are intended to be edited.
 Structured prompts contain schema placeholders like `{{ProposalSubmission}}` and `{{ObligationRunSubmission}}`. At runtime
 each placeholder is replaced with the full Pydantic JSON Schema. The structured-call output
-schema is also sent to vLLM through `guided_json`/`response_format` when supported.
+schema is also sent to vLLM through the `response_format` JSON-schema interface.
 Returned JSON is validated with the same Pydantic model. Tool-call agents use flat submission schemas (for example `ProposalSubmission` and `ObligationRunSubmission`) that the application hydrates into durable proposal, obligation, evidence, and claim records.
 
 All state-changing agent outputs use Pydantic models in `src/tcs_agentic_research/schemas.py` and
-are serialized as JSON/JSONL/YAML artifacts. Native tool-call agents can use different toolsets 
+are serialized as JSON/JSONL/YAML artifacts. Native tool-call agents can use different toolsets
 of the same underlying tools.
 
 ## Extending the system

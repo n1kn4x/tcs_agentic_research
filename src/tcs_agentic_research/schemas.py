@@ -323,28 +323,6 @@ class ProofObligation(StrictModel):
     artifact_refs: list[ArtifactRef] = Field(default_factory=list)
 
 
-class ResearchReportSubmission(StrictModel):
-    """Flat final-tool schema for broad research reports.
-
-    The obligation-first graph primarily uses ObligationRunSubmission. This schema keeps the
-    non-obligation report path simple by avoiding nested ClaimRecord/EvidenceRecord objects in
-    final tool arguments.
-    """
-
-    outcome: ReportOutcome
-    executive_summary: str
-    claim_statements: list[str] = Field(default_factory=list)
-    claim_type: ClaimType = ClaimType.mathematical
-    evidence_type: EvidenceType = EvidenceType.informal_argument
-    evidence_summary: str = ""
-    tool_result_ids: list[str] = Field(default_factory=list)
-    citation_keys: list[str] = Field(default_factory=list)
-    proof_obligation_statements: list[str] = Field(default_factory=list)
-    unresolved_issues: list[str] = Field(default_factory=list)
-    proposed_next_steps: list[str] = Field(default_factory=list)
-    required_verifications: list[str] = Field(default_factory=list)
-
-
 class ResearchReport(StrictModel):
     report_id: str = Field(default_factory=lambda: new_id("report"))
     proposal_id: str = ""
@@ -434,17 +412,6 @@ class ObligationBoard(StrictModel):
     obligations: list[ResearchObligation] = Field(default_factory=list)
     runs: list[ObligationRun] = Field(default_factory=list)
     updated_at: str = Field(default_factory=utc_now)
-
-
-class ResearchCritique(StrictModel):
-    accepted_claim_ids: list[str] = Field(default_factory=list)
-    downgraded_claim_ids: list[str] = Field(default_factory=list)
-    refuted_claim_ids: list[str] = Field(default_factory=list)
-    forced_verifications: list[ProofObligation] = Field(default_factory=list)
-    summary: str
-    rejects_report: bool = False
-    reasons: list[str] = Field(default_factory=list)
-    created_at: str = Field(default_factory=utc_now)
 
 
 class SolvedOutcome(str, Enum):
@@ -676,10 +643,6 @@ class ModelProfile(StrictModel):
     max_tokens: int = 4096
     task_types: list[str] = Field(default_factory=list)
     supports_tools: bool = False
-    structured_output_mode: Literal[
-        "guided_json", "json_schema", "json_schema_guided_json", "json_object"
-    ] = "guided_json"
-    strict_json_schema: bool = True
     extra_body: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -707,7 +670,7 @@ class ExperimenterPiSettings(StrictModel):
     reasoning: bool = True
     context_window: int = 128000
     max_tokens: int = 32768
-    compat: dict[str, Any] = Field(
+    provider_capabilities: dict[str, Any] = Field(
         default_factory=lambda: {
             "supportsDeveloperRole": False,
             "supportsReasoningEffort": False,

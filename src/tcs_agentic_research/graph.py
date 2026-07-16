@@ -61,7 +61,7 @@ class ResearchGraph:
         builder = StateGraph(GraphState)
         builder.add_node("initialize_task", self._node_initialize_task)
         builder.add_node("generate_research_proposal", self._node_generate_proposal)
-        builder.add_node("run_tcs_research_subagent", self._node_run_research)
+        builder.add_node("run_obligation", self._node_run_research)
         builder.add_node("update_research_state", self._node_update_state)
         builder.add_node("compute_solved_verdict", self._node_compute_solved_verdict)
         builder.add_node("independent_replication", self._node_independent_replication)
@@ -72,8 +72,8 @@ class ResearchGraph:
             self._route_after_initialize,
             {"continue": "generate_research_proposal", "end": END},
         )
-        builder.add_edge("generate_research_proposal", "run_tcs_research_subagent")
-        builder.add_edge("run_tcs_research_subagent", "update_research_state")
+        builder.add_edge("generate_research_proposal", "run_obligation")
+        builder.add_edge("run_obligation", "update_research_state")
         builder.add_edge("update_research_state", "compute_solved_verdict")
         builder.add_conditional_edges(
             "compute_solved_verdict",
@@ -111,12 +111,10 @@ class ResearchGraph:
             raise RuntimeError(
                 "Install `langgraph-checkpoint-sqlite` to use durable graph checkpoints."
             ) from exc
-        candidate = SqliteSaver.from_conn_string(str(self.store.root / "GraphCheckpoints.sqlite"))
-        # Some LangGraph versions return a context manager; others return the saver directly.
-        if hasattr(candidate, "__enter__") and not hasattr(candidate, "get_tuple"):
-            self._checkpointer_context = candidate
-            return candidate.__enter__()
-        return candidate
+        self._checkpointer_context = SqliteSaver.from_conn_string(
+            str(self.store.root / "GraphCheckpoints.sqlite")
+        )
+        return self._checkpointer_context.__enter__()
 
     def _node_initialize_task(self, graph_state: GraphState) -> dict[str, Any]:
         state = WorkspaceInitializer(self.store).ensure_initialized()
@@ -325,29 +323,6 @@ class ResearchGraph:
             state.artifact_refs.append(report_ref)
         self.store.save_state(state)
         return report_ref.path
-
-    def _apply_report_to_state(self, state: ResearchState, report: ResearchReport, report_path: str) -> None:
-        report_ref = self.store.artifact_ref(report_path)
-        state.last_report_ref = report_ref
-        if report_ref.path not in {ref.path for ref in state.artifact_refs}:
-            state.artifact_refs.append(report_ref)
-        report_open_obligations = [
-            obligation.statement
-            for obligation in report.proof_obligations
-            if obligation.status in {"open", "in_progress", "blocked"}
-        ]
-        proved_or_refuted_obligations = {
-            obligation.statement
-            for obligation in report.proof_obligations
-            if obligation.status in {"proved", "experimentally_supported", "refuted"}
-        }
-        merged_open_obligations = [
-            obligation
-            for obligation in [*state.open_proof_obligations, *report_open_obligations]
-            if obligation not in proved_or_refuted_obligations
-        ]
-        self._refresh_state_from_claim_ledger(state, open_obligations=merged_open_obligations)
-        self.store.save_state(state)
 
     def _refresh_state_from_claim_ledger(
         self, state: ResearchState, *, open_obligations: list[str] | None = None

@@ -12,14 +12,14 @@ In the end, call `submit_research_proposal` with arguments matching the flat `Pr
 Use `obligation_statements` for concrete factual work items to run next; do not write a claim that the proposal itself succeeds.
 Use the complete JSON schema inserted below for the final submitted proposal:
 {{ProposalSubmission}}
-If your your final response does not fit this schema, it will be rejected.
+If your final response does not fit this schema, it will be rejected.
 
 Think privately, but do not expose private reasoning in assistant content or tool arguments.
 The research proposal you submit will, after an accepted review, be executed by an agent and you will receive back the result of the execution.
 It makes sense to structure the research as a multi-step process. However, after a few research steps the system should conclude.
-If no prior research steps have been taken it makes sense to first map out the road between where we are and were we need to get to.
+If no prior research steps have been taken, first map the path between the current state and the target result.
 That might include but is not limited to filling unknown but important information from the research task.
-Following the step where the facts have been layed out clearly, almost always as creative step or a bright idea is needed. That might be a new way to combine things or a finding special cases or generalizations.
+After the facts have been laid out clearly, a creative step is often needed: a new way to combine tools, a special case, or a useful generalization.
 It might also be looking for inspiration in other literature or connecting subjects.
 When you encounter an obstacle, be constructive on how this obstacle can be overcome. Most of the time, in these exact situations lies the progress in science.
 When you submit a research proposal, it must include a precise goal, proposal kind, model/assumptions, expected lemmas or subgoals, hypotheses/questions to test, plausibility argument, success and partial-success criteria, required tools, known risks/barriers, visible literature queries, and concrete `obligation_statements`.

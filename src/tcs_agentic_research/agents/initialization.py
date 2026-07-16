@@ -10,8 +10,8 @@ class WorkspaceInitializer:
     """Create the machine artifacts required by the research loop.
 
     A workspace is initialized from a single user-authored Markdown file:
-    ``InitialResearchTask.md``.  No interview or LLM synthesis is involved; the task file is
-    the canonical problem definition used by the rest of the system.
+    ``InitialResearchTask.md``. The task file is the canonical problem definition used by the
+    rest of the system.
     """
 
     def __init__(self, store: ArtifactStore):

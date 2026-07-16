@@ -60,11 +60,9 @@ from tcs_agentic_research.schemas import (
     ProposalKind,
     ReplicationResult,
     ReportOutcome,
-    ResearchCritique,
     ResearchObligation,
     ResearchProposal,
     ResearchReport,
-    ResearchReportSubmission,
     ResearchState,
     RouterSettings,
     StrictModel,
@@ -82,8 +80,6 @@ PROMPT_SCHEMAS = {
     "literature_researcher": LiteratureExtract,
     "proposal_critic": ProposalCritique,
     "proposal_generator": ProposalSubmission,
-    "research_agent": ResearchReportSubmission,
-    "research_critic": ResearchCritique,
 }
 
 
@@ -226,7 +222,7 @@ def test_tool_schema_can_keep_tool_argument_ids() -> None:
         candidate_id: str
 
     stripped = openai_tool_from_schema("import_candidate", "", CandidateImportArgs)
-    preserved = openai_tool_from_schema(
+    full_schema = openai_tool_from_schema(
         "import_candidate",
         "",
         CandidateImportArgs,
@@ -234,7 +230,7 @@ def test_tool_schema_can_keep_tool_argument_ids() -> None:
     )
 
     assert "candidate_id" not in stripped["function"]["parameters"].get("properties", {})
-    assert "candidate_id" in preserved["function"]["parameters"]["properties"]
+    assert "candidate_id" in full_schema["function"]["parameters"]["properties"]
 
 
 def test_structured_tool_completion_uses_openai_tool_calls(tmp_path: Path) -> None:

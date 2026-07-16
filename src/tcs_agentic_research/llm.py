@@ -117,7 +117,7 @@ class LLMRouter:
 
         ``mock_output`` is only usable in dry-run mode. In real runs, schema placeholders
         in prompts are expanded for model-visible instructions, and the output schema is
-        sent through vLLM ``guided_json``/``response_format`` when available. Schema/API
+        sent through the OpenAI/vLLM ``response_format`` JSON-schema interface. Schema/API
         failures are logged and raised after retry/repair attempts; mock outputs are never
         returned as a recovery path.
         """
@@ -209,8 +209,8 @@ class LLMRouter:
                     _truncate(str(exc), 1000),
                 )
                 # Ask the same endpoint to repair with the invalid response and
-                # concrete validation error. The next call still sends guided_json
-                # with the structured-call output schema.
+                # concrete validation error. The next call still sends the same
+                # structured-call output schema.
                 messages = messages + [
                     {
                         "role": "assistant",
@@ -267,10 +267,10 @@ class LLMRouter:
 
         The model may use ordinary tools for external observations and must finish by calling
         ``final_tool_name`` with arguments that validate against ``schema``. Raw assistant
-        content/reasoning is intentionally not preserved in the returned trace; the trace contains
+        content/reasoning is intentionally omitted from the returned trace; the trace contains
         only tool call IDs, tool names, arguments, observations, validation errors, and
-        finalization metadata. Assistant content JSON is not accepted as a fallback here; agents
-        using this method have a single finalization protocol: the final tool call.
+        finalization metadata. Assistant content JSON is ignored here; agents using this method
+        have a single finalization protocol: the final tool call.
         """
         profile_name, profile = self.select_profile(task_type)
         started = time.perf_counter()
@@ -520,7 +520,7 @@ class LLMRouter:
                     False,
                     schema.__name__,
                     failures,
-                    _usage_payload(usage_totals, fallback=response_payload),
+                    _usage_payload(usage_totals, response_payload=response_payload),
                 )
                 _log_structured_failure(task_type, schema.__name__, failures)
                 raise StructuredLLMError("; ".join(failures)) from exc
@@ -544,7 +544,7 @@ class LLMRouter:
         }
         body.update(profile.extra_body)
         if json_schema is not None:
-            _apply_structured_response_format(body, profile, json_schema)
+            _apply_json_schema_response_format(body, json_schema)
         if tools is not None:
             body["tools"] = tools
         if tool_choice is not None:
@@ -553,14 +553,6 @@ class LLMRouter:
         url = profile.base_url.rstrip("/") + "/chat/completions"
         with httpx.Client(timeout=self.settings.timeout_seconds) as client:
             response = client.post(url, headers=headers, json=body)
-            if json_schema is not None and _should_retry_with_guided_json(response, profile):
-                fallback_body = dict(body)
-                _apply_guided_json_response_format(fallback_body, json_schema)
-                response = client.post(url, headers=headers, json=fallback_body)
-            if tools is not None and _should_retry_without_strict_tools(response):
-                fallback_body = dict(body)
-                fallback_body["tools"] = _tools_without_strict(tools)
-                response = client.post(url, headers=headers, json=fallback_body)
             _raise_for_status_with_body(response)
             return response.json()
 
@@ -612,8 +604,6 @@ def openai_tool_from_schema(
         "parameters": parameters,
     }
     if strict:
-        # OpenAI-compatible structured tools may enforce this; vLLM versions that
-        # do not support strict tools generally ignore the field.
         function["strict"] = True
     return {"type": "function", "function": function}
 
@@ -887,11 +877,11 @@ def _accumulate_usage(totals: dict[str, int], response_payload: dict[str, Any] |
 
 
 def _usage_payload(
-    totals: dict[str, int], *, fallback: dict[str, Any] | None = None
+    totals: dict[str, int], *, response_payload: dict[str, Any] | None = None
 ) -> dict[str, Any] | None:
     if any(totals.get(key) for key in ["prompt_tokens", "completion_tokens", "total_tokens"]):
         return {"usage": {key: value for key, value in totals.items() if value}}
-    return fallback
+    return response_payload
 
 
 def _raise_for_status_with_body(response: httpx.Response) -> None:
@@ -915,39 +905,12 @@ def _format_http_error_body(response: httpx.Response, *, limit: int = 5000) -> s
     return _truncate(json.dumps(payload, ensure_ascii=False, sort_keys=True), limit)
 
 
-def _apply_structured_response_format(
-    body: dict[str, Any], profile: ModelProfile, json_schema: dict[str, Any]
-) -> None:
-    mode = profile.structured_output_mode
-    if mode == "json_schema":
-        body.pop("guided_json", None)
-        body["response_format"] = _strict_json_schema_response_format(
-            json_schema, strict=profile.strict_json_schema
-        )
-    elif mode == "json_schema_guided_json":
-        body["response_format"] = _strict_json_schema_response_format(
-            json_schema, strict=profile.strict_json_schema
-        )
-        body["guided_json"] = json_schema
-    elif mode == "json_object":
-        body.pop("guided_json", None)
-        body["response_format"] = {"type": "json_object"}
-    else:
-        _apply_guided_json_response_format(body, json_schema)
-
-
-def _apply_guided_json_response_format(body: dict[str, Any], json_schema: dict[str, Any]) -> None:
-    body["response_format"] = {"type": "json_object"}
-    # vLLM guided decoding consumes guided_json alongside the JSON response format.
-    body["guided_json"] = json_schema
-
-
-def _strict_json_schema_response_format(json_schema: dict[str, Any], *, strict: bool) -> dict[str, Any]:
-    return {
+def _apply_json_schema_response_format(body: dict[str, Any], json_schema: dict[str, Any]) -> None:
+    body["response_format"] = {
         "type": "json_schema",
         "json_schema": {
             "name": _safe_response_schema_name(str(json_schema.get("title") or "StructuredOutput")),
-            "strict": strict,
+            "strict": True,
             "schema": json_schema,
         },
     }
@@ -958,37 +921,6 @@ def _safe_response_schema_name(name: str) -> str:
     if safe[0].isdigit():
         safe = "Schema_" + safe
     return safe[:64]
-
-
-def _should_retry_with_guided_json(response: httpx.Response, profile: ModelProfile) -> bool:
-    if response.status_code < 400:
-        return False
-    if profile.structured_output_mode not in {"json_schema", "json_schema_guided_json"}:
-        return False
-    text = response.text.lower()
-    # Fallback only for likely structured-output capability/schema-format errors.
-    # Do not hide unrelated failures such as context length, authentication, or server crashes.
-    return "response_format" in text or "json_schema" in text or "json schema" in text
-
-
-def _should_retry_without_strict_tools(response: httpx.Response) -> bool:
-    if response.status_code < 400:
-        return False
-    text = response.text.lower()
-    return "strict" in text and ("tool" in text or "function" in text or "extra" in text)
-
-
-def _tools_without_strict(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    cleaned = to_plain(tools)
-    if not isinstance(cleaned, list):
-        return tools
-    for tool in cleaned:
-        if not isinstance(tool, dict):
-            continue
-        function = tool.get("function")
-        if isinstance(function, dict):
-            function.pop("strict", None)
-    return cleaned
 
 
 def schema_placeholder(schema: type[BaseModel] | str) -> str:
@@ -1095,7 +1027,7 @@ def _structured_repair_prompt(schema: type[BaseModel], exc: Exception) -> str:
         "Validation error:\n"
         f"{_truncate(str(exc), 6000)}\n\n"
         "Return ONLY corrected JSON that validates against the schema already included "
-        "in the prompt and, when supported, the guided schema provided by the API. "
+        "in the prompt and provided through the API. "
         "Do not include Markdown, prose, or an `error` object. Do not add extra fields."
     )
 

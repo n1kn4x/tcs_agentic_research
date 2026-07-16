@@ -7,4 +7,4 @@ Clarify:
 - classical and quantum computational models;
 - baseline algorithms and known lower bounds;
 - whether improvements target time, space, query complexity, or circuit depth;
-- fallback outcomes such as a lower-bound barrier, formalized recurrence, or reproducible counterexample search.
+- alternative outcomes such as a lower-bound barrier, formalized recurrence, or reproducible counterexample search.

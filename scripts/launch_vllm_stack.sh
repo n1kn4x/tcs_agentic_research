@@ -33,8 +33,8 @@ LOG_DIR="${LOG_DIR:-logs/vllm}"
 REPLACE="${REPLACE:-0}"
 TRUST_REMOTE_CODE="${TRUST_REMOTE_CODE:-0}"
 
-# Model defaults are intentionally easy to override. The deep endpoint now uses
-# Qwen3.6-35B-A3B (35B total / 3B activated). It is served text-only because this
+# Model defaults are intentionally easy to override. The deep endpoint uses
+# Qwen3.6-35B-A3B (35B total / 3B activated) in text-only mode because this
 # research stack does not use image/video inputs, freeing memory for KV cache.
 DEEP_MODEL="${DEEP_MODEL:-Qwen/Qwen3.6-35B-A3B}"
 ROUTINE_MODEL="${ROUTINE_MODEL:-Qwen/Qwen3-8B}"

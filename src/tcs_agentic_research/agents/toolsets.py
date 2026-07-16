@@ -17,7 +17,6 @@ from ..schemas import (
     LiteratureExtract,
     LiteratureQueryAnswer,
     PaperMetadata,
-    ResearchReportSubmission,
     StrictModel,
 )
 from ..tooling import AgentTool, Toolset, final_submission_tool
@@ -304,7 +303,7 @@ def literature_toolset(
         if auto_extract_after_import and requested and paper.text_path:
             try:
                 extraction = literature.extract_paper(citation_key=paper.citation_key, use_llm=False)
-            except Exception as exc:  # noqa: BLE001 - preserve the successful import observation
+            except Exception as exc:  # noqa: BLE001 - keep the successful import observation
                 extraction_error = f"{type(exc).__name__}: {exc}"
         return _compact_imported_paper(
             tool_name,
@@ -503,9 +502,9 @@ def research_execution_toolset(
     literature: LiteratureResearcher,
     theorem_prover: TheoremProverAgent,
     experiment: ExperimentAgent,
-    final_tool_name: str = "submit_research_report",
-    final_schema: type[BaseModel] = ResearchReportSubmission,
-    final_tool_description: str | None = None,
+    final_tool_name: str,
+    final_schema: type[BaseModel],
+    final_tool_description: str,
     include_literature_discovery_tools: bool = False,
     include_literature_extraction_tools: bool = False,
     include_theorem_tools: bool = True,
@@ -603,7 +602,7 @@ def research_execution_toolset(
                     ".experimenter/workspace inside the research workspace, so it is portable "
                     "when the workspace is copied. The system imports completed run artifacts "
                     "into ExperimentRuns/. Missing Docker or experimenter "
-                    "configuration is a fatal error, not a blocked placeholder."
+                    "configuration is a fatal error."
                 ),
                 RunExperimentArgs,
                 run_experiment,
@@ -613,12 +612,7 @@ def research_execution_toolset(
     tools.append(
         final_submission_tool(
             final_tool_name,
-            final_tool_description
-            or (
-                "Commit the final flat research-report submission. Use simple strings/lists "
-                "rather than nested ClaimRecord/EvidenceRecord objects; reference any used "
-                "tool_result_id values in tool_result_ids."
-            ),
+            final_tool_description,
             final_schema,
         )
     )

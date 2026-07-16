@@ -10,9 +10,9 @@ from ..schemas import ExperimentResult, ExperimenterSettings
 class ExperimentAgent:
     """Thin adapter from research-agent tools to the experimenter subsystem.
 
-    Experiments are executed by pi inside a project-level Docker container. There is no
-    description-only fallback: missing Docker/configuration raises an experimenter error when an
-    experiment or container lifecycle command is requested.
+    Experiments are executed by pi inside a project-level Docker container. Missing
+    Docker/configuration raises an experimenter error when an experiment or container lifecycle
+    command is requested.
     """
 
     def __init__(self, store: ArtifactStore, settings: ExperimenterSettings | None):

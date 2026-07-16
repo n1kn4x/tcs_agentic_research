@@ -133,9 +133,8 @@ class LEAPHarness:
         elif any(log.exit_code == 127 for log in compiler_logs):
             status = "needs_human_formalization"
         elif summary.proved_goal_ids or summary.accepted_decomposition_ids or dag.root_proved():
-            # A decomposition can solve the proof DAG logically, but this scaffold does not yet
-            # extract a single combined sorry-free Lean file. Therefore it remains partial until
-            # final extraction and Lean verification occur.
+            # Accepted decompositions remain partial until a single combined sorry-free Lean
+            # artifact is extracted and verified.
             status = "partially_proved"
         else:
             status = "failed"
