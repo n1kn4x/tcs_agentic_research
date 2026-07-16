@@ -350,22 +350,9 @@ def _literature_claim_has_statement_support(store: ArtifactStore, claim: ClaimRe
         from ..literature.index import LiteratureIndex
 
         index = LiteratureIndex(store)
-        if any(index.support_exists(support_id) for support_id in support_ids):
-            return True
+        return any(index.support_exists(support_id) for support_id in support_ids)
     except Exception:
-        pass
-    # Backward-compatible fallback for extracted statement IDs present in JSONL.
-    for record in store.read_jsonl("LiteratureDB/extracted_claims.jsonl"):
-        for field in ["theorem_statements", "algorithm_statements", "lower_bound_statements"]:
-            for statement in record.get(field) or []:
-                if not isinstance(statement, dict):
-                    continue
-                if statement.get("statement_id") in support_ids:
-                    return True
-                for quote in statement.get("provenance") or []:
-                    if isinstance(quote, dict) and quote.get("quote_id") in support_ids:
-                        return True
-    return False
+        return False
 
 
 def _add_tag(claim: ClaimRecord, tag: str) -> None:

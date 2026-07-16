@@ -281,6 +281,8 @@ class ResearchAgent:
             ),
             include_literature_discovery_tools=literature_tools_enabled,
             include_literature_extraction_tools=literature_tools_enabled,
+            include_theorem_tools=not literature_tools_enabled,
+            include_experiment_tools=not literature_tools_enabled,
         )
         submission, trace = self.router.complete_structured_with_tools(
             task_type="research_execution",
@@ -568,7 +570,7 @@ class ResearchAgent:
             evidence_type=EvidenceType.citation,
             summary=(
                 f"Native research tool LiteratureDB query `{query}` returned {result_count} "
-                "mapped result(s). Claim-local citation evidence is still required before "
+                "indexed result(s). Claim-local citation evidence is still required before "
                 "accepting literature claims."
             ),
             artifact_refs=[ledger_ref] if ledger_ref is not None else [],

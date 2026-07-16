@@ -288,7 +288,7 @@ def literature_toolset(
         AgentTool(
             "query_literature",
             (
-                "Query the local LiteratureDB in canonical notation. Use this before relying "
+                "Query the local LiteratureDB with quote provenance. Use this before relying "
                 "on prior work, barriers, novelty, or known results. Returned result handles "
                 "may be referenced in final-submission tool_result_ids."
             ),
@@ -508,6 +508,8 @@ def research_execution_toolset(
     final_tool_description: str | None = None,
     include_literature_discovery_tools: bool = False,
     include_literature_extraction_tools: bool = False,
+    include_theorem_tools: bool = True,
+    include_experiment_tools: bool = True,
 ) -> Toolset:
     """Toolset visible to the research agent's native thinking loop."""
 
@@ -575,10 +577,9 @@ def research_execution_toolset(
             auto_extract_after_import=include_literature_extraction_tools,
         )
     )
-    return Toolset(
-        [
-            *artifact_tools,
-            *literature_tools,
+    tools: list[AgentTool] = [*artifact_tools, *literature_tools]
+    if include_theorem_tools:
+        tools.append(
             AgentTool(
                 "attempt_lean_proof",
                 (
@@ -588,7 +589,10 @@ def research_execution_toolset(
                 AttemptLeanProofArgs,
                 attempt_lean_proof,
                 strip_system_owned_fields=False,
-            ),
+            )
+        )
+    if include_experiment_tools:
+        tools.append(
             AgentTool(
                 "run_experiment",
                 (
@@ -604,19 +608,21 @@ def research_execution_toolset(
                 RunExperimentArgs,
                 run_experiment,
                 strip_system_owned_fields=False,
+            )
+        )
+    tools.append(
+        final_submission_tool(
+            final_tool_name,
+            final_tool_description
+            or (
+                "Commit the final flat research-report submission. Use simple strings/lists "
+                "rather than nested ClaimRecord/EvidenceRecord objects; reference any used "
+                "tool_result_id values in tool_result_ids."
             ),
-            final_submission_tool(
-                final_tool_name,
-                final_tool_description
-                or (
-                    "Commit the final flat research-report submission. Use simple strings/lists "
-                    "rather than nested ClaimRecord/EvidenceRecord objects; reference any used "
-                    "tool_result_id values in tool_result_ids."
-                ),
-                final_schema,
-            ),
-        ]
+            final_schema,
+        )
     )
+    return Toolset(tools)
 
 
 # ---------------------------------------------------------------------------
@@ -643,7 +649,7 @@ def _compact_literature_answer(
                 "year": result.year,
                 "kind": result.kind,
                 "label": result.label,
-                "mapped_statement": _compact_text(result.mapped_statement, 1200),
+                "statement_text": _compact_text(result.statement_text, 1200),
                 "summary": _compact_text(result.summary, 800),
                 "score": result.score,
                 "statement_id": result.statement_id,
@@ -758,7 +764,7 @@ def _compact_literature_extract_payload(extract: LiteratureExtract) -> dict[str,
         *extract.algorithm_statements,
         *extract.lower_bound_statements,
     ]
-    support_ids = [statement.statement_id for statement in statements if statement.statement_id]
+    support_ids = [statement.support_id for statement in statements if statement.support_id]
     return {
         "extract_id": extract.extract_id,
         "citation_key": extract.citation_key,
@@ -775,10 +781,10 @@ def _compact_literature_extract_payload(extract: LiteratureExtract) -> dict[str,
         "statements": [
             {
                 "statement_id": statement.statement_id,
-                "support_id": statement.statement_id,
+                "support_id": statement.support_id,
                 "kind": statement.kind,
                 "label": statement.label,
-                "mapped_statement": _compact_text(statement.mapped_statement, 900),
+                "statement_text": _compact_text(statement.statement_text, 900),
                 "quote_id": statement.provenance[0].quote_id if statement.provenance else "",
                 "locator": statement.provenance[0].locator if statement.provenance else "",
             }

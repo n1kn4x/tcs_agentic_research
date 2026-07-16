@@ -52,8 +52,10 @@ class ArtifactStore:
     CORE_JSONL = (CLAIM_LEDGER, PROPOSAL_LEDGER, MODEL_LEDGER)
     LITERATURE_JSONL = (
         "LiteratureDB/papers.jsonl",
+        "LiteratureDB/statements.jsonl",
+        "LiteratureDB/audit_table.jsonl",
+        "LiteratureDB/gaps.jsonl",
         "LiteratureDB/extracted_claims.jsonl",
-        "LiteratureDB/notation_mappings.jsonl",
         "LiteratureDB/query_answers.jsonl",
         "LiteratureDB/candidates.jsonl",
     )
@@ -82,7 +84,7 @@ class ArtifactStore:
                     "symbols": [],
                     "conventions": [],
                     "notes": [
-                        "Populate as needed from the user task, literature ingestion, and agent outputs."
+                        "Populate as needed from the user task and verified agent outputs."
                     ],
                 },
             )
@@ -162,14 +164,13 @@ class ArtifactStore:
             self.append_jsonl(self.CLAIM_LEDGER, claim)
 
     def read_claims(self) -> list[ClaimRecord]:
-        """Replay the claim ledger as typed records, skipping malformed legacy rows."""
+        """Replay the claim ledger as typed records, skipping malformed rows."""
         claims: list[ClaimRecord] = []
         for record in self.read_jsonl(self.CLAIM_LEDGER):
             try:
                 claims.append(ClaimRecord.model_validate(record))
             except Exception:
-                # Workspaces are long-lived and may contain records from older schemas. Keep the
-                # reducer robust; the original JSONL row remains available for audit/debugging.
+                # Keep the reducer robust; the original JSONL row remains available for audit/debugging.
                 continue
         return claims
 
@@ -282,9 +283,12 @@ _MANIFEST_CORE_PRIORITY = {
     ArtifactStore.PROPOSAL_LEDGER: 4,
     ArtifactStore.NOMENCLATURE: 5,
     "LiteratureDB/papers.jsonl": 6,
-    "LiteratureDB/extracted_claims.jsonl": 7,
-    "LiteratureDB/query_answers.jsonl": 8,
-    "LiteratureDB/index.sqlite": 9,
+    "LiteratureDB/statements.jsonl": 7,
+    "LiteratureDB/audit_table.jsonl": 8,
+    "LiteratureDB/gaps.jsonl": 9,
+    "LiteratureDB/extracted_claims.jsonl": 10,
+    "LiteratureDB/query_answers.jsonl": 11,
+    "LiteratureDB/index.sqlite": 12,
 }
 
 
@@ -330,6 +334,12 @@ def _manifest_summary(store: ArtifactStore, rel: str, path: Path) -> str:
         return "Metadata for an imported paper."
     if rel == "LiteratureDB/papers.jsonl":
         return "Imported literature metadata index."
+    if rel == "LiteratureDB/statements.jsonl":
+        return "Flat extracted theorem/definition/lower-bound statements with quote provenance."
+    if rel == "LiteratureDB/audit_table.jsonl":
+        return "Structured supported/unsupported literature-audit rows."
+    if rel == "LiteratureDB/gaps.jsonl":
+        return "Structured missing-source, missing-statement, and follow-up literature-audit gaps."
     if rel == "LiteratureDB/query_answers.jsonl":
         return "Literature query-answer ledger with quote provenance; use JSONL retrieval by answer_id."
     if rel == "LiteratureDB/index.sqlite":

@@ -30,6 +30,7 @@ from tcs_agentic_research.leap.harness import (
 )
 from tcs_agentic_research.experimenter.docker_project import _diagnostic
 from tcs_agentic_research.experimenter.errors import ExperimenterConfigurationError
+from tcs_agentic_research.literature.audit import LiteratureAuditRunner
 from tcs_agentic_research.literature.pdf_text import PDFTextExtractor
 from tcs_agentic_research.llm import (
     LLMRouter,
@@ -884,21 +885,64 @@ def test_literature_registry_deduplicates_papers_by_arxiv_id(tmp_path: Path) -> 
     assert agent.index.find_paper(citation_key="GKZ17").paper_id == imported_first.paper_id
 
 
+def test_simplified_literature_audit_writes_supported_rows_and_gaps(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    store.write_text(
+        ArtifactStore.RESEARCH_TASK,
+        "# OV SETH audit\n\nAudit Orthogonal Vectors lower bounds under SETH.\n",
+    )
+    agent = LiteratureResearcher(store, _router(store))
+    text = (
+        "--- page 1 ---\n\n"
+        "Theorem 1. Assuming SETH, Orthogonal Vectors in logarithmic dimension has no "
+        "truly subquadratic algorithm.\n\n"
+        "References\n"
+        "Theorem 99. This bibliography theorem must not be extracted.\n"
+    )
+    text_ref = store.write_text("LiteratureDB/papers/AuditSmoke/paper.txt", text)
+    agent.import_paper(
+        PaperMetadata(
+            citation_key="AuditSmoke",
+            title="Audit Smoke Paper",
+            source_type="manual",
+            text_path=text_ref.path,
+        )
+    )
+    agent.extract_paper(citation_key="AuditSmoke")
+
+    result = LiteratureAuditRunner(store, agent).run(import_sources=False, extract_statements=False)
+
+    assert result["supported_claim_count"] == 1
+    assert result["gap_count"] >= 1
+    audit_rows = store.read_jsonl("LiteratureDB/audit_table.jsonl")
+    assert audit_rows[0]["status"] == "supported"
+    assert audit_rows[0]["dimension_regime"] == "logarithmic"
+    assert audit_rows[0]["support_id"]
+    assert "bibliography theorem" not in store.read_text("LiteratureDB/statements.jsonl")
+    assert store.read_jsonl(ArtifactStore.CLAIM_LEDGER) == []
+    report = store.read_text("Reports/literature_audit.md")
+    assert "Supported claims / extracted statements" in report
+    assert "Unsupported / gap claims" in report
+
+
 def test_literature_import_rejects_expected_metadata_mismatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     store = _store(tmp_path)
     agent = LiteratureResearcher(store, _router(store))
 
-    def fake_import_arxiv(*args: object, **kwargs: object) -> PaperMetadata:
-        assert kwargs.get("commit") is False
-        return PaperMetadata(
-            citation_key="arxiv_1005.4733",
-            title="A Unified Approach for Minimizing Composite Norms",
-            authors=["Necdet Serhat Aybat", "Garud Iyengar"],
-            year=2010,
-            source_type="arxiv",
-            arxiv_id="1005.4733",
-        )
+    def fake_fetch_arxiv_metadata(arxiv_id: str) -> dict[str, object]:
+        assert arxiv_id == "1005.4733"
+        return {
+            "title": "A Unified Approach for Minimizing Composite Norms",
+            "authors": ["Necdet Serhat Aybat", "Garud Iyengar"],
+            "year": 2010,
+            "url": "https://arxiv.org/abs/1005.4733",
+            "abstract": "Wrong paper for this test.",
+        }
 
+    def fake_import_arxiv(*args: object, **kwargs: object) -> PaperMetadata:
+        raise AssertionError("metadata mismatch must be rejected before writing/fetching assets")
+
+    monkeypatch.setattr(agent.fetcher, "_fetch_arxiv_metadata", fake_fetch_arxiv_metadata)
     monkeypatch.setattr(agent.fetcher, "import_arxiv", fake_import_arxiv)
 
     with pytest.raises(PaperMetadataMismatchError):
@@ -911,9 +955,7 @@ def test_literature_import_rejects_expected_metadata_mismatch(tmp_path: Path, mo
     assert store.read_jsonl("LiteratureDB/papers.jsonl") == []
 
 
-def test_literature_extraction_populates_claim_quote_fields_without_inferring_nomenclature(
-    tmp_path: Path,
-) -> None:
+def test_literature_extraction_populates_claim_quote_fields(tmp_path: Path) -> None:
     store = _store(tmp_path)
     agent = LiteratureResearcher(store, _router(store))
     text = (
@@ -938,6 +980,3 @@ def test_literature_extraction_populates_claim_quote_fields_without_inferring_no
     assert evidence.literature_statement_ids
     assert evidence.literature_quote_ids
     assert evidence.literature_quote_ranges[0]["char_start"] is not None
-    nomenclature = store.read_text(ArtifactStore.NOMENCLATURE)
-    assert "SETH" not in nomenclature
-    assert "OVH" not in nomenclature

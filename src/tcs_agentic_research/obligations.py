@@ -602,21 +602,9 @@ def _literature_support_exists(store: ArtifactStore, support_id: str) -> bool:
     try:
         from .literature.index import LiteratureIndex
 
-        if LiteratureIndex(store).support_exists(support_id):
-            return True
+        return LiteratureIndex(store).support_exists(support_id)
     except Exception:
-        pass
-    for record in store.read_jsonl("LiteratureDB/extracted_claims.jsonl"):
-        for field in ["theorem_statements", "algorithm_statements", "lower_bound_statements"]:
-            for statement in record.get(field) or []:
-                if not isinstance(statement, dict):
-                    continue
-                if statement.get("statement_id") == support_id:
-                    return True
-                for quote in statement.get("provenance") or []:
-                    if isinstance(quote, dict) and quote.get("quote_id") == support_id:
-                        return True
-    return False
+        return False
 
 
 def _enrich_literature_evidence(store: ArtifactStore, evidence: Iterable[EvidenceRecord]) -> None:

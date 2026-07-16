@@ -40,13 +40,13 @@ router:
       model: deep-reasoner
       base_url: http://localhost:8000/v1
       api_key: EMPTY
-      temperature: 0.2
+      temperature: 0.0
       max_tokens: 32768
       supports_tools: true
       structured_output_mode: json_schema
       strict_json_schema: true
       extra_body:
-        top_p: 0.9
+        top_p: 1.0
         top_k: 20
         min_p: 0.0
         presence_penalty: 0.0
@@ -62,13 +62,13 @@ router:
       model: deep-reasoner
       base_url: http://localhost:8000/v1
       api_key: EMPTY
-      temperature: 0.2
+      temperature: 0.0
       max_tokens: 32768
       supports_tools: false
       structured_output_mode: json_schema
       strict_json_schema: true
       extra_body:
-        top_p: 0.9
+        top_p: 1.0
         top_k: 20
         min_p: 0.0
         presence_penalty: 0.0

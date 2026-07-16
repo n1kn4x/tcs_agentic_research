@@ -585,7 +585,7 @@ class ProposalAgent:
                 "At least one concrete next research proposal or vetted barrier with provenance.",
             ],
             partial_success_criteria=[
-                "Updated nomenclature mappings.",
+                "Flat literature statement rows with quote provenance.",
                 "Open proof obligations for LEAP.",
                 "Complexity-derivation checklist for subsequent algorithm claims.",
             ],

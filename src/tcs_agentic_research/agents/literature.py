@@ -1,9 +1,9 @@
-"""Modular literature agent with fetching, extraction, notation mapping, and retrieval.
+"""Modular literature agent with fetching, extraction, indexing, and retrieval.
 
 The agent is deliberately usable outside the LangGraph loop: network/PDF/retrieval pieces
 live in ``tcs_agentic_research.literature`` services, while this class coordinates durable
 artifacts and optional LLM extraction. Other agents should call ``answer_query`` rather than
-reading raw literature records so they always receive mapped nomenclature and quote provenance.
+reading raw literature records so they receive stable statement/support IDs and quote provenance.
 """
 
 from __future__ import annotations
@@ -15,13 +15,17 @@ from typing import Any
 from ..artifact_store import ArtifactStore
 from ..literature.fetchers import (
     LiteratureFetcher,
+    _citation_key_from_doi,
+    _crossref_authors,
+    _crossref_title,
+    _crossref_venue,
+    _crossref_year,
     normalize_arxiv_id,
     normalize_doi,
     parse_arxiv_id,
     parse_doi,
 )
 from ..literature.index import LiteratureIndex
-from ..literature.nomenclature import NomenclatureMapper
 from ..literature.openalex import OpenAlexClient
 from ..literature.pdf_text import PDFTextExtractor
 from ..literature.retrieval import LiteratureRetriever
@@ -63,7 +67,6 @@ class LiteratureResearcher:
         self.prompt_dir = prompt_dir
         self.fetcher = LiteratureFetcher(store)
         self.pdf_extractor = PDFTextExtractor(store)
-        self.mapper = NomenclatureMapper(store)
         needs_index_rebuild = not store.exists(LiteratureIndex.INDEX_PATH)
         self.index = LiteratureIndex(store)
         has_literature_artifacts = bool(
@@ -72,7 +75,7 @@ class LiteratureResearcher:
         )
         if (needs_index_rebuild or self.index.is_empty()) and has_literature_artifacts:
             self.index.rebuild()
-        self.retriever = LiteratureRetriever(store, self.mapper, index=self.index)
+        self.retriever = LiteratureRetriever(store, index=self.index)
         self.openalex = OpenAlexClient()
 
     # ------------------------------------------------------------------
@@ -154,10 +157,28 @@ class LiteratureResearcher:
         """
         arxiv_id = parse_arxiv_id(url)
         doi_value = doi or parse_doi(url)
-        existing = None
         if arxiv_id:
-            existing = self.index.find_paper(arxiv_id=arxiv_id)
-        elif doi_value:
+            return self.import_arxiv(
+                arxiv_id,
+                citation_key=citation_key,
+                extract_text=extract_text,
+                expected_title=expected_title,
+                expected_authors=expected_authors,
+                expected_year=expected_year,
+                expected_venue=expected_venue,
+            )
+        if doi_value and (parse_doi(url) or not url.lower().startswith(("http://", "https://"))):
+            return self.import_doi(
+                doi_value,
+                citation_key=citation_key,
+                extract_text=extract_text,
+                expected_title=expected_title,
+                expected_authors=expected_authors,
+                expected_year=expected_year,
+                expected_venue=expected_venue,
+            )
+        existing = None
+        if doi_value:
             existing = self.index.find_paper(doi=doi_value)
         elif citation_key:
             existing = self.index.find_paper(citation_key=citation_key)
@@ -209,14 +230,27 @@ class LiteratureResearcher:
             if citation_key:
                 self.index.add_alias(existing.paper_id, "citation_key", citation_key)
             return self._extract_text_if_requested(existing, extract_text=extract_text)
-        paper = self.fetcher.import_arxiv(clean_id, citation_key=citation_key, commit=False)
+        # Transactional validation: inspect arXiv metadata before downloading/writing PDFs.
+        metadata = self.fetcher._fetch_arxiv_metadata(clean_id)
+        provisional = PaperMetadata(
+            citation_key=citation_key or f"arxiv_{_safe_slug(clean_id)}",
+            title=str(metadata.get("title") or f"arXiv:{clean_id}"),
+            authors=list(metadata.get("authors") or []),
+            year=metadata.get("year"),
+            venue="arXiv",
+            url=str(metadata.get("url") or f"https://arxiv.org/abs/{clean_id}"),
+            arxiv_id=clean_id,
+            abstract=str(metadata.get("abstract") or ""),
+            source_type="arxiv",
+        )
         self._validate_expected_metadata(
-            paper,
+            provisional,
             expected_title=expected_title,
             expected_authors=expected_authors,
             expected_year=expected_year,
             expected_venue=expected_venue,
         )
+        paper = self.fetcher.import_arxiv(clean_id, citation_key=citation_key, commit=False)
         canonical = self.import_paper(paper)
         return self._extract_text_if_requested(canonical, extract_text=extract_text)
 
@@ -244,14 +278,27 @@ class LiteratureResearcher:
             if citation_key:
                 self.index.add_alias(existing.paper_id, "citation_key", citation_key)
             return self._extract_text_if_requested(existing, extract_text=extract_text)
-        paper = self.fetcher.import_doi(clean_doi, citation_key=citation_key, commit=False)
+        # Transactional validation: inspect Crossref metadata before downloading/writing assets.
+        metadata = self.fetcher._fetch_crossref_metadata(clean_doi)
+        provisional = PaperMetadata(
+            citation_key=citation_key or _citation_key_from_doi(clean_doi, metadata),
+            title=_crossref_title(metadata) or f"DOI:{clean_doi}",
+            authors=_crossref_authors(metadata),
+            year=_crossref_year(metadata),
+            venue=_crossref_venue(metadata),
+            url=f"https://doi.org/{clean_doi}",
+            doi=clean_doi,
+            abstract=str(metadata.get("abstract") or ""),
+            source_type="doi",
+        )
         self._validate_expected_metadata(
-            paper,
+            provisional,
             expected_title=expected_title,
             expected_authors=expected_authors,
             expected_year=expected_year,
             expected_venue=expected_venue,
         )
+        paper = self.fetcher.import_doi(clean_doi, citation_key=citation_key, commit=False)
         canonical = self.import_paper(paper)
         return self._extract_text_if_requested(canonical, extract_text=extract_text)
 
@@ -290,7 +337,7 @@ class LiteratureResearcher:
         return text_path
 
     # ------------------------------------------------------------------
-    # Extraction and nomenclature mapping
+    # Extraction and statement indexing
     # ------------------------------------------------------------------
     def extract_paper(
         self,
@@ -373,15 +420,17 @@ class LiteratureResearcher:
                     *extract.algorithm_statements,
                     *extract.lower_bound_statements,
                 ]
-                statement_ids = [statement.statement_id for statement in statements]
-                support_ids.extend(statement_ids)
+                statement_support_ids = [
+                    statement.support_id for statement in statements if statement.support_id
+                ]
+                support_ids.extend(statement_support_ids)
                 citation_keys.append(extract.citation_key)
                 processed.append(
                     {
                         "citation_key": extract.citation_key,
                         "paper_id": extract.paper_id,
                         "extract_id": extract.extract_id,
-                        "support_ids": statement_ids,
+                        "support_ids": statement_support_ids,
                         "theorem_count": len(extract.theorem_statements),
                         "algorithm_count": len(extract.algorithm_statements),
                         "lower_bound_count": len(extract.lower_bound_statements),
@@ -429,12 +478,11 @@ class LiteratureResearcher:
         *,
         citation_key: str,
         paper_text: str,
-        nomenclature_yaml: str | None = None,
         paper_id: str = "",
         text_artifact_path: str | None = None,
         use_llm: bool = True,
     ) -> LiteratureExtract:
-        """Extract statements/claims and commit only nomenclature-mapped records.
+        """Extract statements/claims and commit statement-level quote provenance.
 
         A local heuristic extractor is used as deterministic dry-run output and as a safety net for
         theorem/algorithm statement presence. Literature claims are downgraded unless at least one
@@ -458,8 +506,6 @@ class LiteratureResearcher:
                     "content": (
                         f"Citation key: {citation_key}\n"
                         f"Paper ID: {paper_id}\n"
-                        f"Nomenclature (canonical notation; map all outputs to it):\n"
-                        f"{nomenclature_yaml or self.store.read_text(ArtifactStore.NOMENCLATURE)}\n\n"
                         "Paper text/excerpt (extract exact quote provenance with offsets/locators "
                         "when possible):\n"
                         f"{paper_text[:45000]}"
@@ -480,26 +526,21 @@ class LiteratureResearcher:
                 extract = heuristic
         else:
             extract = heuristic
-        extract = self._postprocess_extract(
+        extract, support_ids_by_statement = self._postprocess_extract(
             extract,
             heuristic=heuristic,
             citation_key=citation_key,
             paper_id=paper_id,
             text_ref=text_ref,
         )
-        self._commit_extract(extract)
+        self._commit_extract(extract, support_ids_by_statement=support_ids_by_statement)
         return extract
 
     def answer_query(self, query: str, *, limit: int = 10) -> LiteratureQueryAnswer:
-        """Answer a literature query with mapped notation, quote provenance, and duplicates."""
+        """Answer a literature query with statement handles, quote provenance, and duplicates."""
         answer = self.retriever.answer_query(query, limit=limit)
         self.store.append_jsonl("LiteratureDB/query_answers.jsonl", answer)
         return answer
-
-    def query_local(self, query: str, *, limit: int = 10) -> list[dict[str, Any]]:
-        """Compatibility wrapper returning mapped query results as plain dicts."""
-        answer = self.answer_query(query, limit=limit)
-        return [result.model_dump(mode="json") for result in answer.results]
 
     # ------------------------------------------------------------------
     # OpenAlex discovery / candidate queue
@@ -744,7 +785,7 @@ class LiteratureResearcher:
         citation_key: str,
         paper_id: str,
         text_ref: ArtifactRef | None,
-    ) -> LiteratureExtract:
+    ) -> tuple[LiteratureExtract, dict[str, str]]:
         extract.citation_key = citation_key
         extract.paper_id = extract.paper_id or paper_id
         extract.text_artifact_ref = extract.text_artifact_ref or text_ref
@@ -760,34 +801,6 @@ class LiteratureResearcher:
         if not extract.extracted_claims and heuristic.extracted_claims:
             extract.extracted_claims = heuristic.extracted_claims
 
-        all_mappings = dict(extract.notation_mappings)
-        for statements in [
-            extract.theorem_statements,
-            extract.algorithm_statements,
-            extract.lower_bound_statements,
-        ]:
-            for statement in statements:
-                all_mappings.update(statement.notation_mappings)
-        extract.notation_mappings = all_mappings
-
-        source_refs = [text_ref] if text_ref else []
-        changed_entries = self.mapper.update_from_mappings(
-            all_mappings,
-            source_refs=source_refs,
-            new_entries=extract.new_nomenclature_entries,
-        )
-        for entry in changed_entries:
-            self.store.append_jsonl(
-                "LiteratureDB/notation_mappings.jsonl",
-                {
-                    "citation_key": citation_key,
-                    "symbol": entry.symbol,
-                    "canonical_name": entry.canonical_name,
-                    "aliases": entry.aliases,
-                    "source_refs": [ref.model_dump(mode="json") for ref in source_refs],
-                },
-            )
-
         all_statement_fields = [
             extract.theorem_statements,
             extract.algorithm_statements,
@@ -799,7 +812,6 @@ class LiteratureResearcher:
                     statement,
                     citation_key,
                     extract.paper_id,
-                    extract.notation_mappings,
                     text_ref,
                 )
 
@@ -815,38 +827,65 @@ class LiteratureResearcher:
                 citation_key=citation_key,
                 has_acceptance_statement=has_acceptance_statement,
                 text_ref=text_ref,
-                notation_mappings=extract.notation_mappings,
-                support_ids=self._matching_support_ids_for_claim(claim, extract, support_ids_by_statement),
+                support_ids=self._matching_support_ids_for_claim(
+                    claim, extract, support_ids_by_statement
+                ),
             )
-        return extract
+        return extract, support_ids_by_statement
 
-    def _commit_extract(self, extract: LiteratureExtract) -> None:
+    def _commit_extract(
+        self, extract: LiteratureExtract, *, support_ids_by_statement: dict[str, str]
+    ) -> None:
         self.store.append_jsonl("LiteratureDB/extracted_claims.jsonl", extract)
-        for symbol, canonical in extract.notation_mappings.items():
-            self.store.append_jsonl(
-                "LiteratureDB/notation_mappings.jsonl",
-                {"citation_key": extract.citation_key, "symbol": symbol, "canonical": canonical},
+        self._append_flat_statement_rows(extract, support_ids_by_statement=support_ids_by_statement)
+        # LiteratureDB records are evidence objects. Research/obligation code creates claims that
+        # cite stable support IDs when those statements become part of the global ledger.
+
+    def _append_flat_statement_rows(
+        self, extract: LiteratureExtract, *, support_ids_by_statement: dict[str, str]
+    ) -> None:
+        """Append statement rows for the deterministic literature-audit pipeline."""
+        for statement in [
+            *extract.theorem_statements,
+            *extract.algorithm_statements,
+            *extract.lower_bound_statements,
+        ]:
+            quote = statement.provenance[0] if statement.provenance else None
+            support_id = statement.support_id or support_ids_by_statement.get(
+                statement.statement_id, ""
             )
-        # Do not auto-promote literature-derived statements into the global ClaimLedger.
-        # LiteratureDB records are evidence objects; research/obligation code must explicitly
-        # create claims that cite stable support IDs.
+            self.store.append_jsonl(
+                "LiteratureDB/statements.jsonl",
+                {
+                    "statement_id": statement.statement_id,
+                    "support_id": support_id,
+                    "citation_key": statement.citation_key or extract.citation_key,
+                    "paper_id": statement.paper_id or extract.paper_id,
+                    "kind": statement.kind,
+                    "label": statement.label,
+                    "original_statement": statement.original_statement,
+                    "statement_text": statement.statement_text or statement.original_statement,
+                    "quote_id": quote.quote_id if quote else "",
+                    "quote": quote.quote if quote else statement.original_statement,
+                    "locator": quote.locator if quote else statement.label,
+                    "char_start": quote.char_start if quote else None,
+                    "char_end": quote.char_end if quote else None,
+                    "source_sha256": quote.source_sha256 if quote else "",
+                    "validated_exact_substring": bool(quote.validated) if quote else False,
+                    "confidence": statement.confidence,
+                },
+            )
 
     def _normalize_statement(
         self,
         statement: LiteratureStatement,
         citation_key: str,
         paper_id: str,
-        notation_mappings: dict[str, str],
         text_ref: ArtifactRef | None,
     ) -> None:
         statement.citation_key = statement.citation_key or citation_key
         statement.paper_id = statement.paper_id or paper_id
-        merged_mappings = {**notation_mappings, **statement.notation_mappings}
-        statement.notation_mappings = merged_mappings
-        statement.mapped_statement = self.mapper.map_text(
-            statement.mapped_statement or statement.original_statement,
-            merged_mappings,
-        )
+        statement.statement_text = statement.statement_text or statement.original_statement
         if not statement.provenance:
             statement.provenance = [
                 LiteratureQuote(
@@ -874,14 +913,10 @@ class LiteratureResearcher:
         citation_key: str,
         has_acceptance_statement: bool,
         text_ref: ArtifactRef | None,
-        notation_mappings: dict[str, str],
         support_ids: list[str],
     ) -> None:
         claim.claim_type = ClaimType.literature
-        claim.normalized_statement = self.mapper.map_text(
-            claim.normalized_statement or claim.statement,
-            notation_mappings,
-        )
+        claim.normalized_statement = claim.normalized_statement or claim.statement
         if "literature" not in claim.tags:
             claim.tags.append("literature")
         support_details = self._support_details_for_ids(support_ids)
@@ -947,8 +982,8 @@ class LiteratureResearcher:
             claims.append(
                 ClaimRecord(
                     claim_type=ClaimType.literature,
-                    statement=f"{extract.citation_key} states: {statement.mapped_statement}",
-                    normalized_statement=statement.mapped_statement,
+                    statement=f"{extract.citation_key} states: {statement.statement_text}",
+                    normalized_statement=statement.statement_text,
                     status=ClaimStatus.cited if support_id else ClaimStatus.needs_review,
                     evidence=[
                         EvidenceRecord(
@@ -1023,7 +1058,7 @@ class LiteratureResearcher:
             *extract.algorithm_statements,
             *extract.lower_bound_statements,
         ]:
-            stmt_text = _normalize_title(statement.mapped_statement or statement.original_statement)
+            stmt_text = _normalize_title(statement.statement_text or statement.original_statement)
             if not stmt_text:
                 continue
             support_id = support_ids_by_statement.get(statement.statement_id)
@@ -1056,11 +1091,11 @@ class LiteratureResearcher:
         theorem_statements: list[LiteratureStatement] = []
         algorithm_statements: list[LiteratureStatement] = []
         lower_bound_statements: list[LiteratureStatement] = []
-        for match in _iter_statement_matches(paper_text):
+        scan_text = _strip_reference_sections(paper_text)
+        for match in _iter_statement_matches(scan_text):
             kind = _statement_kind(match.label)
             if kind != "algorithm" and _LOWER_BOUND_RE.search(match.text):
                 kind = "lower_bound"
-            mapped = self.mapper.map_text(match.text)
             quote = LiteratureQuote(
                 citation_key=citation_key,
                 paper_id=paper_id,
@@ -1076,8 +1111,7 @@ class LiteratureResearcher:
                 kind=kind,
                 label=match.label,
                 original_statement=match.text,
-                mapped_statement=mapped,
-                notation_mappings=self.mapper.used_mappings_for_text(match.text),
+                statement_text=match.text,
                 provenance=[quote],
                 confidence=0.55,
             )
@@ -1119,6 +1153,17 @@ _STATEMENT_START_RE = re.compile(
     r"\s*(?:\([^\n]{0,80}\))?\s*(?:[:.]|—|-)"
 )
 _LOWER_BOUND_RE = re.compile(r"(?i)\b(lower bound|impossibility theorem|no-go theorem)\b")
+_REFERENCE_HEADING_RE = re.compile(
+    r"(?im)^\s*(references|bibliography|works cited|literature cited)\s*$"
+)
+
+
+def _strip_reference_sections(text: str) -> str:
+    """Drop bibliography/reference tail before deterministic statement extraction."""
+    match = _REFERENCE_HEADING_RE.search(text)
+    if match:
+        return text[: match.start()]
+    return text
 
 
 def _iter_statement_matches(text: str) -> list[_StatementMatch]:

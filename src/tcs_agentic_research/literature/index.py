@@ -246,6 +246,7 @@ class LiteratureIndex:
                 quote.validated = validated
                 quote_id = quote.quote_id
                 support_id = _stable_id("lit_sup", statement.statement_id, quote_id)
+                statement.support_id = support_id
                 support_ids[statement.statement_id] = support_id
                 db.execute(
                     """
@@ -270,9 +271,8 @@ class LiteratureIndex:
                     """
                     INSERT OR REPLACE INTO statements(
                         statement_id, paper_id, citation_key, kind, label, title,
-                        original_statement, mapped_statement, quote_id, confidence,
-                        notation_json
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        original_statement, statement_text, quote_id, confidence
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         statement.statement_id,
@@ -282,10 +282,9 @@ class LiteratureIndex:
                         statement.label,
                         statement.title,
                         statement.original_statement,
-                        statement.mapped_statement,
+                        statement.statement_text,
                         quote_id,
                         statement.confidence,
-                        json.dumps(statement.notation_mappings, sort_keys=True),
                     ),
                 )
                 db.execute(
@@ -313,7 +312,7 @@ class LiteratureIndex:
                             statement.label,
                             statement.title,
                             statement.original_statement,
-                            statement.mapped_statement,
+                            statement.statement_text,
                             quote.quote,
                         ]
                     )
@@ -340,7 +339,7 @@ class LiteratureIndex:
         return self.support_details(support_id) is not None
 
     def support_details(self, support_id: str) -> dict[str, Any] | None:
-        """Return statement/quote provenance for a support, statement, or quote handle."""
+        """Return statement/quote provenance for a support ID."""
         if not support_id:
             return None
         with self._connect() as db:
@@ -349,47 +348,12 @@ class LiteratureIndex:
                 SELECT sup.support_id, s.statement_id, q.quote_id,
                        COALESCE(s.paper_id, sup.paper_id, q.paper_id) AS paper_id,
                        COALESCE(s.citation_key, sup.citation_key, q.citation_key) AS citation_key,
-                       s.kind, s.label, s.mapped_statement, q.locator, q.char_start,
+                       s.kind, s.label, s.statement_text, q.locator, q.char_start,
                        q.char_end, q.text_sha256, q.validated, sup.support_level, sup.relation
                 FROM supports sup
                 LEFT JOIN statements s ON s.statement_id = sup.statement_id
                 LEFT JOIN quotes q ON q.quote_id = sup.quote_id
                 WHERE sup.support_id = ?
-                LIMIT 1
-                """,
-                (support_id,),
-            ).fetchone()
-            if row:
-                return dict(row)
-            # Backward compatibility: statement/quote IDs are accepted as support handles too.
-            row = db.execute(
-                """
-                SELECT sup.support_id, s.statement_id, q.quote_id,
-                       COALESCE(s.paper_id, sup.paper_id, q.paper_id) AS paper_id,
-                       COALESCE(s.citation_key, sup.citation_key, q.citation_key) AS citation_key,
-                       s.kind, s.label, s.mapped_statement, q.locator, q.char_start,
-                       q.char_end, q.text_sha256, q.validated, sup.support_level, sup.relation
-                FROM statements s
-                LEFT JOIN supports sup ON sup.statement_id = s.statement_id
-                LEFT JOIN quotes q ON q.quote_id = s.quote_id
-                WHERE s.statement_id = ?
-                LIMIT 1
-                """,
-                (support_id,),
-            ).fetchone()
-            if row:
-                return dict(row)
-            row = db.execute(
-                """
-                SELECT sup.support_id, s.statement_id, q.quote_id,
-                       COALESCE(s.paper_id, sup.paper_id, q.paper_id) AS paper_id,
-                       COALESCE(s.citation_key, sup.citation_key, q.citation_key) AS citation_key,
-                       s.kind, s.label, s.mapped_statement, q.locator, q.char_start,
-                       q.char_end, q.text_sha256, q.validated, sup.support_level, sup.relation
-                FROM quotes q
-                LEFT JOIN supports sup ON sup.quote_id = q.quote_id
-                LEFT JOIN statements s ON s.statement_id = sup.statement_id
-                WHERE q.quote_id = ?
                 LIMIT 1
                 """,
                 (support_id,),
@@ -467,10 +431,9 @@ class LiteratureIndex:
                     label TEXT,
                     title TEXT,
                     original_statement TEXT NOT NULL,
-                    mapped_statement TEXT NOT NULL,
+                    statement_text TEXT NOT NULL,
                     quote_id TEXT,
-                    confidence REAL NOT NULL DEFAULT 0.0,
-                    notation_json TEXT NOT NULL DEFAULT '{}'
+                    confidence REAL NOT NULL DEFAULT 0.0
                 );
                 CREATE TABLE IF NOT EXISTS supports(
                     support_id TEXT PRIMARY KEY,
@@ -518,7 +481,7 @@ class LiteratureIndex:
             """
             SELECT 'statement' AS result_kind, s.statement_id, sup.support_id, s.paper_id,
                    s.citation_key, p.title AS paper_title, p.year, s.kind, s.label,
-                   s.mapped_statement, s.original_statement, s.quote_id, q.locator,
+                   s.statement_text, s.original_statement, s.quote_id, q.locator,
                    q.quote, q.char_start, q.char_end, q.text_sha256, q.validated,
                    sup.support_level, sup.relation, bm25(statement_fts) AS rank
             FROM statement_fts
@@ -536,7 +499,7 @@ class LiteratureIndex:
         passage_rows = db.execute(
             """
             SELECT 'text_chunk' AS result_kind, p.passage_id, p.paper_id, p.citation_key,
-                   p.title AS paper_title, NULL AS year, p.locator, p.text AS mapped_statement,
+                   p.title AS paper_title, NULL AS year, p.locator, p.text AS statement_text,
                    p.text AS quote, p.char_start, p.char_end, p.text_sha256,
                    bm25(passage_fts) AS rank
             FROM passage_fts
@@ -555,14 +518,14 @@ class LiteratureIndex:
         terms = _terms(query)
         if not terms:
             return []
-        like_clauses = " OR ".join(["LOWER(mapped_statement) LIKE ?" for _ in terms])
+        like_clauses = " OR ".join(["LOWER(statement_text) LIKE ?" for _ in terms])
         params = [f"%{term}%" for term in terms]
         rows = []
         for row in db.execute(
             f"""
             SELECT 'statement' AS result_kind, s.statement_id, sup.support_id, s.paper_id,
                    s.citation_key, p.title AS paper_title, p.year, s.kind, s.label,
-                   s.mapped_statement, s.original_statement, s.quote_id, q.locator,
+                   s.statement_text, s.original_statement, s.quote_id, q.locator,
                    q.quote, q.char_start, q.char_end, q.text_sha256, q.validated,
                    sup.support_level, sup.relation, 0.0 AS rank
             FROM statements s
@@ -575,20 +538,20 @@ class LiteratureIndex:
             [*params, max(limit * 2, 5)],
         ):
             item = _row_to_dict(row, boost=3.0)
-            item["score"] = _like_score(terms, item.get("mapped_statement", "")) + 3.0
+            item["score"] = _like_score(terms, item.get("statement_text", "")) + 3.0
             rows.append(item)
         passage_like = " OR ".join(["LOWER(text) LIKE ?" for _ in terms])
         for row in db.execute(
             f"""
             SELECT 'text_chunk' AS result_kind, passage_id, paper_id, citation_key,
-                   title AS paper_title, NULL AS year, locator, text AS mapped_statement,
+                   title AS paper_title, NULL AS year, locator, text AS statement_text,
                    text AS quote, char_start, char_end, text_sha256, 0.0 AS rank
             FROM passages WHERE {passage_like} LIMIT ?
             """,
             [*params, max(limit * 2, 5)],
         ):
             item = _row_to_dict(row, boost=1.0)
-            item["score"] = _like_score(terms, item.get("mapped_statement", ""))
+            item["score"] = _like_score(terms, item.get("statement_text", ""))
             rows.append(item)
         rows.sort(key=lambda item: item.get("score", 0.0), reverse=True)
         return rows

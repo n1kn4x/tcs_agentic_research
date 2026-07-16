@@ -54,7 +54,7 @@ class LLMRouter:
                         model="deep-reasoner",
                         base_url="http://localhost:8000/v1",
                         api_key="EMPTY",
-                        temperature=0.2,
+                        temperature=0.0,
                         max_tokens=4096,
                         task_types=[],
                     )
@@ -823,7 +823,7 @@ def _string_limit_for_model_key(key: str, default_limit: int) -> int:
     lowered = key.lower()
     if lowered in {"content", "paper_text", "text", "quote", "quote_excerpt"}:
         return min(default_limit, 3_000)
-    if lowered in {"answer", "mapped_statement", "summary", "abstract"}:
+    if lowered in {"answer", "statement_text", "summary", "abstract"}:
         return min(default_limit, 2_000)
     if lowered in {"error", "arguments"}:
         return min(default_limit, 2_500)
@@ -938,9 +938,7 @@ def _apply_structured_response_format(
 
 def _apply_guided_json_response_format(body: dict[str, Any], json_schema: dict[str, Any]) -> None:
     body["response_format"] = {"type": "json_object"}
-    # vLLM supports guided decoding through guided_json in recent versions.
-    # This remains the compatibility fallback when strict JSON-schema response_format
-    # is unavailable on an OpenAI-compatible backend.
+    # vLLM guided decoding consumes guided_json alongside the JSON response format.
     body["guided_json"] = json_schema
 
 
@@ -1148,6 +1146,7 @@ SYSTEM_OWNED_SCHEMA_FIELDS = {
     "sha256",
     "source_refs",
     "statement_id",
+    "support_id",
     "task_id",
     "text_artifact_ref",
     "updated_at",

@@ -13,6 +13,7 @@ from .agents.theorem_prover import TheoremProverAgent
 from .artifact_store import ArtifactStore
 from .graph import ResearchGraph
 from .llm import LLMRouter
+from .literature.audit import LiteratureAuditRunner
 from .schemas import LeanStatement, PaperMetadata
 
 
@@ -40,6 +41,15 @@ def main(argv: list[str] | None = None) -> int:
     )
     prove_p.add_argument("--import", dest="imports", action="append", default=["TCSResearch.Basic"])
     prove_p.add_argument("--namespace", default="TCSResearch")
+
+    audit_p = sub.add_parser(
+        "lit-audit",
+        help="Run the simplified deterministic literature-audit pipeline",
+    )
+    _add_common(audit_p)
+    audit_p.add_argument("--bibliography", help="YAML source plan/bibliography to use")
+    audit_p.add_argument("--no-import", action="store_true", help="Do not perform network imports")
+    audit_p.add_argument("--no-extract", action="store_true", help="Do not run statement extraction")
 
     lit_p = sub.add_parser("literature", help="Import, extract, query, and test LiteratureDB")
     lit_sub = lit_p.add_subparsers(dest="literature_command", required=True)
@@ -80,7 +90,7 @@ def main(argv: list[str] | None = None) -> int:
     lit_extract.add_argument("--paper-id")
 
     lit_query = lit_sub.add_parser(
-        "query", help="Answer a local literature query with mapped notation"
+        "query", help="Answer a local literature query with quote provenance"
     )
     _add_common(lit_query)
     lit_query.add_argument("--query", required=True)
@@ -151,6 +161,8 @@ def main(argv: list[str] | None = None) -> int:
             return _cmd_prove(args)
         if args.command == "literature":
             return _cmd_literature(args)
+        if args.command == "lit-audit":
+            return _cmd_lit_audit(args)
         if args.command == "experiment":
             return _cmd_experiment(args)
     except Exception as exc:  # noqa: BLE001 - CLI should surface actionable errors
@@ -316,6 +328,20 @@ def _cmd_literature(args: argparse.Namespace) -> int:
         print(json.dumps(payload, indent=2, sort_keys=True))
         return 0
     raise RuntimeError(f"Unknown literature subcommand: {args.literature_command}")
+
+
+def _cmd_lit_audit(args: argparse.Namespace) -> int:
+    store = ArtifactStore(args.workspace)
+    store.initialize_layout()
+    router = LLMRouter.from_config_file(args.config, store=store, dry_run=args.dry_run)
+    literature = LiteratureResearcher(store, router, prompt_dir=args.prompt_dir)
+    result = LiteratureAuditRunner(store, literature).run(
+        bibliography_path=args.bibliography,
+        import_sources=not args.no_import,
+        extract_statements=not args.no_extract,
+    )
+    print(json.dumps(result, indent=2, sort_keys=True))
+    return 0
 
 
 def _cmd_experiment(args: argparse.Namespace) -> int:

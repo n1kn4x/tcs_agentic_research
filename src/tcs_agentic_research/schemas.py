@@ -125,15 +125,6 @@ class ClaimRecord(StrictModel):
     updated_at: str = Field(default_factory=utc_now)
 
 
-class NomenclatureEntry(StrictModel):
-    symbol: str
-    canonical_name: str
-    aliases: list[str] = Field(default_factory=list)
-    definition: str = ""
-    convention: str = ""
-    source_refs: list[ArtifactRef] = Field(default_factory=list)
-
-
 class LiteratureSource(StrictModel):
     source: str
     source_type: Literal["url", "arxiv", "doi", "pdf", "unknown"] = "unknown"
@@ -305,7 +296,6 @@ class LiteratureDependency(StrictModel):
     used_for: str
     provenance: str = ""
     supports_claim_ids: list[str] = Field(default_factory=list)
-    notation_mappings: dict[str, str] = Field(default_factory=dict)
 
 
 class ExperimentResult(StrictModel):
@@ -334,7 +324,7 @@ class ProofObligation(StrictModel):
 
 
 class ResearchReportSubmission(StrictModel):
-    """Flat final-tool schema for legacy broad research reports.
+    """Flat final-tool schema for broad research reports.
 
     The obligation-first graph primarily uses ObligationRunSubmission. This schema keeps the
     non-obligation report path simple by avoiding nested ClaimRecord/EvidenceRecord objects in
@@ -541,9 +531,10 @@ class LiteratureQuote(StrictModel):
 
 
 class LiteratureStatement(StrictModel):
-    """A theorem/algorithm/lower-bound statement normalized to canonical notation."""
+    """A theorem/algorithm/lower-bound statement with quote provenance."""
 
     statement_id: str = Field(default_factory=lambda: new_id("lit_stmt"))
+    support_id: str = ""
     citation_key: str = ""
     paper_id: str = ""
     kind: Literal[
@@ -560,8 +551,7 @@ class LiteratureStatement(StrictModel):
     label: str = ""
     title: str = ""
     original_statement: str
-    mapped_statement: str = ""
-    notation_mappings: dict[str, str] = Field(default_factory=dict)
+    statement_text: str = ""
     provenance: list[LiteratureQuote] = Field(default_factory=list)
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
 
@@ -581,7 +571,7 @@ class LiteratureQueryResult(StrictModel):
     year: int | None = None
     kind: str = ""
     label: str = ""
-    mapped_statement: str
+    statement_text: str
     summary: str = ""
     score: float = 0.0
     statement_id: str = ""
@@ -590,7 +580,6 @@ class LiteratureQueryResult(StrictModel):
     support_level: str = ""
     relation: str = ""
     provenance: list[LiteratureQuote] = Field(default_factory=list)
-    notation_mappings: dict[str, str] = Field(default_factory=dict)
     duplicate_of: str | None = None
 
 
@@ -601,7 +590,6 @@ class LiteratureQueryAnswer(StrictModel):
     results: list[LiteratureQueryResult] = Field(default_factory=list)
     duplicate_results: list[LiteratureDuplicateGroup] = Field(default_factory=list)
     limitations: list[str] = Field(default_factory=list)
-    used_nomenclature: dict[str, str] = Field(default_factory=dict)
     created_at: str = Field(default_factory=utc_now)
 
 
@@ -614,8 +602,6 @@ class LiteratureExtract(StrictModel):
     theorem_statements: list[LiteratureStatement] = Field(default_factory=list)
     algorithm_statements: list[LiteratureStatement] = Field(default_factory=list)
     lower_bound_statements: list[LiteratureStatement] = Field(default_factory=list)
-    notation_mappings: dict[str, str] = Field(default_factory=dict)
-    new_nomenclature_entries: list[NomenclatureEntry] = Field(default_factory=list)
     provenance_notes: str = ""
     created_at: str = Field(default_factory=utc_now)
 

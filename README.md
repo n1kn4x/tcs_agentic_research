@@ -140,7 +140,7 @@ tcs-research experiment reset --workspace workspaces/demo --config config.yml
 ```
 
 ### Subsystem Literature Researcher
-Import and query literature with canonical notation and quote-level provenance:
+Import, extract, query, and audit literature with quote provenance:
 
 ```bash
 tcs-research literature import-arxiv --workspace workspaces/demo \
@@ -167,6 +167,9 @@ tcs-research literature import-candidate --workspace workspaces/demo \
 
 # deterministic smoke test (no vLLM call):
 tcs-research literature test --workspace workspaces/demo --dry-run
+
+# deterministic literature audit pipeline:
+tcs-research lit-audit --workspace workspaces/demo --config config.yml
 ```
 
 
@@ -203,7 +206,7 @@ Nodes durably write artifacts before returning. Reports are derived summaries; t
 - `ProposalAgent`: proposal generator using native OpenAI/vLLM tool calls plus proposal critic with revision/rejection logic. Private model reasoning is not replayed into future contexts; only committed proposal artifacts are.
 - `ResearchAgent`: executes one selected obligation in a native OpenAI/vLLM tool-call loop and finishes with a flat obligation-run submission; deterministic gates decide which generated claim statements are committed.
 - `ResearchCriticAgent`: distinguishes proofs, citations, experiments, informal arguments, conjectures, refutations, and forced verification obligations.
-- `LiteratureResearcher`: modular literature pipeline for OpenAlex search/citation candidate discovery, arXiv/DOI/PDF import, PDF text extraction, theorem/algorithm extraction, nomenclature updates, duplicate detection, and quote-provenance query answers in mapped notation.
+- `LiteratureResearcher`: modular literature pipeline for optional OpenAlex candidate discovery, transactional arXiv/DOI/PDF import, PDF text extraction, theorem/algorithm extraction, duplicate detection, flat statement rows, and quote-provenance query answers.
 - `TheoremProverAgent` / `LEAPHarness`: Lean proof search with local Lean declaration retrieval, direct formalization, revision, blueprint decomposition, AND-OR proof DAGs, and strict `sorry` discipline.
 - `ExperimentAgent`: Dockerized pi-backed experiment runner for simulations, brute-force searches, numerical checks, plots, and data-gathering tasks. It mounts canonical artifacts read-only and imports run artifacts into `ExperimentRuns/`.
 - `IndependentReplicationAgent`: verifies possible breakthroughs from minimized context.
