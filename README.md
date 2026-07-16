@@ -1,248 +1,189 @@
-# Agentic TCS Research System
+# Bounded Agentic TCS Research
 
-Artifact-driven research workflow for hard theoretical computer science problems. The system uses **LangGraph** for resumable orchestration, **vLLM** for local LLM serving, persistent files as canonical state, critic stages for scientific fidelity, and a LEAP-inspired **Lean** harness for formal verification.
+A small, inspectable research loop for theoretical computer science. The language model proposes
+**typed, bounded work**; deterministic Python executes it. Models never receive a general tool loop
+and never decide that their own claims are verified.
 
-This repository can run conservative dry-run iterations immediately after installing dependencies, then be connected to local vLLM models for real agentic research attempts.
+## Why this design
 
-## Design goals
+The previous design combined LangGraph, proposal/critic loops, obligation hydration, nested tool
+calls, large schemas, replayed tool observations, and several overlapping ledgers. It was easy for
+context to grow without bound and hard to tell whether a failure was scientific or merely a malformed
+tool call.
 
-- **Correctness:** claims are typed, status-tracked, and downgraded unless supported by appropriate evidence.
-- **Auditability:** every state-changing output is serialized as JSON/JSONL/YAML/Lean/code under a workspace.
-- **Reproducibility:** experiments store command/config/seeds/logs under `ExperimentRuns/`.
-- **Resumability:** the top-level loop is a LangGraph with SQLite checkpoints.
-- **Extensibility:** prompts are editable Markdown files; agents are ordinary Python classes with Pydantic schemas.
+The replacement follows five rules:
 
-## Canonical workspace artifacts
+1. **One bounded work item at a time.** Literature, proof, experiment, and analysis are separate.
+2. **No model-driven tool loop.** A model returns one small JSON object. Python performs actions.
+3. **Fresh context.** Every call receives the task, one work item, and a small evidence summary—not
+   conversation history or an artifact dump.
+4. **Evidence determines status.** Lean output is `verified`, exact literature quotes are `supported`,
+   experiment output is `observed`, and model synthesis remains a `hypothesis`.
+5. **Failure is progress data.** A failed step is persisted with its input, error, and next action. It
+   is not converted into a fake scientific proposal.
 
-A research workspace contains:
+There is no `solved` bit. The engine eventually enters `review`; a person decides whether the task's
+success criteria are met.
+
+## Workspace contract
+
+Only `InitialResearchTask.md` is user-authored and required. The engine creates:
 
 ```text
-InitialResearchTask.md          user-authored research task, assumptions, criteria
-Nomenclature.yml                canonical symbols and aliases
-ResearchState.json              compact machine state summary
-ObligationBoard.json            obligation-first work queue, runs, generated claims, and blocked reasons
-ClaimLedger.jsonl               accepted/proven mathematical/algorithmic/literature/resource claims
-ProposalLedger.jsonl            proposal events and critic decisions
-ModelCallLedger.jsonl           model routing, latency, token, validation logs
-LiteratureDB/                   papers, discovery candidates, extracted statements/claims, query answers, SQLite index
-LeanProject/                    Lean/Lake project and LEAP proof DAGs
-ExperimentRuns/                 reproducible runs with configs/seeds/logs
-Reports/                        structured reports and derived Markdown
-GraphCheckpoints.sqlite         LangGraph resumability checkpoints
+InitialResearchTask.md       canonical task
+State.json                   small phase/cycle counters
+Queue.json                   bounded work items and terminal status
+Events.jsonl                 append-only lifecycle events
+Findings.jsonl               evidence-typed findings
+ModelCalls.jsonl             tokens, latency, input size, schema, failures
+Runs/NNNN_<id>/              exact input, typed output, and step-local reports
+Reports/                     optional human-facing reports
+LiteratureDB/                created when literature is used
+LeanProject/                 created when proof work is used
+ExperimentRuns/              created when experiment work is used
 ```
 
-Graph state stores references and counters only; these files are canonical.
+`Nomenclature.yml`, proposal/claim ledgers, obligation boards, and graph checkpoints are not part of
+the new design and are never created. Detect or remove old files with:
+
+```bash
+tcs-research doctor --workspace workspaces/demo
+tcs-research doctor --workspace workspaces/demo --clean-legacy
+```
 
 ## Installation
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-pip install -e .
-```
-
-Optional development tools:
-
-```bash
 pip install -e '.[dev]'
-```
-
-Docker must be installed and running if you want to use the experiment subsystem. The experimenter builds and runs a project-level Docker container with internet access and shell access, and fails fast if Docker or `experimenter:` configuration is missing.
-
-## vLLM serving
-
-Start Qwen3.6 for the deep/agentic endpoint and optionally a smaller routine model:
-
-```bash
 cp config.example.yml config.yml
-# edit model names, ports, tensor parallelism, or context lengths if needed
-docker compose -f docker-compose.vllm.yml up
 ```
 
-Or run vLLM directly (Qwen recommends vLLM >= 0.19.0 for Qwen3.6):
-
-```bash
-vllm serve Qwen/Qwen3.6-35B-A3B --served-model-name deep-reasoner --port 8000 \
-  --tensor-parallel-size 4 --max-model-len 262144 \
-  --reasoning-parser qwen3 --enable-auto-tool-choice --tool-call-parser qwen3_coder \
-  --language-model-only \
-  --default-chat-template-kwargs '{"enable_thinking":true,"preserve_thinking":true}'
-
-vllm serve Qwen/Qwen3-8B --served-model-name routine-extractor --port 8001 \
-  --max-model-len 32768 \
-  --default-chat-template-kwargs '{"enable_thinking":false}'
-```
-
-The router config passes Qwen3.6 sampling parameters per profile: thinking for deep tool-using tasks, deterministic verifier settings, Lean/code-style proof settings, and non-thinking routine extraction. The router logs model choice, latency, token usage, structured-output validity, dry-run mock-output usage, and failure modes to `ModelCallLedger.jsonl`.
-
-## Quick start
-
-Create a workspace folder and write the task yourself in `InitialResearchTask.md`.
-The first `run` deterministically creates the state, ledgers, notation file,
-obligation board, and other workspace directories from that Markdown file.
+## Run
 
 ```bash
 mkdir -p workspaces/demo
 cp examples/structured_sat_task.md workspaces/demo/InitialResearchTask.md
 
-# Dry-run mode uses deterministic mock outputs for agent steps and does not call vLLM.
-tcs-research run --workspace workspaces/demo --dry-run --max-iterations 1
+# Deterministic control-flow test; no network, model, Docker, or accepted proof claims.
+tcs-research run --workspace workspaces/demo --dry-run --max-steps 2
 
+# Real bounded work.
+tcs-research run --workspace workspaces/demo --config config.yml --max-steps 1
 tcs-research status --workspace workspaces/demo
 ```
 
-With local vLLM:
+Use small invocations. Inspect the latest `Runs/` directory, then run another step. When the engine
+enters `review`, either review the evidence or explicitly request another planning round:
 
 ```bash
-tcs-research run --workspace workspaces/demo --config config.yml --max-iterations 3
+tcs-research replan --workspace workspaces/demo --config config.yml
+tcs-research run --workspace workspaces/demo --config config.yml --max-steps 1
 ```
 
-### Subsystem LEAP
-Submit a Lean goal to LEAP:
+## Model serving and Qwen3.6
+
+Qwen's advertised native context length is a capacity, not a target. The application limits a request
+to 30,000 characters and an output to 4,096 tokens by default. Long contexts make failures more
+expensive and do not repair bad orchestration.
+
+The default Qwen3.6 profile uses the vendor's precise-coding-style sampling (`temperature=0.6`,
+`top_p=0.95`, `top_k=20`) with `presence_penalty=0`. Qwen explicitly warns that high presence
+penalties can cause language mixing. Thinking is enabled only for reasoning calls and historical
+thinking is not preserved because calls are fresh. Lower temperature is not a JSON validator;
+`response_format` plus Pydantic validation is.
+
+Start the provided services:
 
 ```bash
-tcs-research prove --workspace workspaces/demo --dry-run \
+docker compose -f docker-compose.vllm.yml up
+# or
+./scripts/launch_vllm_stack.sh
+```
+
+The deep endpoint needs `--reasoning-parser qwen3`, but not auto tool choice or a tool-call parser: the
+core sends no tools. Use a recent vLLM version with JSON-schema response-format support.
+
+### Structured-output failure policy
+
+- Schemas are sent once through `response_format`; they are not pasted into prompts.
+- Core schemas contain a few flat strings/lists and at most four work items.
+- Invalid output gets at most one fresh formatting repair on the `format` profile.
+- The repair call sees only the malformed output and validation error, not the growing history.
+- A second failure terminates an evidence-producing model step and is recorded. Scheduling and
+  literature-query planning may fall back to conservative task-derived actions because those are
+  control flow, not scientific claims. No mock or scientific result is used in a real run.
+
+## Literature subsystem
+
+The canonical literature data is intentionally narrow:
+
+```text
+LiteratureDB/papers.jsonl       paper metadata events
+LiteratureDB/candidates.jsonl   OpenAlex discovery queue
+LiteratureDB/statements.jsonl   current exact statement/quote snapshot per paper
+LiteratureDB/papers/...         PDF, extracted text, metadata
+LiteratureDB/index.sqlite       rebuildable search index (not canonical)
+```
+
+A literature step asks the model only for search queries and focus questions. Python then performs a
+bounded OpenAlex search, imports at most the configured number of candidates, extracts statements
+deterministically, and runs local retrieval. Stable statement/quote/support IDs are content-derived.
+A finding is `supported` only when its quote span is found in imported text; otherwise it stays a
+`hypothesis` with an explicit caveat.
+
+Install Poppler's `pdftotext` (`poppler-utils` on Debian/Ubuntu) for substantially better PDF
+layout extraction; `pypdf` remains a fallback.
+
+Manual operations remain available:
+
+```bash
+tcs-research literature search --workspace workspaces/demo --query "SETH Orthogonal Vectors"
+tcs-research literature import-arxiv --workspace workspaces/demo --arxiv-id 1811.12017 --extract-text
+tcs-research literature extract --workspace workspaces/demo --citation-key arxiv_1811.12017
+tcs-research literature query --workspace workspaces/demo --query "logarithmic dimension lower bound"
+tcs-research literature rebuild-index --workspace workspaces/demo
+```
+
+## Lean subsystem
+
+A proof work item formulates one small Lean goal, asks for one direct proof, compiles it, and permits at
+most one compiler-guided repair by default. It does not silently start a decomposition tree. A later
+planning round can create a smaller lemma from the preserved compiler error.
+
+```bash
+tcs-research prove --workspace workspaces/demo --config config.yml \
   --name nat_id --statement "∀ n : Nat, n = n"
 ```
-Install Lean via `elan` for actual verification. The generated project is under `LeanProject/`.
 
-### Subsystem Experimenter
+Only a compiler-successful, `sorry`/`admit`-free file becomes a `verified` finding.
 
-The experiment subsystem runs simulations, numerical checks, plotting jobs, data gathering, and small-instance searches through an existing coding agent (`pi`) inside Docker.
+## Experiment subsystem
 
-Key properties:
+Experiment work uses one structured model call to generate one Python program, then executes exactly
+that program in a resource- and time-bounded Docker container. It does **not** launch a second coding
+agent with another tool loop. The research workspace is read-only and the default container network
+is disabled.
 
-- one persistent Docker container per research workspace/project;
-- the canonical workspace is mounted read-only at `/research` inside the container;
-- portable writable experimenter state lives under `.experimenter/workspace` in the research workspace and is mounted at `/workspace` for scripts, package caches, pi sessions, and run outputs;
-- copying the research workspace to another machine copies experimenter state; the Docker image is rebuilt from the bundled Dockerfile if absent on the new machine;
-- completed run artifacts are imported back into `ExperimentRuns/`;
-- the bundled image includes `pi`, Python, NumPy, pandas, SciPy, SymPy, matplotlib, seaborn, scikit-learn, statsmodels, NetworkX, IPython/Jupyter, git, curl, and build tools;
-- if the experimenter is invoked without working Docker/configuration, the command fails.
-
-The Docker image is global to the local Docker daemon and is intentionally not stored in the workspace. The portable unit is the workspace itself: canonical artifacts, `ExperimentRuns/`, and `.experimenter/workspace/`. If you delete a workspace, its portable experimenter state is deleted with it; stopped/running Docker containers should still be cleaned up with `tcs-research experiment reset` or Docker tooling because a plain filesystem delete cannot notify the Docker daemon. The Dockerfile is packaged at `src/tcs_agentic_research/experimenter/Dockerfile`.
-
-Configure the `experimenter:` block in `config.yml`, then manage it with:
+You can also run a reviewed script directly:
 
 ```bash
-# Build/start the project container
-tcs-research experiment start --workspace workspaces/demo --config config.yml
-
-# Run a one-off experiment through Dockerized pi
 tcs-research experiment run --workspace workspaces/demo --config config.yml \
-  --name smoke --description "Create a Python script that prints 2+2 and record the result."
-
-# Inspect/stop/reset the project container
-tcs-research experiment status --workspace workspaces/demo --config config.yml
-tcs-research experiment stop --workspace workspaces/demo --config config.yml
-tcs-research experiment reset --workspace workspaces/demo --config config.yml
+  --script experiment.py --description "Fixed-seed small-instance check" --seed 7
 ```
 
-### Subsystem Literature Researcher
-Import, extract, query, and audit literature with quote provenance:
+Successful output is `observed`, never mathematical proof.
 
-```bash
-tcs-research literature import-arxiv --workspace workspaces/demo \
-  --arxiv-id 2401.00001 --extract-text
+## Introspection checklist
 
-tcs-research literature extract --workspace workspaces/demo --citation-key arxiv_2401.00001
+For a surprising result, inspect in this order:
 
-tcs-research literature query --workspace workspaces/demo \
-  --query "lower bound for the main subproblem"
+1. `State.json` and `Queue.json` — what was selected and why did it stop?
+2. Latest `Runs/*/input.json` — exact bounded model/context input.
+3. Latest `Runs/*/result.json` — typed outcome, errors, artifacts, next steps.
+4. `ModelCalls.jsonl` — profile, input size, tokens, latency, schema, HTTP failure.
+5. Evidence artifact named by the finding — exact quote, Lean file/log, or experiment output.
 
-# Rebuild the materialized SQLite index of canonical papers, aliases, passages,
-# statements, quotes, and stable support IDs:
-tcs-research literature rebuild-index --workspace workspaces/demo
-
-# Scholar-like discovery via OpenAlex queues candidates only:
-tcs-research literature search --workspace workspaces/demo \
-  --query "quantum LPN lower bound" --limit 20
-
-tcs-research literature discover-related --workspace workspaces/demo \
-  --citation-key arxiv_2401.00001 --direction cited_by --limit 20
-
-tcs-research literature import-candidate --workspace workspaces/demo \
-  --candidate-id cand_abc123 --extract-text
-
-# deterministic smoke test (no vLLM call):
-tcs-research literature test --workspace workspaces/demo --dry-run
-
-# deterministic literature audit pipeline:
-tcs-research lit-audit --workspace workspaces/demo --config config.yml
-```
-
-
-## Top-level loop
-
-The LangGraph implements:
-
-```python
-state = EnsureWorkspaceInitializedFromInitialResearchTask()
-while not state.solved:
-    if no open obligation exists:
-        proposal = GenerateResearchProposal(state, blocked_or_failed_obligations)
-        obligations = CreateObligationsFromProposal(proposal)
-
-    obligation = SelectNextOpenObligation()
-    run = RunResearchAgentOnOneObligation(obligation)
-    validation = DeterministicObligationGates(run)  # scope/provenance, evidence, consistency
-    state = CommitGeneratedClaimsOnlyIfValidated(run, validation)
-    solved_verdict = ComputeSolvedVerdict(state, derived_summary_report)
-
-    if solved_verdict.possible_breakthrough:
-        replication = IndependentReplicationAgent.verify(state, derived_summary_report)
-        state = UpdateResearchState(state, replication)
-
-    if solved_verdict.confirmed_solved:
-        break
-```
-
-Nodes durably write artifacts before returning. Reports are derived summaries; they are not the canonical path for accepting claims. Proposals create obligations, obligation runs generate factual claim statements, and only the deterministic commit manager appends claims from validated runs to `ClaimLedger.jsonl`. The graph is resumable through `GraphCheckpoints.sqlite` using a LangGraph `thread_id`.
-
-## Agents
-
-- `WorkspaceInitializer`: deterministic bootstrap from `InitialResearchTask.md` into `Nomenclature.yml`, `ResearchState.json`, ledgers, directories, and an empty obligation board.
-- `ProposalAgent`: proposal generator using native OpenAI/vLLM tool calls plus proposal critic with revision/rejection logic. Private model reasoning is not replayed into future contexts; only committed proposal artifacts are.
-- `ResearchAgent`: executes one selected obligation in a native OpenAI/vLLM tool-call loop and finishes with a flat obligation-run submission; deterministic gates decide which generated claim statements are committed.
-- `LiteratureResearcher`: modular literature pipeline for optional OpenAlex candidate discovery, transactional arXiv/DOI/PDF import, PDF text extraction, theorem/algorithm extraction, duplicate detection, flat statement rows, and quote-provenance query answers.
-- `TheoremProverAgent` / `LEAPHarness`: Lean proof search with local Lean declaration retrieval, direct formalization, revision, blueprint decomposition, AND-OR proof DAGs, and strict `sorry` discipline.
-- `ExperimentAgent`: Dockerized pi-backed experiment runner for simulations, brute-force searches, numerical checks, plots, and data-gathering tasks. It mounts canonical artifacts read-only and imports run artifacts into `ExperimentRuns/`.
-- `IndependentReplicationAgent`: verifies possible breakthroughs from minimized context.
-
-## LEAP proof discipline
-
-A theorem is accepted as proved only if Lean verifies a final proof with no `sorry`/`admit` placeholders.
-
-A decomposition is accepted only if:
-
-1. the formal sketch compiles;
-2. the parent theorem body is placeholder-free;
-3. placeholders occur only in explicitly declared child lemmas;
-4. an LLM/human reviewer accepts the child lemmas as useful and non-circular;
-5. adding the decomposition preserves proof-DAG acyclicity.
-
-Partial LEAP results are still recorded: proved lemmas, open goals, blocked goals, compiler logs, accepted/rejected decompositions, and recommended next proof steps.
-
-## Prompts and schemas
-
-Prompts live in `src/tcs_agentic_research/prompts/*.md` and are intended to be edited.
-Structured prompts contain schema placeholders like `{{ProposalSubmission}}` and `{{ObligationRunSubmission}}`. At runtime
-each placeholder is replaced with the full Pydantic JSON Schema. The structured-call output
-schema is also sent to vLLM through the `response_format` JSON-schema interface.
-Returned JSON is validated with the same Pydantic model. Tool-call agents use flat submission schemas (for example `ProposalSubmission` and `ObligationRunSubmission`) that the application hydrates into durable proposal, obligation, evidence, and claim records.
-
-All state-changing agent outputs use Pydantic models in `src/tcs_agentic_research/schemas.py` and
-are serialized as JSON/JSONL/YAML artifacts. Native tool-call agents can use different toolsets
-of the same underlying tools.
-
-## Extending the system
-
-1. Add or modify a Pydantic schema in `schemas.py`.
-2. Add an agent class under `src/tcs_agentic_research/agents/`.
-3. Add editable prompts under `prompts/`.
-4. Wire the agent into `graph.py` or call it from an existing node.
-5. Ensure every state-changing output writes a durable artifact and references it with `ArtifactRef`.
-
-## Safety and scientific fidelity notes
-
-This system is not a substitute for expert judgment. It is designed to make long-running automated research attempts more auditable. It should never treat experimental evidence, unverified LLM reasoning, or unsupported literature summaries as proofs. Major claimed results require independent replication and, when feasible, Lean verification.
+This separation makes an engineering failure, missing source, failed proof, and genuine mathematical
+obstruction visibly different states.

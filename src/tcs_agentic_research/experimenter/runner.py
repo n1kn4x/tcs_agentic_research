@@ -1,4 +1,4 @@
-"""Run experiments through pi inside the project experimenter container."""
+"""Execute one model-generated Python program in the bounded Docker experimenter."""
 
 from __future__ import annotations
 
@@ -9,13 +9,19 @@ from pathlib import Path
 from typing import Any
 
 from ..artifact_store import ArtifactStore
-from ..schemas import ArtifactRef, ExperimentResult, ExperimenterSettings, new_id, utc_now
+from ..schemas import (
+    ArtifactRef,
+    ExperimentProgram,
+    ExperimentResult,
+    ExperimenterSettings,
+    new_id,
+    utc_now,
+)
 from .docker_project import DockerProjectContainer
-from .errors import ExperimenterRuntimeError
 
 
-class PiExperimentRunner:
-    """Host-side orchestrator for a Dockerized pi coding-agent experiment."""
+class BoundedExperimentRunner:
+    """Run exactly one Python process; there is no nested coding-agent tool loop."""
 
     def __init__(self, store: ArtifactStore, settings: ExperimenterSettings | None):
         self.store = store
@@ -35,227 +41,118 @@ class PiExperimentRunner:
     def reset_container(self) -> None:
         self.container.reset()
 
-    def run(
-        self,
-        *,
-        description: str,
-        name: str = "experiment",
-        supports_claim_ids: list[str] | None = None,
-        timeout_seconds: int | None = None,
-    ) -> ExperimentResult:
-        if self.settings is None:
-            # DockerProjectContainer also checks this; keep type checkers happy and fail early.
-            raise ExperimenterRuntimeError("Experimenter settings are missing.")
+    def run(self, *, program: ExperimentProgram, name: str = "experiment") -> ExperimentResult:
+        assert self.settings is not None  # DockerProjectContainer already validates this.
         self.container.ensure_running()
-        run_id = new_id("run")
-        safe_name = _safe_name(name or "experiment")
+        run_id = new_id("experiment")
+        safe_name = _safe_name(name)
         rel_dir = f"ExperimentRuns/{safe_name}_{run_id}"
-        host_run_dir = self.store.resolve(rel_dir)
-        host_run_dir.mkdir(parents=True, exist_ok=True)
-        container_run_dir = f"/workspace/runs/{run_id}"
-        state_run_dir = self.container.workspace_state_dir / "runs" / run_id
+        canonical_dir = self.store.resolve(rel_dir)
+        canonical_dir.mkdir(parents=True, exist_ok=True)
+        portable_dir = self.container.workspace_state_dir / "runs" / run_id
+        portable_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            portable_dir.chmod(0o777)
+        except PermissionError:
+            pass
 
-        self.container.exec(["mkdir", "-p", container_run_dir], timeout=60, check=True)
-
-        prompt = self._build_prompt(
-            run_id=run_id,
-            description=description,
-            supports_claim_ids=supports_claim_ids or [],
-            container_run_dir=container_run_dir,
-        )
-        prompt_ref = self.store.write_text(Path(rel_dir) / "prompt.md", prompt)
         request_ref = self.store.write_json(
             Path(rel_dir) / "request.json",
             {
                 "run_id": run_id,
-                "name": name,
-                "description": description,
-                "supports_claim_ids": supports_claim_ids or [],
+                "description": program.description,
+                "seed": program.seed,
+                "expected_outputs": program.expected_outputs,
                 "created_at": utc_now(),
-                "experimenter": {
-                    "container_name": self.container.container_name,
-                    "image": self.settings.image,
-                    "research_mount": "/research (read-only)",
-                    "workspace_mount": "/workspace (workspace-portable bind mount from .experimenter/workspace)",
-                    "coding_agent": "pi",
+                "execution_contract": {
+                    "command": ["python", "experiment.py"],
+                    "network": self.settings.network,
+                    "timeout_seconds": self.settings.timeout_seconds,
+                    "research_workspace": "/research (read-only)",
                 },
             },
         )
-        self.container.copy_to_container(
-            self.store.resolve(Path(rel_dir) / "prompt.md"),
-            f"{container_run_dir}/prompt.md",
+        script_path = portable_dir / "experiment.py"
+        script_path.write_text(program.python_code.rstrip() + "\n", encoding="utf-8")
+        # Redirect inside the bounded mount so a print loop cannot accumulate unbounded output in
+        # the host-side docker client. `ulimit -f` caps each generated regular file (roughly 16 MiB).
+        shell_command = (
+            f"ulimit -f 32768; exec timeout {self.settings.timeout_seconds} "
+            "python experiment.py > execution.stdout 2> execution.stderr"
         )
-
-        pi_command = self._pi_command(run_id=run_id, container_run_dir=container_run_dir)
-        command_ref = self.store.write_json(
-            Path(rel_dir) / "command.json",
-            {
-                "container_name": self.container.container_name,
-                "workdir": container_run_dir,
-                "command": pi_command,
-                "timeout_seconds": timeout_seconds or self.settings.timeout_seconds,
-            },
-        )
-
         completed = self.container.exec(
-            pi_command,
-            workdir=container_run_dir,
-            timeout=timeout_seconds or self.settings.timeout_seconds,
-            env=self.settings.environment,
+            ["sh", "-lc", shell_command],
+            workdir=f"/workspace/runs/{run_id}",
+            timeout=self.settings.timeout_seconds + 30,
+            env={"TCS_EXPERIMENT_SEED": str(program.seed), "MPLBACKEND": "Agg"},
             check=False,
         )
-        stdout_ref = self.store.write_text(
-            Path(rel_dir) / "pi_events.jsonl",
-            _limit_text(completed.stdout, self.settings.max_output_bytes),
-        )
-        stderr_ref = self.store.write_text(
-            Path(rel_dir) / "pi_stderr.log",
-            _limit_text(completed.stderr, self.settings.max_output_bytes),
-        )
-
-        # Always harvest the run directory before validating, so infrastructure errors retain
-        # whatever files/logs pi created for debugging. /workspace is a bind mount under the
-        # copied workspace, so no Docker volume export is required.
-        if state_run_dir.exists():
-            shutil.copytree(state_run_dir, host_run_dir, dirs_exist_ok=True)
-
-        if completed.returncode != 0:
-            raise ExperimenterRuntimeError(
-                "pi experiment command failed; harvested artifacts are in "
-                f"{rel_dir}. exit_code={completed.returncode}\nSTDERR:\n{completed.stderr[-4000:]}"
+        stdout = _read_limited(portable_dir / "execution.stdout", self.settings.max_output_bytes)
+        stderr = _read_limited(portable_dir / "execution.stderr", self.settings.max_output_bytes)
+        if completed.stderr:
+            stderr += "\nDocker exec stderr:\n" + _limit_text(
+                completed.stderr, self.settings.max_output_bytes
             )
 
-        result_payload = self._load_result_payload(Path(rel_dir) / "experiment_result.json")
+        shutil.copytree(portable_dir, canonical_dir, dirs_exist_ok=True)
+        stdout_ref = self.store.write_text(Path(rel_dir) / "stdout.log", stdout)
+        stderr_ref = self.store.write_text(Path(rel_dir) / "stderr.log", stderr)
+        result_ref = self.store.write_json(
+            Path(rel_dir) / "result.json",
+            {
+                "run_id": run_id,
+                "exit_code": completed.returncode,
+                "success": completed.returncode == 0,
+                "stdout_tail": stdout[-4000:],
+                "stderr_tail": stderr[-4000:],
+                "finished_at": utc_now(),
+            },
+        )
         refs = _artifact_refs_recursive(self.store, rel_dir)
-        for required in [prompt_ref, request_ref, command_ref, stdout_ref, stderr_ref]:
-            if required.path not in {ref.path for ref in refs}:
-                refs.append(required)
-
-        summary = str(result_payload.get("summary") or "").strip()
-        if not summary:
-            raise ExperimenterRuntimeError(
-                f"Experiment result file exists but has no non-empty `summary`: {rel_dir}/experiment_result.json"
-            )
-        caveats = [str(item) for item in result_payload.get("caveats", []) if str(item).strip()]
-        result_supports = [
-            str(item) for item in result_payload.get("supports_claim_ids", supports_claim_ids or [])
-        ]
-        if "Experimental evidence is not a mathematical proof." not in caveats:
-            caveats.append("Experimental evidence is not a mathematical proof.")
+        for ref in [request_ref, stdout_ref, stderr_ref, result_ref]:
+            if ref.path not in {item.path for item in refs}:
+                refs.append(ref)
+        success = completed.returncode == 0
+        summary = (
+            "Experiment program completed successfully."
+            if success
+            else f"Experiment program failed with exit code {completed.returncode}."
+        )
+        output_tail = (stdout or stderr).strip()[-1500:]
+        if output_tail:
+            summary += " Output tail: " + output_tail
         return ExperimentResult(
             run_id=run_id,
+            success=success,
             summary=summary,
             artifact_refs=refs,
-            supports_claim_ids=result_supports,
-            caveats=caveats,
+            seeds=[program.seed],
+            caveats=["Experimental evidence is not a mathematical proof."],
         )
 
-    def _build_prompt(
-        self,
-        *,
-        run_id: str,
-        description: str,
-        supports_claim_ids: list[str],
-        container_run_dir: str,
-    ) -> str:
-        return f"""You are pi, acting as the experimenter subsystem for an agentic TCS research project.
 
-You are running inside a Docker container with shell access and internet access.
+# Kept as an import alias for the thin ExperimentAgent adapter.
+PiExperimentRunner = BoundedExperimentRunner
 
-Filesystem contract:
-- `/research` is a read-only mount of the canonical research workspace. Read it for context.
-- `/workspace` is a writable, workspace-portable bind mount backed by `/research/.experimenter/workspace` on the host. It is copied when the research workspace is copied to another machine.
-- `{container_run_dir}` is your writable run directory. Write all scripts, logs, data, plots, and summaries there.
-- Do not attempt to modify `/research`; it is mounted read-only by design.
-- Prefer user-level/project-local dependencies and caches under `/workspace`; system-level container mutations are not copied with the workspace.
 
-Research context to inspect if relevant:
-- `/research/InitialResearchTask.md`
-- `/research/ResearchState.json`
-- `/research/Nomenclature.yml`
-- `/research/ClaimLedger.jsonl`
-- `/research/LiteratureDB/`
-- `/research/Reports/`
-
-Experiment request:
-{description}
-
-Claim ids this experiment may support, if any:
-{json.dumps(supports_claim_ids, indent=2)}
-
-Requirements:
-1. Create reproducible code/scripts under `{container_run_dir}`. Prefer Python for numerical experiments.
-2. Run the code and inspect its outputs. Use fixed random seeds when randomness is involved.
-3. Save important outputs under `{container_run_dir}`. Use text/JSON/CSV/PNG/PDF artifacts as appropriate.
-4. Before finishing, write `{container_run_dir}/summary.md` with a human-readable account of what you did.
-5. Before finishing, write `{container_run_dir}/experiment_result.json` exactly as JSON with at least:
-   {{
-     "summary": "concise factual summary of the run and its result",
-     "supports_claim_ids": {json.dumps(supports_claim_ids)},
-     "caveats": ["Experimental evidence is not a mathematical proof."]
-   }}
-   You may add extra JSON fields such as metrics, files, plots, or status.
-
-Be conservative: distinguish successful numerical checks from proof, and report failures honestly.
-"""
-
-    def _pi_command(self, *, run_id: str, container_run_dir: str) -> list[str]:
-        if self.settings is None:
-            raise ExperimenterRuntimeError("Experimenter settings are missing.")
-        pi = self.settings.pi
-        command = [
-            "pi",
-            "--mode",
-            "json",
-            "--provider",
-            pi.provider,
-            "--model",
-            pi.model,
-            "--thinking",
-            pi.thinking,
-            "--tools",
-            "read,write,edit,bash,grep,find,ls",
-            "--no-context-files",
-            "--no-extensions",
-            "--no-skills",
-            "--no-prompt-templates",
-            "--approve",
-            "--session-dir",
-            "/workspace/home/.pi/sessions",
-            "--name",
-            f"experiment-{run_id}",
-            *pi.extra_args,
-            "-p",
-            f"@{container_run_dir}/prompt.md",
-        ]
-        return command
-
-    def _load_result_payload(self, rel_path: Path) -> dict[str, Any]:
-        if not self.store.exists(rel_path):
-            raise ExperimenterRuntimeError(
-                f"Experimenter did not produce required result artifact: {rel_path}"
-            )
-        try:
-            payload = self.store.read_json(rel_path)
-        except Exception as exc:  # noqa: BLE001
-            raise ExperimenterRuntimeError(
-                f"Experiment result artifact is not valid JSON: {rel_path}"
-            ) from exc
-        if not isinstance(payload, dict):
-            raise ExperimenterRuntimeError(
-                f"Experiment result artifact must be a JSON object: {rel_path}"
-            )
-        return payload
+def _read_limited(path: Path, max_bytes: int) -> str:
+    if not path.exists():
+        return ""
+    with path.open("rb") as handle:
+        data = handle.read(max(0, max_bytes) + 1 if max_bytes > 0 else -1)
+    truncated = max_bytes > 0 and len(data) > max_bytes
+    if truncated:
+        data = data[:max_bytes]
+    text = data.decode("utf-8", errors="replace")
+    return text + ("\n...[output file truncated by host importer]\n" if truncated else "")
 
 
 def _limit_text(text: str, max_bytes: int) -> str:
-    if max_bytes <= 0:
-        return text
     encoded = text.encode("utf-8")
-    if len(encoded) <= max_bytes:
+    if max_bytes <= 0 or len(encoded) <= max_bytes:
         return text
-    truncated = encoded[:max_bytes].decode("utf-8", errors="ignore")
-    return truncated + f"\n...[truncated {len(encoded) - max_bytes} bytes]\n"
+    kept = encoded[:max_bytes].decode("utf-8", errors="ignore")
+    return kept + f"\n...[truncated {len(encoded) - max_bytes} bytes]\n"
 
 
 def _safe_name(name: str) -> str:
@@ -263,20 +160,21 @@ def _safe_name(name: str) -> str:
     return (safe or "experiment")[:80]
 
 
-def _artifact_refs_recursive(store: ArtifactStore, rel_dir: str, *, limit: int = 250) -> list[ArtifactRef]:
+def _artifact_refs_recursive(
+    store: ArtifactStore, rel_dir: str, *, limit: int = 250
+) -> list[ArtifactRef]:
     root = store.resolve(rel_dir)
-    refs: list[ArtifactRef] = [store.artifact_ref(rel_dir, summary="Experiment run directory")]
+    refs: list[ArtifactRef] = [store.artifact_ref(root, summary="Experiment run directory")]
     files = sorted(path for path in root.rglob("*") if path.is_file())
     for path in files[:limit]:
         refs.append(store.artifact_ref(path))
     if len(files) > limit:
-        omitted = len(files) - limit
         manifest = root / "artifact_manifest_truncated.json"
         manifest.write_text(
             json.dumps(
                 {
                     "included_file_refs": limit,
-                    "omitted_file_count": omitted,
+                    "omitted_file_count": len(files) - limit,
                     "all_files": [str(path.relative_to(root)) for path in files],
                 },
                 indent=2,
@@ -286,11 +184,5 @@ def _artifact_refs_recursive(store: ArtifactStore, rel_dir: str, *, limit: int =
             encoding="utf-8",
         )
         refs.append(store.artifact_ref(manifest))
-    unique: list[ArtifactRef] = []
-    seen: set[str] = set()
-    for ref in refs:
-        if ref.path in seen:
-            continue
-        seen.add(ref.path)
-        unique.append(ref)
-    return unique
+    unique: dict[str, ArtifactRef] = {ref.path: ref for ref in refs}
+    return list(unique.values())

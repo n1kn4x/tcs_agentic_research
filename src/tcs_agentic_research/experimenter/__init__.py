@@ -1,6 +1,6 @@
-"""Dockerized experimenter subsystem backed by the pi coding agent."""
+"""Bounded Docker experiment execution."""
 
 from .docker_project import DockerProjectContainer
-from .runner import PiExperimentRunner
+from .runner import BoundedExperimentRunner
 
-__all__ = ["DockerProjectContainer", "PiExperimentRunner"]
+__all__ = ["BoundedExperimentRunner", "DockerProjectContainer"]

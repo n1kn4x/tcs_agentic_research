@@ -8,6 +8,8 @@ reading raw literature records so they receive stable statement/support IDs and 
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 from pathlib import Path
 from typing import Any
@@ -33,11 +35,6 @@ from ..llm import LLMRouter
 from ..prompt_loader import render_prompt
 from ..schemas import (
     ArtifactRef,
-    ClaimRecord,
-    ClaimStatus,
-    ClaimType,
-    EvidenceRecord,
-    EvidenceType,
     LiteratureCandidate,
     LiteratureExtract,
     LiteratureQueryAnswer,
@@ -71,7 +68,7 @@ class LiteratureResearcher:
         self.index = LiteratureIndex(store)
         has_literature_artifacts = bool(
             store.read_jsonl("LiteratureDB/papers.jsonl")
-            or store.read_jsonl("LiteratureDB/extracted_claims.jsonl")
+            or store.read_jsonl("LiteratureDB/statements.jsonl")
         )
         if (needs_index_rebuild or self.index.is_empty()) and has_literature_artifacts:
             self.index.rebuild()
@@ -461,13 +458,7 @@ class LiteratureResearcher:
 
     def _citation_keys_with_statement_extractions(self) -> set[str]:
         keys: set[str] = set()
-        for record in self.store.read_jsonl("LiteratureDB/extracted_claims.jsonl"):
-            if not (
-                record.get("theorem_statements")
-                or record.get("algorithm_statements")
-                or record.get("lower_bound_statements")
-            ):
-                continue
+        for record in self.store.read_jsonl("LiteratureDB/statements.jsonl"):
             key = str(record.get("citation_key") or "")
             if key:
                 keys.add(key)
@@ -537,10 +528,8 @@ class LiteratureResearcher:
         return extract
 
     def answer_query(self, query: str, *, limit: int = 10) -> LiteratureQueryAnswer:
-        """Answer a literature query with statement handles, quote provenance, and duplicates."""
-        answer = self.retriever.answer_query(query, limit=limit)
-        self.store.append_jsonl("LiteratureDB/query_answers.jsonl", answer)
-        return answer
+        """Answer a local query. The calling run owns persistence of the bounded answer."""
+        return self.retriever.answer_query(query, limit=limit)
 
     # ------------------------------------------------------------------
     # OpenAlex discovery / candidate queue
@@ -790,61 +779,45 @@ class LiteratureResearcher:
         extract.paper_id = extract.paper_id or paper_id
         extract.text_artifact_ref = extract.text_artifact_ref or text_ref
 
-        # If the model missed explicit statements but the deterministic scanner found them, keep
-        # the scanner output so claims cannot be accepted without statement-level provenance.
+        # If optional model extraction misses explicit statements, retain the deterministic
+        # exact-quote scanner output. The worker normally uses the deterministic path directly.
         if not extract.theorem_statements and heuristic.theorem_statements:
             extract.theorem_statements = heuristic.theorem_statements
         if not extract.algorithm_statements and heuristic.algorithm_statements:
             extract.algorithm_statements = heuristic.algorithm_statements
         if not extract.lower_bound_statements and heuristic.lower_bound_statements:
             extract.lower_bound_statements = heuristic.lower_bound_statements
-        if not extract.extracted_claims and heuristic.extracted_claims:
-            extract.extracted_claims = heuristic.extracted_claims
 
-        all_statement_fields = [
+        for statements in [
             extract.theorem_statements,
             extract.algorithm_statements,
             extract.lower_bound_statements,
-        ]
-        for statements in all_statement_fields:
+        ]:
             for statement in statements:
-                self._normalize_statement(
-                    statement,
-                    citation_key,
-                    extract.paper_id,
-                    text_ref,
-                )
+                self._normalize_statement(statement, citation_key, extract.paper_id, text_ref)
 
         support_ids_by_statement = self.index.index_extract(extract)
-        has_acceptance_statement = bool(support_ids_by_statement)
-        if has_acceptance_statement and not extract.extracted_claims:
-            extract.extracted_claims = self._claims_from_statements(
-                extract, support_ids_by_statement=support_ids_by_statement
-            )
-        for claim in extract.extracted_claims:
-            self._normalize_literature_claim(
-                claim,
-                citation_key=citation_key,
-                has_acceptance_statement=has_acceptance_statement,
-                text_ref=text_ref,
-                support_ids=self._matching_support_ids_for_claim(
-                    claim, extract, support_ids_by_statement
-                ),
-            )
         return extract, support_ids_by_statement
 
     def _commit_extract(
         self, extract: LiteratureExtract, *, support_ids_by_statement: dict[str, str]
     ) -> None:
-        self.store.append_jsonl("LiteratureDB/extracted_claims.jsonl", extract)
+        # Canonical literature memory has one statement ledger. The richer extraction object is
+        # returned to the bounded caller but is not duplicated into a second claims ledger.
         self._append_flat_statement_rows(extract, support_ids_by_statement=support_ids_by_statement)
-        # LiteratureDB records are evidence objects. Research/obligation code creates claims that
-        # cite stable support IDs when those statements become part of the global ledger.
 
     def _append_flat_statement_rows(
         self, extract: LiteratureExtract, *, support_ids_by_statement: dict[str, str]
     ) -> None:
-        """Append statement rows for the deterministic literature-audit pipeline."""
+        """Atomically replace one paper's canonical statement snapshot."""
+        path = "LiteratureDB/statements.jsonl"
+        retained = [
+            row
+            for row in self.store.read_jsonl(path)
+            if str(row.get("paper_id") or "") != extract.paper_id
+            and str(row.get("citation_key") or "") != extract.citation_key
+        ]
+        rows: list[dict[str, Any]] = []
         for statement in [
             *extract.theorem_statements,
             *extract.algorithm_statements,
@@ -854,8 +827,7 @@ class LiteratureResearcher:
             support_id = statement.support_id or support_ids_by_statement.get(
                 statement.statement_id, ""
             )
-            self.store.append_jsonl(
-                "LiteratureDB/statements.jsonl",
+            rows.append(
                 {
                     "statement_id": statement.statement_id,
                     "support_id": support_id,
@@ -873,8 +845,13 @@ class LiteratureResearcher:
                     "source_sha256": quote.source_sha256 if quote else "",
                     "validated_exact_substring": bool(quote.validated) if quote else False,
                     "confidence": statement.confidence,
-                },
+                }
             )
+        content = "".join(
+            json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n"
+            for row in [*retained, *rows]
+        )
+        self.store.write_text(path, content)
 
     def _normalize_statement(
         self,
@@ -905,168 +882,23 @@ class LiteratureResearcher:
                     quote.source_sha256 = text_ref.sha256
                 if text_ref and text_ref.path not in {ref.path for ref in quote.artifact_refs}:
                     quote.artifact_refs.append(text_ref)
-
-    def _normalize_literature_claim(
-        self,
-        claim: ClaimRecord,
-        *,
-        citation_key: str,
-        has_acceptance_statement: bool,
-        text_ref: ArtifactRef | None,
-        support_ids: list[str],
-    ) -> None:
-        claim.claim_type = ClaimType.literature
-        claim.normalized_statement = claim.normalized_statement or claim.statement
-        if "literature" not in claim.tags:
-            claim.tags.append("literature")
-        support_details = self._support_details_for_ids(support_ids)
-        if not any(ev.evidence_type == EvidenceType.citation for ev in claim.evidence):
-            evidence = EvidenceRecord(
-                evidence_type=EvidenceType.citation,
-                summary=(
-                    f"Extracted from {citation_key} with quote-level literature provenance."
-                ),
-                artifact_refs=[text_ref] if text_ref else [],
-                citation_keys=[citation_key],
-                literature_support_ids=support_ids,
-                verifier="LiteratureResearcher",
-                confidence=0.7 if has_acceptance_statement and support_ids else 0.3,
-            )
-            self._apply_support_details_to_evidence(evidence, support_details)
-            claim.evidence.append(evidence)
-        else:
-            for ev in claim.evidence:
-                if ev.evidence_type == EvidenceType.citation:
-                    if citation_key not in ev.citation_keys:
-                        ev.citation_keys.append(citation_key)
-                    if text_ref and text_ref.path not in {ref.path for ref in ev.artifact_refs}:
-                        ev.artifact_refs.append(text_ref)
-                    for support_id in support_ids:
-                        if support_id not in ev.literature_support_ids:
-                            ev.literature_support_ids.append(support_id)
-                    self._apply_support_details_to_evidence(ev, support_details)
-        if has_acceptance_statement and support_ids:
-            claim.status = ClaimStatus.cited
-        else:
-            claim.status = ClaimStatus.needs_review
-            if "unaccepted_no_extracted_theorem_or_algorithm" not in claim.tags:
-                claim.tags.append("unaccepted_no_extracted_theorem_or_algorithm")
-
-    def _claims_from_statements(
-        self, extract: LiteratureExtract, *, support_ids_by_statement: dict[str, str]
-    ) -> list[ClaimRecord]:
-        claims: list[ClaimRecord] = []
-        for statement in [
-            *extract.theorem_statements,
-            *extract.algorithm_statements,
-            *extract.lower_bound_statements,
-        ]:
-            refs = statement.provenance[0].artifact_refs if statement.provenance else []
-            support_id = support_ids_by_statement.get(statement.statement_id, "")
-            quote = statement.provenance[0] if statement.provenance else None
-            quote_ranges = []
-            if quote is not None:
-                quote_ranges.append(
-                    {
-                        "support_id": support_id,
-                        "statement_id": statement.statement_id,
-                        "quote_id": quote.quote_id,
-                        "citation_key": extract.citation_key,
-                        "paper_id": statement.paper_id or extract.paper_id,
-                        "locator": quote.locator,
-                        "char_start": quote.char_start,
-                        "char_end": quote.char_end,
-                        "validated": quote.validated,
-                    }
-                )
-            claims.append(
-                ClaimRecord(
-                    claim_type=ClaimType.literature,
-                    statement=f"{extract.citation_key} states: {statement.statement_text}",
-                    normalized_statement=statement.statement_text,
-                    status=ClaimStatus.cited if support_id else ClaimStatus.needs_review,
-                    evidence=[
-                        EvidenceRecord(
-                            evidence_type=EvidenceType.citation,
-                            summary=(
-                                "Statement-level extraction from "
-                                f"{extract.citation_key}: {statement.label}"
-                            ),
-                            artifact_refs=refs,
-                            citation_keys=[extract.citation_key],
-                            literature_support_ids=[support_id] if support_id else [],
-                            literature_statement_ids=[statement.statement_id],
-                            literature_quote_ids=[quote.quote_id] if quote is not None else [],
-                            literature_quote_ranges=quote_ranges,
-                            verifier="LiteratureResearcher",
-                            confidence=statement.confidence or 0.7,
-                        )
-                    ],
-                    tags=["literature", statement.kind],
-                )
-            )
-        return claims
-
-    def _support_details_for_ids(self, support_ids: list[str]) -> list[dict[str, Any]]:
-        details: list[dict[str, Any]] = []
-        for support_id in support_ids:
-            item = self.index.support_details(support_id)
-            if item is not None:
-                details.append(item)
-        return details
-
-    def _apply_support_details_to_evidence(
-        self, evidence: EvidenceRecord, support_details: list[dict[str, Any]]
-    ) -> None:
-        for details in support_details:
-            support_id = str(details.get("support_id") or "")
-            statement_id = str(details.get("statement_id") or "")
-            quote_id = str(details.get("quote_id") or "")
-            if support_id and support_id not in evidence.literature_support_ids:
-                evidence.literature_support_ids.append(support_id)
-            if statement_id and statement_id not in evidence.literature_statement_ids:
-                evidence.literature_statement_ids.append(statement_id)
-            if quote_id and quote_id not in evidence.literature_quote_ids:
-                evidence.literature_quote_ids.append(quote_id)
-            range_payload = {
-                "support_id": support_id,
-                "statement_id": statement_id,
-                "quote_id": quote_id,
-                "citation_key": details.get("citation_key") or "",
-                "paper_id": details.get("paper_id") or "",
-                "locator": details.get("locator") or "",
-                "char_start": details.get("char_start"),
-                "char_end": details.get("char_end"),
-                "validated": bool(details.get("validated")),
-            }
-            if range_payload not in evidence.literature_quote_ranges:
-                evidence.literature_quote_ranges.append(range_payload)
-
-    def _matching_support_ids_for_claim(
-        self,
-        claim: ClaimRecord,
-        extract: LiteratureExtract,
-        support_ids_by_statement: dict[str, str],
-    ) -> list[str]:
-        """Return support IDs whose extracted statement text matches a literature claim."""
-        claim_text = _normalize_title(claim.normalized_statement or claim.statement)
-        if not claim_text:
-            return []
-        matched: list[str] = []
-        for statement in [
-            *extract.theorem_statements,
-            *extract.algorithm_statements,
-            *extract.lower_bound_statements,
-        ]:
-            stmt_text = _normalize_title(statement.statement_text or statement.original_statement)
-            if not stmt_text:
-                continue
-            support_id = support_ids_by_statement.get(statement.statement_id)
-            if not support_id:
-                continue
-            if stmt_text in claim_text or claim_text in stmt_text:
-                matched.append(support_id)
-        return list(dict.fromkeys(matched))
+        # Stable content-derived handles make deterministic re-extraction idempotent and keep
+        # evidence references valid across index rebuilds.
+        primary_quote = statement.provenance[0]
+        primary_quote.quote_id = _stable_literature_id(
+            "quote",
+            citation_key,
+            str(primary_quote.char_start),
+            str(primary_quote.char_end),
+            primary_quote.quote,
+        )
+        statement.statement_id = _stable_literature_id(
+            "lit_stmt",
+            citation_key,
+            statement.kind,
+            statement.label,
+            statement.statement_text,
+        )
 
     def _find_existing_paper_for_metadata(self, paper: PaperMetadata) -> PaperMetadata | None:
         existing = None
@@ -1146,13 +978,16 @@ class _StatementMatch:
 
 
 _STATEMENT_START_RE = re.compile(
-    r"(?im)^\s*(?P<label>(?:(?:Theorem|Lemma|Corollary|Proposition|Algorithm|Definition)"
+    r"(?im)^\s*(?:(?:I|▶|▸|□)\s+)?"
+    r"(?P<label>(?:(?:Theorem|Lemma|Corollary|Proposition|Algorithm|Definition)"
     r"\s*(?:[0-9A-Za-z][0-9A-Za-z().-]*)?)|"
-    r"(?:(?:Hypothesis|Assumption|Conjecture)\s*[A-Za-z0-9().-]*)|"
-    r"(?:(?:[A-Z][A-Za-z0-9 -]{0,80}\s+)?(?:Hypothesis|Conjecture)))"
+    r"(?:(?:Hypothesis|Assumption|Conjecture)\s*[A-Za-z0-9().-]*))"
     r"\s*(?:\([^\n]{0,80}\))?\s*(?:[:.]|—|-)"
 )
-_LOWER_BOUND_RE = re.compile(r"(?i)\b(lower bound|impossibility theorem|no-go theorem)\b")
+_LOWER_BOUND_RE = re.compile(
+    r"(?i)(?:\b(?:lower bound|impossibility theorem|no-go theorem)\b|"
+    r"\bno\b.{0,100}\b(?:subquadratic|subexponential|polynomial[- ]time)?\s*algorithm\b)"
+)
 _REFERENCE_HEADING_RE = re.compile(
     r"(?im)^\s*(references|bibliography|works cited|literature cited)\s*$"
 )
@@ -1170,7 +1005,7 @@ def _iter_statement_matches(text: str) -> list[_StatementMatch]:
     matches = list(_STATEMENT_START_RE.finditer(text))
     results: list[_StatementMatch] = []
     for idx, match in enumerate(matches):
-        start = match.start()
+        start = match.start("label")
         next_start = matches[idx + 1].start() if idx + 1 < len(matches) else len(text)
         proof_pos = _find_after(text, start, next_start, ["\nProof", "\n proof", "\nPROOF"])
         paragraph_pos = text.find("\n\n", match.end(), next_start)
@@ -1178,10 +1013,12 @@ def _iter_statement_matches(text: str) -> list[_StatementMatch]:
         end = min(end_candidates) if end_candidates else next_start
         # Avoid swallowing whole papers when PDFs have poor paragraphing.
         end = min(end, start + 3000)
+        label = re.sub(r"\s+", " ", match.group("label")).strip()
+        if _statement_kind(label) == "claim":
+            end = _named_claim_sentence_end(text, start, end)
         statement_text = re.sub(r"\s+", " ", text[start:end]).strip()
         if len(statement_text) < 20:
             continue
-        label = re.sub(r"\s+", " ", match.group("label")).strip()
         results.append(
             _StatementMatch(
                 label=label,
@@ -1192,6 +1029,20 @@ def _iter_statement_matches(text: str) -> list[_StatementMatch]:
             )
         )
     return results
+
+
+def _named_claim_sentence_end(text: str, start: int, end: int) -> int:
+    """Keep a named conjecture/hypothesis statement, not its following discussion."""
+    segment = text[start:end]
+    boundaries = list(re.finditer(r"\.\s+(?=[A-Z])", segment))
+    if not boundaries:
+        return end
+    first = boundaries[0]
+    prefix = segment[: first.end()]
+    # A parenthesized display name commonly ends the label sentence; the mathematical
+    # statement is the next sentence.
+    chosen = boundaries[1] if "(" in prefix and ")" in prefix and len(boundaries) > 1 else first
+    return start + chosen.start() + 1
 
 
 def _find_after(text: str, start: int, end: int, needles: list[str]) -> int:
@@ -1378,3 +1229,8 @@ def _normalize_title(title: str) -> str:
 def _safe_slug(value: str, *, default: str = "paper") -> str:
     slug = re.sub(r"[^A-Za-z0-9_.-]+", "_", value.strip()).strip("._-")
     return (slug or default)[:120]
+
+
+def _stable_literature_id(prefix: str, *parts: str) -> str:
+    payload = "\x1f".join(parts).encode("utf-8", errors="replace")
+    return f"{prefix}_{hashlib.sha256(payload).hexdigest()[:12]}"

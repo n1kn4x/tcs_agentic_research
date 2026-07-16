@@ -14,9 +14,9 @@ from ..artifact_store import ArtifactStore
 class PDFTextExtractor:
     """Extract text from imported PDFs and store it next to the paper.
 
-    The preferred backend is ``pypdf`` because it is pure Python. If it is unavailable or
-    finds no embedded text, the extractor tries ``pdftotext`` and then OCR backends when
-    installed: first ``ocrmypdf`` plus text extraction, then ``pdftoppm`` + ``tesseract``.
+    The preferred backend is Poppler ``pdftotext -layout`` because theorem labels and paragraph
+    boundaries matter more than dependency purity here. The extractor falls back to ``pypdf`` and
+    then optional OCR backends: ``ocrmypdf`` or ``pdftoppm`` plus ``tesseract``.
     """
 
     def __init__(self, store: ArtifactStore):
@@ -51,19 +51,19 @@ class PDFTextExtractor:
         if not source.exists():
             raise FileNotFoundError(f"PDF not found: {pdf_path}")
 
-        text = self._extract_with_pypdf(source, page_separator=page_separator)
-        if self._last_pdf_warnings:
-            self.store.append_jsonl(
-                "LiteratureDB/pdf_warnings.jsonl",
-                {
-                    "pdf_path": self.store.relpath(source) if workspace_source else str(source),
-                    "warning_count": len(self._last_pdf_warnings),
-                    "warnings": self._last_pdf_warnings[:20],
-                    "summary": "Non-fatal PDF parser warnings emitted by pypdf and suppressed from stderr.",
-                },
-            )
+        text = self._extract_with_pdftotext(source, page_separator=page_separator)
         if not text.strip():
-            text = self._extract_with_pdftotext(source)
+            text = self._extract_with_pypdf(source, page_separator=page_separator)
+            if self._last_pdf_warnings:
+                self.store.append_jsonl(
+                    "LiteratureDB/pdf_warnings.jsonl",
+                    {
+                        "pdf_path": self.store.relpath(source) if workspace_source else str(source),
+                        "warning_count": len(self._last_pdf_warnings),
+                        "warnings": self._last_pdf_warnings[:20],
+                        "summary": "Non-fatal PDF parser warnings emitted by pypdf and suppressed from stderr.",
+                    },
+                )
         if not text.strip():
             text = self._extract_with_ocr(source, page_separator=page_separator)
         if not text.strip():
@@ -100,7 +100,9 @@ class PDFTextExtractor:
         except Exception:
             return ""
 
-    def _extract_with_pdftotext(self, pdf_path: Path) -> str:
+    def _extract_with_pdftotext(
+        self, pdf_path: Path, *, page_separator: str = "\n\n--- page {page} ---\n\n"
+    ) -> str:
         executable = _which("pdftotext")
         if executable is None:
             return ""
@@ -119,7 +121,14 @@ class PDFTextExtractor:
                 return ""
             if result.returncode != 0 or not output.exists():
                 return ""
-            return output.read_text(encoding="utf-8", errors="replace")
+            raw = output.read_text(encoding="utf-8", errors="replace")
+            pages = raw.split("\f")
+            rendered = [
+                page_separator.format(page=index) + page.strip()
+                for index, page in enumerate(pages, 1)
+                if page.strip()
+            ]
+            return "".join(rendered).strip() + ("\n" if rendered else "")
 
     def _extract_with_ocr(self, pdf_path: Path, *, page_separator: str) -> str:
         """Best-effort OCR extraction for scanned PDFs.

@@ -1,1 +1,1 @@
-"""Agent implementations for the TCS research workflow."""
+"""Thin adapters around deterministic evidence-producing subsystems."""

@@ -2,7 +2,7 @@
 # Launch the vLLM stack in tmux.
 #
 # Default layout for 6x 32GB GPUs:
-#   GPUs 0,1,2,3 -> deep-reasoner     : Qwen3.6-35B-A3B, port 8000, thinking + tools
+#   GPUs 0,1,2,3 -> deep-reasoner     : Qwen3.6-35B-A3B, port 8000, bounded JSON/text calls
 #   GPU  4       -> routine-extractor : 7B/8B extraction/formatting model, port 8001
 #   GPU  5       -> lean-prover       : Lean/code/math specialist, port 8003
 #
@@ -52,7 +52,7 @@ DEEP_TP="${DEEP_TP:-4}"
 ROUTINE_TP="${ROUTINE_TP:-1}"
 PROOF_TP="${PROOF_TP:-1}"
 
-DEEP_MAX_MODEL_LEN="${DEEP_MAX_MODEL_LEN:-262144}"
+DEEP_MAX_MODEL_LEN="${DEEP_MAX_MODEL_LEN:-131072}"
 ROUTINE_MAX_MODEL_LEN="${ROUTINE_MAX_MODEL_LEN:-32768}"
 PROOF_MAX_MODEL_LEN="${PROOF_MAX_MODEL_LEN:-32768}"
 
@@ -77,10 +77,10 @@ PROOF_DTYPE="${PROOF_DTYPE:-auto}"
 
 # Free-form additional vLLM args. Shell-style quoting is respected, so JSON
 # values containing spaces can be written as single-quoted arguments. Examples:
-#   DEEP_EXTRA_ARGS='--reasoning-parser qwen3 --enable-auto-tool-choice --tool-call-parser qwen3_coder'
+#   DEEP_EXTRA_ARGS='--reasoning-parser qwen3 --language-model-only'
 #   DEEP_EXTRA_ARGS='--speculative-config '\''{"method":"qwen3_next_mtp","num_speculative_tokens":2}'\'''
 #   DEEP_EXTRA_ARGS='--hf-overrides '\''{"text_config": {"rope_parameters": {"rope_type": "yarn"}}}'\'''
-DEFAULT_DEEP_EXTRA_ARGS="--reasoning-parser qwen3 --enable-auto-tool-choice --tool-call-parser qwen3_coder --language-model-only --default-chat-template-kwargs '{\"enable_thinking\": true, \"preserve_thinking\": true}'"
+DEFAULT_DEEP_EXTRA_ARGS="--reasoning-parser qwen3 --language-model-only --default-chat-template-kwargs '{\"enable_thinking\": true, \"preserve_thinking\": false}'"
 DEFAULT_ROUTINE_EXTRA_ARGS="--default-chat-template-kwargs '{\"enable_thinking\": false}'"
 DEEP_EXTRA_ARGS="${DEEP_EXTRA_ARGS:-$DEFAULT_DEEP_EXTRA_ARGS}"
 ROUTINE_EXTRA_ARGS="${ROUTINE_EXTRA_ARGS:-$DEFAULT_ROUTINE_EXTRA_ARGS}"
@@ -246,8 +246,9 @@ Attach to a session:
   tmux attach -t vllm-routine
   tmux attach -t vllm-proof
 
-Use the matching router config:
-  tcs-research run --workspace workspaces/demo --config config.independent-reasoner-verifier.yml --max-iterations 3
+Use a copy of the example configuration:
+  cp config.example.yml config.yml
+  tcs-research run --workspace workspaces/demo --config config.yml --max-steps 1
 
 Restart all sessions with:
   REPLACE=1 $0

@@ -65,7 +65,7 @@ class LiteratureRetriever:
                 char_start=row.get("char_start"),
                 char_end=row.get("char_end"),
                 source_sha256=str(row.get("text_sha256") or ""),
-                validated=bool(row.get("validated") or False),
+                validated=bool(row.get("quote_validated") or False),
             )
             if row.get("quote_id"):
                 quote_obj.quote_id = str(row.get("quote_id"))

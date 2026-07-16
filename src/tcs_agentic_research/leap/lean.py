@@ -84,7 +84,28 @@ end TCSResearch
             self.store.write_text(log_rel, stderr)
             log.artifact_ref = self.store.artifact_ref(log_rel)
             return log
-        completed = subprocess.run(command, cwd=cwd, text=True, capture_output=True, check=False)
+        try:
+            completed = subprocess.run(
+                command,
+                cwd=cwd,
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=120,
+            )
+        except subprocess.TimeoutExpired as exc:
+            stdout = str(exc.stdout or "")
+            stderr = str(exc.stderr or "") + "\nLean verification timed out after 120 seconds."
+            self.store.write_text(log_rel, "STDOUT:\n" + stdout + "\nSTDERR:\n" + stderr)
+            return LeanCompilerLog(
+                command=command,
+                cwd=str(cwd),
+                exit_code=124,
+                stdout=stdout,
+                stderr=stderr,
+                success=False,
+                artifact_ref=self.store.artifact_ref(log_rel),
+            )
         output = "STDOUT:\n" + completed.stdout + "\nSTDERR:\n" + completed.stderr
         self.store.write_text(log_rel, output)
         return LeanCompilerLog(

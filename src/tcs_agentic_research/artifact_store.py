@@ -1,13 +1,19 @@
-"""Filesystem-backed canonical state for the research workflow."""
+"""Atomic, filesystem-backed research artifacts.
+
+The store is intentionally boring.  It does not infer scientific truth and it does not create
+subsystem artifacts until that subsystem is used.
+"""
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import os
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Iterator
 
 import yaml
 from pydantic import BaseModel
@@ -15,50 +21,23 @@ from pydantic import BaseModel
 from .schemas import (
     ArtifactKind,
     ArtifactRef,
-    ClaimRecord,
-    ObligationBoard,
-    ProposalLedgerEntry,
-    ResearchState,
+    Finding,
+    WorkQueue,
+    WorkspaceState,
     utc_now,
 )
 
 
 class ArtifactStore:
-    """Durable artifact store rooted at a research workspace.
+    RESEARCH_TASK = "InitialResearchTask.md"
+    RESEARCH_STATE = "State.json"
+    WORK_QUEUE = "Queue.json"
+    EVENT_LEDGER = "Events.jsonl"
+    FINDING_LEDGER = "Findings.jsonl"
+    MODEL_LEDGER = "ModelCalls.jsonl"
 
-    The LangGraph state intentionally stays compact. Mathematical state is kept in files
-    under this store and referenced by relative paths and hashes.
-    """
-
-    INITIAL_RESEARCH_TASK = "InitialResearchTask.md"
-    RESEARCH_TASK = INITIAL_RESEARCH_TASK
-    NOMENCLATURE = "Nomenclature.yml"
-    RESEARCH_STATE = "ResearchState.json"
-    CLAIM_LEDGER = "ClaimLedger.jsonl"
-    PROPOSAL_LEDGER = "ProposalLedger.jsonl"
-    MODEL_LEDGER = "ModelCallLedger.jsonl"
-    OBLIGATION_BOARD = "ObligationBoard.json"
-
-    CORE_DIRECTORIES = (
-        "LiteratureDB",
-        "LiteratureDB/papers",
-        "LeanProject",
-        "LeanProject/ProofDAGs",
-        "ExperimentRuns",
-        "Reports",
-        "Reports/critic_summaries",
-        "Reports/iterations",
-    )
-    CORE_JSONL = (CLAIM_LEDGER, PROPOSAL_LEDGER, MODEL_LEDGER)
-    LITERATURE_JSONL = (
-        "LiteratureDB/papers.jsonl",
-        "LiteratureDB/statements.jsonl",
-        "LiteratureDB/audit_table.jsonl",
-        "LiteratureDB/gaps.jsonl",
-        "LiteratureDB/extracted_claims.jsonl",
-        "LiteratureDB/query_answers.jsonl",
-        "LiteratureDB/candidates.jsonl",
-    )
+    CORE_DIRECTORIES = ("Runs", "Reports")
+    CORE_JSONL = (EVENT_LEDGER, FINDING_LEDGER, MODEL_LEDGER)
 
     def __init__(self, workspace: str | Path):
         self.root = Path(workspace).expanduser().resolve()
@@ -66,28 +45,30 @@ class ArtifactStore:
     def initialize_layout(self) -> None:
         self.root.mkdir(parents=True, exist_ok=True)
         for directory in self.CORE_DIRECTORIES:
-            (self.root / directory).mkdir(parents=True, exist_ok=True)
-        for jsonl in (*self.CORE_JSONL, *self.LITERATURE_JSONL):
-            path = self.root / jsonl
+            self.resolve(directory).mkdir(parents=True, exist_ok=True)
+        for rel_path in self.CORE_JSONL:
+            path = self.resolve(rel_path)
             if not path.exists():
                 path.write_text("", encoding="utf-8")
-        board = self.root / self.OBLIGATION_BOARD
-        if not board.exists():
-            self.write_json(self.OBLIGATION_BOARD, ObligationBoard())
-        nomenclature = self.root / self.NOMENCLATURE
-        if not nomenclature.exists():
-            self.write_yaml(
-                self.NOMENCLATURE,
-                {
-                    "version": 1,
-                    "updated_at": utc_now(),
-                    "symbols": [],
-                    "conventions": [],
-                    "notes": [
-                        "Populate as needed from the user task and verified agent outputs."
-                    ],
-                },
-            )
+        if not self.exists(self.WORK_QUEUE):
+            self.write_json(self.WORK_QUEUE, WorkQueue())
+
+    @contextmanager
+    def exclusive_lock(self) -> Iterator[None]:
+        """Prevent two engine processes from mutating one workspace concurrently."""
+        self.root.mkdir(parents=True, exist_ok=True)
+        lock_path = self.root / ".engine.lock"
+        with lock_path.open("a+", encoding="utf-8") as handle:
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as exc:
+                raise RuntimeError(
+                    f"another research engine process holds the workspace lock: {lock_path}"
+                ) from exc
+            try:
+                yield
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
     def resolve(self, path: str | Path) -> Path:
         candidate = Path(path)
@@ -101,7 +82,10 @@ class ArtifactStore:
         return resolved
 
     def relpath(self, path: str | Path) -> str:
-        return str(Path(path).resolve().relative_to(self.root))
+        candidate = Path(path)
+        if not candidate.is_absolute():
+            candidate = self.root / candidate
+        return str(candidate.resolve().relative_to(self.root))
 
     def exists(self, path: str | Path) -> bool:
         return self.resolve(path).exists()
@@ -115,36 +99,44 @@ class ArtifactStore:
     def write_text(self, path: str | Path, content: str) -> ArtifactRef:
         target = self.resolve(path)
         target.parent.mkdir(parents=True, exist_ok=True)
-        tmp = target.with_suffix(target.suffix + ".tmp")
+        tmp = target.with_name(target.name + ".tmp")
         tmp.write_text(content, encoding="utf-8")
         os.replace(tmp, target)
-        return self.artifact_ref(path, summary=f"Wrote text artifact {path}")
+        return self.artifact_ref(target)
 
     def write_bytes(self, path: str | Path, content: bytes) -> ArtifactRef:
         target = self.resolve(path)
         target.parent.mkdir(parents=True, exist_ok=True)
-        tmp = target.with_suffix(target.suffix + ".tmp")
+        tmp = target.with_name(target.name + ".tmp")
         tmp.write_bytes(content)
         os.replace(tmp, target)
-        return self.artifact_ref(path, summary=f"Wrote binary artifact {path}")
+        return self.artifact_ref(target)
 
     def read_json(self, path: str | Path) -> Any:
         return json.loads(self.read_text(path))
 
     def write_json(self, path: str | Path, payload: Any, *, indent: int = 2) -> ArtifactRef:
-        plain = to_plain(payload)
-        return self.write_text(path, json.dumps(plain, indent=indent, sort_keys=True) + "\n")
+        return self.write_text(
+            path,
+            json.dumps(to_plain(payload), indent=indent, ensure_ascii=False, sort_keys=True) + "\n",
+        )
 
     def write_yaml(self, path: str | Path, payload: Any) -> ArtifactRef:
-        plain = to_plain(payload)
-        return self.write_text(path, yaml.safe_dump(plain, sort_keys=False, allow_unicode=True))
+        return self.write_text(
+            path,
+            yaml.safe_dump(to_plain(payload), sort_keys=False, allow_unicode=True),
+        )
 
     def append_jsonl(self, path: str | Path, payload: Any) -> ArtifactRef:
         target = self.resolve(path)
         target.parent.mkdir(parents=True, exist_ok=True)
-        with target.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(to_plain(payload), sort_keys=True) + "\n")
-        return self.artifact_ref(path, summary=f"Appended JSONL event to {path}")
+        line = json.dumps(to_plain(payload), ensure_ascii=False, sort_keys=True) + "\n"
+        # One append is atomic for the small records used here on normal local filesystems.
+        with target.open("a", encoding="utf-8") as handle:
+            handle.write(line)
+            handle.flush()
+            os.fsync(handle.fileno())
+        return self.artifact_ref(target)
 
     def read_jsonl(self, path: str | Path, *, limit: int | None = None) -> list[dict[str, Any]]:
         target = self.resolve(path)
@@ -153,66 +145,58 @@ class ArtifactStore:
         lines = target.read_text(encoding="utf-8").splitlines()
         if limit is not None:
             lines = lines[-limit:]
-        records = []
-        for line in lines:
-            if line.strip():
-                records.append(json.loads(line))
+        records: list[dict[str, Any]] = []
+        for index, line in enumerate(lines, 1):
+            if not line.strip():
+                continue
+            try:
+                value = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"Malformed JSONL in {self.relpath(target)} at selected line {index}") from exc
+            if not isinstance(value, dict):
+                raise ValueError(f"JSONL row in {self.relpath(target)} is not an object")
+            records.append(value)
         return records
 
-    def append_claims(self, claims: Iterable[ClaimRecord]) -> None:
-        for claim in claims:
-            self.append_jsonl(self.CLAIM_LEDGER, claim)
+    def load_state(self) -> WorkspaceState | None:
+        if not self.exists(self.RESEARCH_STATE):
+            return None
+        return WorkspaceState.model_validate(self.read_json(self.RESEARCH_STATE))
 
-    def read_claims(self) -> list[ClaimRecord]:
-        """Replay the claim ledger as typed records, skipping malformed rows."""
-        claims: list[ClaimRecord] = []
-        for record in self.read_jsonl(self.CLAIM_LEDGER):
-            try:
-                claims.append(ClaimRecord.model_validate(record))
-            except Exception:
-                # Keep the reducer robust; the original JSONL row remains available for audit/debugging.
-                continue
-        return claims
+    def save_state(self, state: WorkspaceState) -> ArtifactRef:
+        state.updated_at = utc_now()
+        return self.write_json(self.RESEARCH_STATE, state)
 
-    def latest_claims_by_id(self) -> dict[str, ClaimRecord]:
-        """Return the latest appended version of each claim id.
+    def load_queue(self) -> WorkQueue:
+        if not self.exists(self.WORK_QUEUE):
+            queue = WorkQueue()
+            self.save_queue(queue)
+            return queue
+        return WorkQueue.model_validate(self.read_json(self.WORK_QUEUE))
 
-        The claim ledger is append-only: updates are represented by appending a newer full
-        ``ClaimRecord`` with the same ``claim_id``. This reducer is the canonical machine view.
-        """
-        latest: dict[str, ClaimRecord] = {}
-        for claim in self.read_claims():
-            latest[claim.claim_id] = claim
-        return latest
+    def save_queue(self, queue: WorkQueue) -> ArtifactRef:
+        queue.updated_at = utc_now()
+        return self.write_json(self.WORK_QUEUE, queue)
 
-    def append_proposal_event(self, entry: ProposalLedgerEntry) -> None:
-        self.append_jsonl(self.PROPOSAL_LEDGER, entry)
+    def append_event(self, event_type: str, payload: dict[str, Any] | None = None) -> ArtifactRef:
+        return self.append_jsonl(
+            self.EVENT_LEDGER,
+            {"event_type": event_type, "created_at": utc_now(), **(payload or {})},
+        )
+
+    def append_findings(self, findings: Iterable[Finding]) -> None:
+        for finding in findings:
+            self.append_jsonl(self.FINDING_LEDGER, finding)
+
+    def read_findings(self) -> list[Finding]:
+        return [Finding.model_validate(row) for row in self.read_jsonl(self.FINDING_LEDGER)]
 
     def append_model_call(self, payload: Any) -> None:
         self.append_jsonl(self.MODEL_LEDGER, payload)
 
-    def load_obligation_board(self) -> ObligationBoard:
-        if not self.exists(self.OBLIGATION_BOARD):
-            board = ObligationBoard()
-            self.save_obligation_board(board)
-            return board
-        return ObligationBoard.model_validate(self.read_json(self.OBLIGATION_BOARD))
-
-    def save_obligation_board(self, board: ObligationBoard) -> ArtifactRef:
-        board.updated_at = utc_now()
-        return self.write_json(self.OBLIGATION_BOARD, board)
-
-    def load_state(self) -> ResearchState | None:
-        if not self.exists(self.RESEARCH_STATE):
-            return None
-        return ResearchState.model_validate(self.read_json(self.RESEARCH_STATE))
-
-    def save_state(self, state: ResearchState) -> ArtifactRef:
-        state.updated_at = utc_now()
-        return self.write_json(self.RESEARCH_STATE, state)
-
-    def create_iteration_dir(self, iteration: int) -> str:
-        rel = f"Reports/iterations/iteration_{iteration:04d}"
+    def create_run_dir(self, cycle: int, label: str) -> str:
+        safe = "".join(ch if ch.isalnum() or ch in "_-" else "_" for ch in label)[:80]
+        rel = f"Runs/{cycle:04d}_{safe or 'step'}"
         self.resolve(rel).mkdir(parents=True, exist_ok=True)
         return rel
 
@@ -224,41 +208,23 @@ class ArtifactStore:
         summary: str = "",
     ) -> ArtifactRef:
         target = self.resolve(path)
-        if kind is None:
-            kind = infer_kind(target)
-        sha = sha256_file(target) if target.is_file() else None
-        return ArtifactRef(path=self.relpath(target), kind=kind, sha256=sha, summary=summary)
+        inferred = kind or infer_kind(target)
+        digest = sha256_file(target) if target.is_file() else None
+        return ArtifactRef(
+            path=self.relpath(target),
+            kind=inferred,
+            sha256=digest,
+            summary=summary,
+        )
 
-    def snapshot_core_refs(self) -> list[ArtifactRef]:
-        refs: list[ArtifactRef] = []
-        for path in [
-            self.RESEARCH_TASK,
-            self.NOMENCLATURE,
-            self.RESEARCH_STATE,
-            self.OBLIGATION_BOARD,
-            self.CLAIM_LEDGER,
-            self.PROPOSAL_LEDGER,
-        ]:
-            if self.exists(path):
-                refs.append(self.artifact_ref(path))
-        return refs
-
-    def artifact_manifest(self, *, max_items: int = 200) -> list[dict[str, Any]]:
-        """Return a compact model-facing manifest of workspace artifacts.
-
-        The manifest is an index into durable workspace memory, not the memory itself:
-        agents should use artifact retrieval tools to inspect contents. It intentionally
-        excludes implementation caches and hidden runtime directories that are not part of
-        the canonical research record.
-        """
+    def manifest(self, *, max_items: int = 100) -> list[dict[str, Any]]:
+        """Metadata-only artifact inventory for humans and bounded planner context."""
         if not self.root.exists():
             return []
-        max_items = max(1, max_items)
-        paths = [path for path in self.root.rglob("*") if path.is_file()]
         entries: list[dict[str, Any]] = []
-        for path in sorted(paths, key=lambda candidate: _manifest_sort_key(self, candidate)):
+        for path in sorted(item for item in self.root.rglob("*") if item.is_file()):
             rel = self.relpath(path)
-            if _manifest_path_is_hidden_or_cache(rel):
+            if any(part.startswith(".") for part in Path(rel).parts):
                 continue
             stat = path.stat()
             entries.append(
@@ -267,7 +233,6 @@ class ArtifactStore:
                     "kind": infer_kind(path).value,
                     "size_bytes": stat.st_size,
                     "modified_at": datetime.fromtimestamp(stat.st_mtime, UTC).isoformat(),
-                    "summary": _manifest_summary(self, rel, path),
                 }
             )
             if len(entries) >= max_items:
@@ -275,117 +240,30 @@ class ArtifactStore:
         return entries
 
 
-_MANIFEST_CORE_PRIORITY = {
-    ArtifactStore.RESEARCH_TASK: 0,
-    ArtifactStore.RESEARCH_STATE: 1,
-    ArtifactStore.CLAIM_LEDGER: 2,
-    ArtifactStore.OBLIGATION_BOARD: 3,
-    ArtifactStore.PROPOSAL_LEDGER: 4,
-    ArtifactStore.NOMENCLATURE: 5,
-    "LiteratureDB/papers.jsonl": 6,
-    "LiteratureDB/statements.jsonl": 7,
-    "LiteratureDB/audit_table.jsonl": 8,
-    "LiteratureDB/gaps.jsonl": 9,
-    "LiteratureDB/extracted_claims.jsonl": 10,
-    "LiteratureDB/query_answers.jsonl": 11,
-    "LiteratureDB/index.sqlite": 12,
-}
-
-
-_MANIFEST_EXCLUDED_PARTS = {
-    ".git",
-    ".venv",
-    ".mypy_cache",
-    ".pytest_cache",
-    ".ruff_cache",
-    ".experimenter",
-    "__pycache__",
-}
-
-
-def _manifest_sort_key(store: ArtifactStore, path: Path) -> tuple[int, str]:
-    rel = store.relpath(path)
-    return (_MANIFEST_CORE_PRIORITY.get(rel, 100), rel)
-
-
-def _manifest_path_is_hidden_or_cache(rel: str) -> bool:
-    parts = Path(rel).parts
-    return any(part in _MANIFEST_EXCLUDED_PARTS for part in parts)
-
-
-def _manifest_summary(store: ArtifactStore, rel: str, path: Path) -> str:
-    if rel == ArtifactStore.RESEARCH_TASK:
-        return "User-authored canonical research task, assumptions, constraints, and success criteria."
-    if rel == ArtifactStore.RESEARCH_STATE:
-        return "Compact machine state for the current research workspace."
-    if rel == ArtifactStore.CLAIM_LEDGER:
-        return "Append-only ledger of mathematical, algorithmic, literature, and resource claims."
-    if rel == ArtifactStore.OBLIGATION_BOARD:
-        return "Canonical obligation-first board of planned obligations, runs, generated claims, and blocked reasons."
-    if rel == ArtifactStore.PROPOSAL_LEDGER:
-        return "Append-only ledger of generated proposals, critic reviews, revisions, and decisions."
-    if rel == ArtifactStore.NOMENCLATURE:
-        return "Canonical notation, aliases, conventions, and notes."
-    if rel == ArtifactStore.MODEL_LEDGER:
-        return "Model-call latency, token usage, validation, and failure-mode log."
-    if rel.startswith("LiteratureDB/papers/") and path.name == "paper.txt":
-        return "Extracted text of an imported paper."
-    if rel.startswith("LiteratureDB/papers/") and path.name == "metadata.json":
-        return "Metadata for an imported paper."
-    if rel == "LiteratureDB/papers.jsonl":
-        return "Imported literature metadata index."
-    if rel == "LiteratureDB/statements.jsonl":
-        return "Flat extracted theorem/definition/lower-bound statements with quote provenance."
-    if rel == "LiteratureDB/audit_table.jsonl":
-        return "Structured supported/unsupported literature-audit rows."
-    if rel == "LiteratureDB/gaps.jsonl":
-        return "Structured missing-source, missing-statement, and follow-up literature-audit gaps."
-    if rel == "LiteratureDB/query_answers.jsonl":
-        return "Literature query-answer ledger with quote provenance; use JSONL retrieval by answer_id."
-    if rel == "LiteratureDB/index.sqlite":
-        return "Materialized LiteratureDB index: canonical papers, aliases, passages, statements, quotes, and support IDs."
-    if rel.startswith("Reports/iterations/") and path.name.startswith("proposal_"):
-        return "Proposal artifact for a research iteration."
-    if rel.startswith("Reports/iterations/") and "critique" in path.name:
-        return "Critic artifact for a research iteration."
-    if rel.startswith("Reports/iterations/") and "tool_trace" in path.name:
-        return "Tool-call trace artifact; audit record, usually verbose."
-    if path.suffix == ".jsonl":
-        try:
-            with path.open("r", encoding="utf-8") as fh:
-                count = sum(1 for line in fh if line.strip())
-        except UnicodeDecodeError:
-            return "JSONL artifact."
-        return f"JSONL artifact with {count} non-empty record(s)."
-    return f"{infer_kind(path).value} artifact."
-
-
 def to_plain(payload: Any) -> Any:
     if isinstance(payload, BaseModel):
         return payload.model_dump(mode="json")
     if isinstance(payload, dict):
-        return {str(k): to_plain(v) for k, v in payload.items()}
-    if isinstance(payload, list):
-        return [to_plain(v) for v in payload]
-    if isinstance(payload, tuple):
-        return [to_plain(v) for v in payload]
+        return {str(key): to_plain(value) for key, value in payload.items()}
+    if isinstance(payload, (list, tuple)):
+        return [to_plain(value) for value in payload]
     return payload
 
 
 def sha256_file(path: Path) -> str:
-    h = hashlib.sha256()
-    with path.open("rb") as fh:
-        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
-            h.update(chunk)
-    return h.hexdigest()
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def infer_kind(path: Path) -> ArtifactKind:
     if path.is_dir():
         return ArtifactKind.directory
-    suffix = path.suffix.lower()
     return {
         ".md": ArtifactKind.markdown,
+        ".txt": ArtifactKind.markdown,
         ".json": ArtifactKind.json,
         ".jsonl": ArtifactKind.jsonl,
         ".yml": ArtifactKind.yaml,
@@ -394,7 +272,4 @@ def infer_kind(path: Path) -> ArtifactKind:
         ".py": ArtifactKind.python,
         ".sqlite": ArtifactKind.sqlite,
         ".log": ArtifactKind.log,
-        ".pdf": ArtifactKind.other,
-        ".html": ArtifactKind.other,
-        ".txt": ArtifactKind.markdown,
-    }.get(suffix, ArtifactKind.other)
+    }.get(path.suffix.lower(), ArtifactKind.other)

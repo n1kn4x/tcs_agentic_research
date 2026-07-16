@@ -1,105 +1,85 @@
-# Copy to config.yml and edit model names/endpoints for your local vLLM servers.
-# vLLM exposes an OpenAI-compatible API at http://host:port/v1.
-experimenter:
-  enabled: true
-  image: tcs-agentic-research-experimenter:latest
-  # Empty means: use the Dockerfile shipped in src/tcs_agentic_research/experimenter/Dockerfile.
-  dockerfile: ""
-  network: bridge
-  memory: 8g
-  cpus: 4
-  timeout_seconds: 1800
-  max_output_bytes: 2000000
-  add_host_gateway: true
-  environment: {}
-  pi:
-    provider: experimenter-vllm
-    model: deep-reasoner
-    base_url: http://host.docker.internal:8000/v1
-    api_key: EMPTY
-    api: openai-completions
-    thinking: high
-    reasoning: true
-    context_window: 128000
-    max_tokens: 32768
-    provider_capabilities:
-      supportsDeveloperRole: false
-      supportsReasoningEffort: false
+# Bounded Qwen3.6 configuration. The core engine never exposes tools to a model.
+# Every request is fresh, response_format-constrained, and limited by the budgets below.
+core:
+  max_model_calls_per_step: 3
+  max_plan_rounds: 3
+  max_plan_items: 4
+  literature_max_imports: 3
+  literature_results_per_query: 5
+  proof_revisions: 1
 
 router:
-  default_task: routine
+  default_profile: reasoning
+  repair_profile: format
   timeout_seconds: 600
-  max_retries: 2
+  max_input_chars: 30000
+  max_output_tokens: 4096
+  repair_attempts: 1
   profiles:
-    deep-tools:
+    reasoning:
       model: deep-reasoner
       base_url: http://localhost:8000/v1
       api_key: EMPTY
-      temperature: 0.0
-      max_tokens: 32768
-      supports_tools: true
-      extra_body:
-        top_p: 1.0
-        top_k: 20
-        min_p: 0.0
-        presence_penalty: 0.0
-        repetition_penalty: 1.02
-        chat_template_kwargs:
-          enable_thinking: true
-          preserve_thinking: false
+      temperature: 0.6
+      max_tokens: 4096
       task_types:
-        - proposal_generation
-        - research_execution
-
-    verifier:
-      model: deep-reasoner
-      base_url: http://localhost:8000/v1
-      api_key: EMPTY
-      temperature: 0.0
-      max_tokens: 32768
-      supports_tools: false
+        - planning
+        - analysis
+        - literature_planning
+        - proof_formulation
+        - experiment_design
       extra_body:
-        top_p: 1.0
+        top_p: 0.95
         top_k: 20
         min_p: 0.0
         presence_penalty: 0.0
         repetition_penalty: 1.0
         chat_template_kwargs:
+          enable_thinking: true
+          preserve_thinking: false
+
+    format:
+      model: routine-extractor
+      base_url: http://localhost:8001/v1
+      api_key: EMPTY
+      temperature: 0.7
+      max_tokens: 4096
+      task_types:
+        - literature_extraction
+      extra_body:
+        top_p: 0.8
+        top_k: 20
+        min_p: 0.0
+        # Qwen notes that high presence penalties can cause language mixing.
+        presence_penalty: 0.0
+        repetition_penalty: 1.0
+        chat_template_kwargs:
           enable_thinking: false
           preserve_thinking: false
-      task_types:
-        - proposal_critique
-        - independent_replication
 
     proof:
       model: lean-prover
       base_url: http://localhost:8003/v1
       api_key: EMPTY
-      temperature: 0.0
-      max_tokens: 24576
-      supports_tools: false
-      extra_body:
-        top_p: 1.0
-        presence_penalty: 0.0
-        repetition_penalty: 1.0
+      temperature: 0.6
+      max_tokens: 4096
       task_types:
         - theorem_proving
-
-    routine:
-      model: routine-extractor
-      base_url: http://localhost:8001/v1
-      api_key: EMPTY
-      temperature: 0.0
-      max_tokens: 8192
-      supports_tools: false
       extra_body:
-        top_p: 1.0
-        top_k: 20
-        min_p: 0.0
+        top_p: 0.95
         presence_penalty: 0.0
         repetition_penalty: 1.0
-        chat_template_kwargs:
-          enable_thinking: false
-      task_types:
-        - literature_extraction
-        - structured_finalization
+
+# Experiments execute one generated Python program in a resource-bounded container.
+# There is no nested tool-calling coding agent.
+experimenter:
+  enabled: true
+  image: tcs-agentic-research-experimenter:v2
+  dockerfile: ""
+  network: none
+  memory: 4g
+  cpus: 2
+  timeout_seconds: 600
+  max_output_bytes: 500000
+  add_host_gateway: false
+  environment: {}

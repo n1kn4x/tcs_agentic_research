@@ -14,14 +14,24 @@ workspaces/*
 !workspaces/test-lit-orthogonal-vectors-lower-bounds/InitialResearchTask.md
 !workspaces/test-exp-dpll-sat-benchmark/InitialResearchTask.md
 !workspaces/test-leap-boolean-algebra-lemmas/InitialResearchTask.md
-Nomenclature.yml
-ResearchState.json
-ClaimLedger.jsonl
-ProposalLedger.jsonl
+State.json
+Queue.json
+Events.jsonl
+Findings.jsonl
+ModelCalls.jsonl
+Runs/
 LiteratureDB/
 LeanProject/
 ExperimentRuns/
 Reports/
+.experimenter/
+
+# Legacy pre-refactor workspace artifacts
+Nomenclature.yml
+ResearchState.json
+ObligationBoard.json
+ClaimLedger.jsonl
+ProposalLedger.jsonl
 ModelCallLedger.jsonl
 GraphCheckpoints.sqlite*
 

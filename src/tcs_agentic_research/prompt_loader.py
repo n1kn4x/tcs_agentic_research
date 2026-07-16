@@ -1,9 +1,8 @@
 """Prompt loading utilities.
 
 Prompts are plain Markdown files in ``src/tcs_agentic_research/prompts`` so they are easy
-to inspect, version, and edit. Structured-output prompts include a schema-named placeholder
-such as ``{{ProposalSubmission}}``; :meth:`tcs_agentic_research.llm.LLMRouter.complete_structured`
-replaces it with the corresponding recursive JSON Schema before calling the model.
+to inspect, version, and edit. JSON schemas are sent once through the API's ``response_format``;
+they are deliberately not duplicated into prompt text.
 """
 
 from __future__ import annotations

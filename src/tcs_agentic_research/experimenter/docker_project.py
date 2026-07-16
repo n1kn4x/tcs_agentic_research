@@ -20,10 +20,9 @@ class DockerProjectContainer:
     """Manage one persistent experimenter container per research workspace.
 
     The canonical research workspace is mounted read-only at ``/research``. Portable,
-    mutable experimenter state lives inside the workspace under ``.experimenter/workspace``
-    and is bind-mounted read-write at ``/workspace``. Copying a workspace therefore copies
-    experiment scripts, pi sessions/config, caches, and intermediate run state; the Docker
-    image itself remains reproducibly rebuildable from the packaged Dockerfile.
+    mutable experiment state lives under ``.experimenter/workspace`` and is bind-mounted
+    read-write at ``/workspace``. The core engine executes one generated Python program per
+    work item; it does not run another tool-calling agent inside this container.
     """
 
     def __init__(self, store: ArtifactStore, settings: ExperimenterSettings | None):
@@ -46,16 +45,13 @@ class DockerProjectContainer:
             self._docker(["rm", self.container_name], timeout=60)
             state = None
         if state == "running":
-            self._write_pi_models_config()
             self._write_manifest(state="running")
             return
         if state is not None:
             self._docker(["start", self.container_name], timeout=60)
-            self._write_pi_models_config()
             self._write_manifest(state="running")
             return
         self._docker(self._run_args(), timeout=120)
-        self._write_pi_models_config()
         self._write_manifest(state="running")
 
     def status(self) -> dict[str, Any]:
@@ -126,6 +122,13 @@ class DockerProjectContainer:
             self.container_name,
             "--network",
             self.settings.network,
+            "--read-only",
+            "--tmpfs",
+            "/tmp:rw,noexec,nosuid,size=256m",
+            "--pids-limit",
+            "128",
+            "--security-opt",
+            "no-new-privileges",
             "--label",
             "tcs.agentic_research.role=experimenter",
             "--label",
@@ -151,63 +154,16 @@ class DockerProjectContainer:
     def _container_env(self) -> dict[str, str]:
         return {
             "HOME": "/workspace/home",
-            "PI_CODING_AGENT_DIR": "/workspace/home/.pi/agent",
-            "PI_CODING_AGENT_SESSION_DIR": "/workspace/home/.pi/sessions",
-            "PI_SKIP_VERSION_CHECK": "1",
             "PIP_CACHE_DIR": "/workspace/.cache/pip",
             "PYTHONUSERBASE": "/workspace/python-user",
+            "MPLBACKEND": "Agg",
             **self.settings.environment,
         }
-
-    def _write_pi_models_config(self) -> None:
-        pi = self.settings.pi
-        models = {
-            "providers": {
-                pi.provider: {
-                    "baseUrl": pi.base_url,
-                    "api": pi.api,
-                    "apiKey": pi.api_key,
-                    "compat": pi.provider_capabilities,
-                    "models": [
-                        {
-                            "id": pi.model,
-                            "name": pi.model,
-                            "reasoning": pi.reasoning,
-                            "contextWindow": pi.context_window,
-                            "maxTokens": pi.max_tokens,
-                            "cost": {
-                                "input": 0,
-                                "output": 0,
-                                "cacheRead": 0,
-                                "cacheWrite": 0,
-                            },
-                        }
-                    ],
-                }
-            }
-        }
-        payload = json.dumps(models, indent=2, sort_keys=True)
-        command = (
-            "mkdir -p /workspace/home/.pi/agent /workspace/home/.pi/sessions "
-            "&& cat > /workspace/home/.pi/agent/models.json"
-        )
-        completed = self._docker(
-            ["exec", "-i", self.container_name, "sh", "-lc", command],
-            input_text=payload,
-            timeout=60,
-            check=False,
-        )
-        if completed.returncode != 0:
-            raise ExperimenterRuntimeError(
-                "failed to write pi models.json inside experimenter container: "
-                f"{_diagnostic(completed)}"
-            )
 
     def _ensure_workspace_dirs(self) -> None:
         for directory in [
             self.workspace_state_dir,
-            self.workspace_state_dir / "home" / ".pi" / "agent",
-            self.workspace_state_dir / "home" / ".pi" / "sessions",
+            self.workspace_state_dir / "home",
             self.workspace_state_dir / "runs",
             self.workspace_state_dir / ".cache" / "pip",
             self.workspace_state_dir / "python-user",
@@ -240,8 +196,8 @@ class DockerProjectContainer:
                 "portable_with_workspace": True,
             },
             "notes": [
-                "Copying the workspace copies .experimenter/workspace and therefore pi sessions, scripts, caches, and intermediate experiment state.",
-                "The Docker image is global to the Docker daemon and is rebuilt from the packaged Dockerfile when absent; it is not copied with the workspace.",
+                "Copying the workspace copies generated scripts, outputs, caches, and intermediate experiment state.",
+                "The Docker image is global to the Docker daemon and can be rebuilt from the packaged Dockerfile.",
             ],
         }
         self.manifest_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")

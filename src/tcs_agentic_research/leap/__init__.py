@@ -1,1 +1,1 @@
-"""LEAP: LLM-in-Lean Environment Agentic Prover subsystem."""
+"""Bounded Lean generation, compilation, and one-step repair."""

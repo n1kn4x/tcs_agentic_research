@@ -14,7 +14,7 @@ import sqlite3
 from typing import Any, Iterable
 
 from ..artifact_store import ArtifactStore
-from ..schemas import LiteratureExtract, LiteratureQuote, PaperMetadata
+from ..schemas import LiteratureExtract, LiteratureQuote, LiteratureStatement, PaperMetadata
 
 
 class LiteratureIndex:
@@ -59,12 +59,47 @@ class LiteratureIndex:
             self.upsert_paper(paper)
             if paper.text_path and self.store.exists(paper.text_path):
                 self.index_paper_text(paper)
-        for record in self.store.read_jsonl("LiteratureDB/extracted_claims.jsonl"):
+        grouped: dict[tuple[str, str], list[LiteratureStatement]] = {}
+        for record in self.store.read_jsonl("LiteratureDB/statements.jsonl"):
             try:
-                extract = LiteratureExtract.model_validate(record)
+                quote = LiteratureQuote(
+                    quote_id=str(record.get("quote_id") or _stable_id("quote", str(record))),
+                    citation_key=str(record.get("citation_key") or ""),
+                    paper_id=str(record.get("paper_id") or ""),
+                    locator=str(record.get("locator") or ""),
+                    quote=str(record.get("quote") or record.get("original_statement") or ""),
+                    char_start=record.get("char_start"),
+                    char_end=record.get("char_end"),
+                    source_sha256=str(record.get("source_sha256") or ""),
+                    validated=bool(record.get("validated_exact_substring")),
+                )
+                statement = LiteratureStatement(
+                    statement_id=str(record.get("statement_id") or _stable_id("lit_stmt", str(record))),
+                    support_id=str(record.get("support_id") or ""),
+                    citation_key=quote.citation_key,
+                    paper_id=quote.paper_id,
+                    kind=str(record.get("kind") or "other"),
+                    label=str(record.get("label") or ""),
+                    original_statement=str(record.get("original_statement") or record.get("statement_text") or ""),
+                    statement_text=str(record.get("statement_text") or record.get("original_statement") or ""),
+                    provenance=[quote],
+                    confidence=float(record.get("confidence") or 0.0),
+                )
             except Exception:
                 continue
-            self.index_extract(extract)
+            grouped.setdefault((statement.paper_id, statement.citation_key), []).append(statement)
+        for (paper_id, citation_key), statements in grouped.items():
+            self.index_extract(
+                LiteratureExtract(
+                    citation_key=citation_key,
+                    paper_id=paper_id,
+                    theorem_statements=[
+                        item for item in statements if item.kind not in {"algorithm", "lower_bound"}
+                    ],
+                    algorithm_statements=[item for item in statements if item.kind == "algorithm"],
+                    lower_bound_statements=[item for item in statements if item.kind == "lower_bound"],
+                )
+            )
 
     def upsert_paper(self, paper: PaperMetadata, *, aliases: Iterable[str] = ()) -> None:
         """Insert/update paper metadata and all known aliases."""
@@ -247,6 +282,7 @@ class LiteratureIndex:
                 quote_id = quote.quote_id
                 support_id = _stable_id("lit_sup", statement.statement_id, quote_id)
                 statement.support_id = support_id
+                statement_quality_ok = validated and _statement_span_quality(statement)
                 support_ids[statement.statement_id] = support_id
                 db.execute(
                     """
@@ -300,9 +336,11 @@ class LiteratureIndex:
                         quote_id,
                         statement.paper_id or extract.paper_id,
                         statement.citation_key or extract.citation_key,
-                        "primary_exact" if validated else "primary_unverified_span",
+                        "primary_exact" if statement_quality_ok else (
+                            "candidate_exact_quote" if validated else "candidate_unverified_span"
+                        ),
                         "states",
-                        1 if validated else 0,
+                        1 if statement_quality_ok else 0,
                     ),
                 )
                 if self._has_fts(db):
@@ -349,7 +387,8 @@ class LiteratureIndex:
                        COALESCE(s.paper_id, sup.paper_id, q.paper_id) AS paper_id,
                        COALESCE(s.citation_key, sup.citation_key, q.citation_key) AS citation_key,
                        s.kind, s.label, s.statement_text, q.locator, q.char_start,
-                       q.char_end, q.text_sha256, q.validated, sup.support_level, sup.relation
+                       q.char_end, q.text_sha256, sup.validated,
+                       q.validated AS quote_validated, sup.support_level, sup.relation
                 FROM supports sup
                 LEFT JOIN statements s ON s.statement_id = sup.statement_id
                 LEFT JOIN quotes q ON q.quote_id = sup.quote_id
@@ -482,7 +521,8 @@ class LiteratureIndex:
             SELECT 'statement' AS result_kind, s.statement_id, sup.support_id, s.paper_id,
                    s.citation_key, p.title AS paper_title, p.year, s.kind, s.label,
                    s.statement_text, s.original_statement, s.quote_id, q.locator,
-                   q.quote, q.char_start, q.char_end, q.text_sha256, q.validated,
+                   q.quote, q.char_start, q.char_end, q.text_sha256,
+                   q.validated AS quote_validated, sup.validated AS support_validated,
                    sup.support_level, sup.relation, bm25(statement_fts) AS rank
             FROM statement_fts
             JOIN statements s ON s.statement_id = statement_fts.statement_id
@@ -526,7 +566,8 @@ class LiteratureIndex:
             SELECT 'statement' AS result_kind, s.statement_id, sup.support_id, s.paper_id,
                    s.citation_key, p.title AS paper_title, p.year, s.kind, s.label,
                    s.statement_text, s.original_statement, s.quote_id, q.locator,
-                   q.quote, q.char_start, q.char_end, q.text_sha256, q.validated,
+                   q.quote, q.char_start, q.char_end, q.text_sha256,
+                   q.validated AS quote_validated, sup.validated AS support_validated,
                    sup.support_level, sup.relation, 0.0 AS rank
             FROM statements s
             LEFT JOIN supports sup ON sup.statement_id = s.statement_id
@@ -626,6 +667,31 @@ def _validate_or_locate_quote(text: str, quote: LiteratureQuote) -> tuple[bool, 
         if compact_q and compact_q in compact_text:
             return False, quote.char_start, quote.char_end
     return False, quote.char_start, quote.char_end
+
+
+def _statement_span_quality(statement: LiteratureStatement) -> bool:
+    """Conservative syntax gate for promoting a regex span beyond a quote candidate."""
+    text = re.sub(r"\s+", " ", statement.statement_text).strip()
+    label = re.sub(r"\s+", " ", statement.label).strip()
+    if not (25 <= len(text) <= 1200) or not label:
+        return False
+    if not re.fullmatch(
+        r"(?i)(?:theorem|lemma|corollary|proposition|algorithm|definition|"
+        r"hypothesis|assumption|conjecture)(?:\s+[0-9A-Za-z]+(?:\.[0-9A-Za-z]+)*)?",
+        label,
+    ):
+        return False
+    if not text.lower().startswith(label.lower()):
+        return False
+    remainder = text[len(label) :].lstrip()
+    if re.match(r"\.\d", remainder):  # The regex captured `Theorem 1` from `Theorem 1.3`.
+        return False
+    suspicious_prefix = remainder[:120].lower()
+    if any(token in suspicious_prefix for token in ["figure ", "this proves", "▶"]):
+        return False
+    if text.endswith(":") or "following statement" in text[-120:].lower():
+        return False
+    return True
 
 
 def _stable_id(prefix: str, *parts: str) -> str:

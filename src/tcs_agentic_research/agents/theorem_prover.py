@@ -1,4 +1,4 @@
-"""Theorem prover agent wrapping the LEAP harness."""
+"""Thin adapter around the bounded Lean harness."""
 
 from __future__ import annotations
 
@@ -11,18 +11,18 @@ from ..schemas import LeanStatement, TheoremProverResult
 class TheoremProverAgent:
     def __init__(self, store: ArtifactStore, router: LLMRouter, *, prompt_dir: str | None = None):
         self.harness = LEAPHarness(store, router, prompt_dir=prompt_dir)
-        self.store = store
 
-    def prove(self, goal: LeanStatement, *, context: str = "") -> TheoremProverResult:
-        result = self.harness.prove(goal, context=context)
-        ref = self.store.write_json(f"Reports/critic_summaries/{result.result_id}.json", result)
-        self_ref = ref.model_copy(
-            update={
-                "sha256": None,
-                "summary": "Theorem prover result JSON; self-reference hash omitted.",
-            }
+    def prove(
+        self,
+        goal: LeanStatement,
+        *,
+        context: str = "",
+        max_iterations: int = 1,
+        max_revisions: int = 1,
+    ) -> TheoremProverResult:
+        return self.harness.prove(
+            goal,
+            context=context,
+            max_iterations=max_iterations,
+            max_revisions=max_revisions,
         )
-        if self_ref.path not in {existing.path for existing in result.artifact_refs}:
-            result.artifact_refs.append(self_ref)
-        self.store.write_json(f"Reports/critic_summaries/{result.result_id}.json", result)
-        return result
