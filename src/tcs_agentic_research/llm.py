@@ -22,6 +22,7 @@ from .schemas import (
     AppConfig,
     CoreSettings,
     ExperimenterSettings,
+    LeapSettings,
     ModelCallRecord,
     ModelProfile,
     RouterSettings,
@@ -60,12 +61,14 @@ class LLMRouter:
         dry_run: bool = False,
         experimenter: ExperimenterSettings | None = None,
         core: CoreSettings | None = None,
+        leap: LeapSettings | None = None,
     ):
         self.settings = settings
         self.store = store
         self.dry_run = dry_run
         self.experimenter = experimenter
         self.core = core or CoreSettings()
+        self.leap = leap or LeapSettings()
         self._step_id = ""
         self._remaining_calls: int | None = None
 
@@ -108,6 +111,7 @@ class LLMRouter:
             dry_run=dry_run,
             experimenter=config.experimenter,
             core=config.core,
+            leap=config.leap,
         )
 
     def select_profile(self, task_type: str) -> tuple[str, ModelProfile]:
@@ -118,6 +122,10 @@ class LLMRouter:
         if name not in self.settings.profiles:
             raise StructuredLLMError(f"Unknown default model profile `{name}`")
         return name, self.settings.profiles[name]
+
+    @property
+    def operation_budget_active(self) -> bool:
+        return self._remaining_calls is not None
 
     @contextmanager
     def step_budget(self, step_id: str, *, max_calls: int | None = None) -> Iterator[None]:

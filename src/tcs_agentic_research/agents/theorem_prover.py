@@ -1,28 +1,25 @@
-"""Thin adapter around the bounded Lean harness."""
+"""Application adapter for the persistent LEAP subsystem."""
 
 from __future__ import annotations
 
 from ..artifact_store import ArtifactStore
-from ..llm import LLMRouter
 from ..leap.harness import LEAPHarness
-from ..schemas import LeanStatement, TheoremProverResult
+from ..llm import LLMRouter
+from ..schemas import LeanStatement, LeapSettings, TheoremProverResult
 
 
 class TheoremProverAgent:
-    def __init__(self, store: ArtifactStore, router: LLMRouter, *, prompt_dir: str | None = None):
-        self.harness = LEAPHarness(store, router, prompt_dir=prompt_dir)
-
-    def prove(
+    def __init__(
         self,
-        goal: LeanStatement,
+        store: ArtifactStore,
+        router: LLMRouter,
         *,
-        context: str = "",
-        max_iterations: int = 1,
-        max_revisions: int = 1,
-    ) -> TheoremProverResult:
-        return self.harness.prove(
-            goal,
-            context=context,
-            max_iterations=max_iterations,
-            max_revisions=max_revisions,
+        prompt_dir: str | None = None,
+        settings: LeapSettings | None = None,
+    ):
+        self.harness = LEAPHarness(
+            store, router, prompt_dir=prompt_dir, settings=settings
         )
+
+    def prove(self, goal: LeanStatement, *, context: str = "") -> TheoremProverResult:
+        return self.harness.prove(goal, context=context)

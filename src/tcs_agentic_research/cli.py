@@ -46,13 +46,14 @@ def main(argv: list[str] | None = None) -> int:
     doctor_parser.add_argument("--workspace", default=".")
     doctor_parser.add_argument("--clean-legacy", action="store_true")
 
-    prove_parser = sub.add_parser("prove", help="Attempt one bounded Lean proof")
+    prove_parser = sub.add_parser("prove", help="Run or resume a persistent LEAP proof search")
     _add_common(prove_parser)
     prove_parser.add_argument("--name", required=True)
     prove_parser.add_argument("--statement", required=True)
     prove_parser.add_argument("--import", dest="imports", action="append", default=[])
     prove_parser.add_argument("--namespace", default="TCSResearch")
-    prove_parser.add_argument("--max-revisions", type=int, default=1)
+    prove_parser.add_argument("--max-model-calls", type=int)
+    prove_parser.add_argument("--max-wall-seconds", type=int)
 
     literature_parser = sub.add_parser("literature", help="Operate the local literature store")
     literature_sub = literature_parser.add_subparsers(dest="literature_command", required=True)
@@ -177,8 +178,18 @@ def _router_and_store(args: argparse.Namespace) -> tuple[ArtifactStore, LLMRoute
 def _prove(args: argparse.Namespace) -> int:
     store, router = _router_and_store(args)
     imports = args.imports or ["TCSResearch.Basic"]
-    with router.step_budget("manual_proof", max_calls=max(2, args.max_revisions + 1)):
-        result = TheoremProverAgent(store, router, prompt_dir=args.prompt_dir).prove(
+    updates = {}
+    if args.max_model_calls is not None:
+        updates["max_model_calls_per_run"] = args.max_model_calls
+    if args.max_wall_seconds is not None:
+        updates["max_wall_seconds"] = args.max_wall_seconds
+    settings = type(router.leap).model_validate(
+        {**router.leap.model_dump(mode="python"), **updates}
+    )
+    with router.step_budget("manual_proof", max_calls=settings.max_model_calls_per_run):
+        result = TheoremProverAgent(
+            store, router, prompt_dir=args.prompt_dir, settings=settings
+        ).prove(
             LeanStatement(
                 name=args.name,
                 statement=args.statement,
@@ -186,7 +197,6 @@ def _prove(args: argparse.Namespace) -> int:
                 namespace=args.namespace,
             ),
             context="Manual CLI proof request.",
-            max_revisions=args.max_revisions,
         )
     print(result.model_dump_json(indent=2))
     return 0

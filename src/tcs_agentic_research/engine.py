@@ -346,7 +346,11 @@ class ResearchEngine:
             {
                 "task_sha256": state.task_sha256,
                 "work_item": item,
-                "model_call_budget": self.router.core.max_model_calls_per_step,
+                "model_call_budget": (
+                    self.router.leap.max_model_calls_per_run
+                    if item.kind == WorkKind.proof
+                    else self.router.core.max_model_calls_per_step
+                ),
             },
         )
         self.store.save_queue(queue)
@@ -357,10 +361,12 @@ class ResearchEngine:
         )
 
         try:
-            with self.router.step_budget(
-                item.work_id,
-                max_calls=self.router.core.max_model_calls_per_step,
-            ):
+            model_call_budget = (
+                self.router.leap.max_model_calls_per_run
+                if item.kind == WorkKind.proof
+                else self.router.core.max_model_calls_per_step
+            )
+            with self.router.step_budget(item.work_id, max_calls=model_call_budget):
                 result = self._dispatch(item, run_dir)
         except Exception as exc:  # noqa: BLE001 - the durable result is the failure boundary
             result = WorkResult(
@@ -718,12 +724,7 @@ class ResearchEngine:
             self.store,
             self.router,
             prompt_dir=self.prompt_dir,
-        ).prove(
-            goal,
-            context=item.instruction,
-            max_iterations=1,
-            max_revisions=self.router.core.proof_revisions,
-        )
+        ).prove(goal, context=item.instruction)
         result_ref = self.store.write_json(f"{run_dir}/lean_result.json", result)
         if result.status == "proved":
             finding = Finding(
@@ -737,12 +738,12 @@ class ResearchEngine:
             outcome = "done"
             findings = [finding]
         else:
-            outcome = "blocked" if result.status == "needs_human_formalization" else "partial"
+            outcome = "blocked" if result.status == "unavailable" else "partial"
             findings = []
         return WorkResult(
             work_id=item.work_id,
             outcome=outcome,
-            summary=f"Bounded Lean attempt ended with status `{result.status}`.",
+            summary=f"Persistent LEAP search invocation ended with status `{result.status}`.",
             findings=findings,
             artifact_refs=[formulation_input_ref, goal_ref, result_ref, *result.artifact_refs],
             errors=[] if result.status == "proved" else [result.proof_dag_summary],

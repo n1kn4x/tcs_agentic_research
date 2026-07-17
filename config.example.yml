@@ -6,7 +6,22 @@ core:
   max_plan_items: 4
   literature_max_imports: 3
   literature_results_per_query: 5
-  proof_revisions: 1
+
+# One invocation may run for hours; every accepted node and failed attempt is persisted and the
+# same theorem resumes from LeanProject/LEAP/state.sqlite on the next invocation.
+leap:
+  max_model_calls_per_run: 64
+  direct_attempts_per_node: 2
+  direct_revisions: 5
+  blueprint_attempts_per_node: 3
+  sketch_revisions: 4
+  max_depth: 20
+  max_nodes: 500
+  max_children: 6
+  max_wall_seconds: 21600
+  compiler_timeout_seconds: 300
+  compiler_memory_mb: 16384
+  reviewer_min_score: 0.55
 
 router:
   default_profile: reasoning
@@ -24,7 +39,9 @@ router:
       max_tokens: 12288
       task_types:
         - analysis
-        - proof_revision
+        - proof_planning
+        - blueprint_generation
+        - decomposition_review
       extra_body:
         top_p: 0.95
         top_k: 20
@@ -101,6 +118,9 @@ router:
       max_tokens: 8192
       task_types:
         - theorem_proving
+        - proof_revision
+        - sketch_generation
+        - sketch_revision
       extra_body:
         top_p: 0.95
         presence_penalty: 0.0

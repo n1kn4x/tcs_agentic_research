@@ -148,18 +148,29 @@ tcs-research literature query --workspace workspaces/demo --query "logarithmic d
 tcs-research literature rebuild-index --workspace workspaces/demo
 ```
 
-## Lean subsystem
+## Lean / LEAP subsystem
 
-A proof work item formulates one small Lean goal, asks for one direct proof, compiles it, and permits at
-most one compiler-guided repair by default. It does not silently start a decomposition tree. A later
-planning round can create a smaller lemma from the preserved compiler error.
+Proof work uses a persistent, resumable AND-OR DAG. LEAP tries informal planning plus direct
+formalization first, performs several localized compiler-feedback revisions, and then asks for a
+Lean-verified decomposition into shared child propositions. Deterministic cycle/restatement checks
+and a separate usefulness reviewer prevent formally valid but non-progressing branches. Attempts,
+compiler output, accepted sketches, and proved nodes remain in `LeanProject/LEAP/state.sqlite` across
+invocations.
 
 ```bash
 tcs-research prove --workspace workspaces/demo --config config.yml \
   --name nat_id --statement "∀ n : Nat, n = n"
+
+# Resume the same graph with a larger one-invocation budget
+tcs-research prove --workspace workspaces/demo --config config.yml \
+  --name nat_id --statement "∀ n : Nat, n = n" \
+  --max-model-calls 256 --max-wall-seconds 86400
 ```
 
-Only a compiler-successful, `sorry`/`admit`-free file becomes a `verified` finding.
+A root becomes a `verified` finding only after LEAP topologically materializes all required lemmas and
+batch-compiles one self-contained, `sorry`/`admit`-free final module. See
+[`src/tcs_agentic_research/leap/README.md`](src/tcs_agentic_research/leap/README.md) for architecture,
+Mathlib setup, persistence, and budget details.
 
 ## Experiment subsystem
 

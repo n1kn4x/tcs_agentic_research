@@ -499,6 +499,48 @@ class LeanStatement(StrictModel):
     imports: list[str] = Field(default_factory=lambda: ["TCSResearch.Basic"])
     namespace: str | None = "TCSResearch"
 
+    @field_validator("name")
+    @classmethod
+    def valid_name(cls, value: str) -> str:
+        name = value.strip()
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_']*", name):
+            raise ValueError("Lean theorem name must be one unqualified identifier")
+        return name
+
+    @field_validator("statement")
+    @classmethod
+    def closed_type_source(cls, value: str) -> str:
+        statement = value.strip()
+        if not statement:
+            raise ValueError("Lean statement cannot be empty")
+        if ":=" in statement or re.search(r"\b(?:sorry|admit)\b", statement):
+            raise ValueError("Lean statement must not contain a proof body or placeholder")
+        if re.search(
+            r"(?m)^\s*(?:import|namespace|section|end|theorem|lemma|axiom|def|opaque)\b",
+            statement,
+        ):
+            raise ValueError("Lean statement must contain only one proposition type")
+        return statement
+
+    @field_validator("imports")
+    @classmethod
+    def valid_imports(cls, values: list[str]) -> list[str]:
+        for value in values:
+            if not re.fullmatch(
+                r"[A-Za-z_][A-Za-z0-9_']*(?:\.[A-Za-z_][A-Za-z0-9_']*)*", value
+            ):
+                raise ValueError(f"invalid Lean module import: {value!r}")
+        return values
+
+    @field_validator("namespace")
+    @classmethod
+    def valid_namespace(cls, value: str | None) -> str | None:
+        if value is not None and not re.fullmatch(
+            r"[A-Za-z_][A-Za-z0-9_']*(?:\.[A-Za-z_][A-Za-z0-9_']*)*", value
+        ):
+            raise ValueError("invalid Lean namespace")
+        return value
+
 
 class ProofGoal(StrictModel):
     goal_id: str = Field(default_factory=lambda: new_id("goal"))
@@ -519,7 +561,7 @@ class LeanCompilerLog(StrictModel):
 
 class TheoremProverResult(StrictModel):
     result_id: str = Field(default_factory=lambda: new_id("lean_result"))
-    status: Literal["proved", "failed", "needs_human_formalization"]
+    status: Literal["proved", "partial", "exhausted", "unavailable"]
     root_goal: LeanStatement
     proved_artifacts: list[ArtifactRef] = Field(default_factory=list)
     artifact_refs: list[ArtifactRef] = Field(default_factory=list)
@@ -570,7 +612,27 @@ class CoreSettings(StrictModel):
     max_plan_items: int = Field(default=4, ge=1, le=4)
     literature_max_imports: int = Field(default=3, ge=0, le=10)
     literature_results_per_query: int = Field(default=5, ge=1, le=10)
-    proof_revisions: int = Field(default=1, ge=0, le=2)
+
+
+class LeapSettings(StrictModel):
+    """Budgets for one resumable LEAP search invocation.
+
+    These are safety limits, not claims that a theorem should finish within one invocation.  The
+    SQLite graph preserves all verified progress for later invocations.
+    """
+
+    max_model_calls_per_run: int = Field(default=64, ge=1, le=100_000)
+    direct_attempts_per_node: int = Field(default=2, ge=0, le=20)
+    direct_revisions: int = Field(default=5, ge=0, le=30)
+    blueprint_attempts_per_node: int = Field(default=3, ge=0, le=20)
+    sketch_revisions: int = Field(default=4, ge=0, le=30)
+    max_depth: int = Field(default=20, ge=1, le=100)
+    max_nodes: int = Field(default=500, ge=1, le=100_000)
+    max_children: int = Field(default=6, ge=1, le=20)
+    max_wall_seconds: int = Field(default=21_600, ge=1, le=1_209_600)
+    compiler_timeout_seconds: int = Field(default=300, ge=5, le=7200)
+    compiler_memory_mb: int = Field(default=16384, ge=1024, le=262_144)
+    reviewer_min_score: float = Field(default=0.55, ge=0.0, le=1.0)
 
 
 class ExperimenterSettings(StrictModel):
@@ -590,6 +652,7 @@ class ExperimenterSettings(StrictModel):
 class AppConfig(StrictModel):
     router: RouterSettings
     core: CoreSettings = Field(default_factory=CoreSettings)
+    leap: LeapSettings = Field(default_factory=LeapSettings)
     experimenter: ExperimenterSettings | None = None
 
 
