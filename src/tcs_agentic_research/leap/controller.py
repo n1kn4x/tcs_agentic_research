@@ -201,6 +201,13 @@ class SearchController:
 
         self._active_stack.append(node_id)
         try:
+            # Cheap, compiler-checked tactics solve many definitional, simplification, and finite
+            # decidable goals without model uncertainty.  Run them even before resuming a branch:
+            # an existing decomposition may have been created by an older invocation that lacked
+            # this deterministic pre-pass.
+            if not self.router.dry_run and self._attempt_deterministic(node, depth=depth):
+                return True
+
             # Continue active branches and paused branches that already proved at least one child.
             # A wholly stalled paused branch is deferred until after alternatives are generated;
             # otherwise every resumed invocation could spend its entire budget repeating the first
@@ -261,6 +268,51 @@ class SearchController:
                 return False
         graph.propagate()
         return graph.get_or(decomposition.parent_or_id).status == OrStatus.proved
+
+    def _attempt_deterministic(self, node: OrNode, *, depth: int) -> bool:
+        """Try a tiny tactic portfolio before spending model calls.
+
+        These proof bodies are intentionally generic rather than inferred from goal syntax.  Lean
+        elaboration and kernel checking remain the only acceptance criteria, while candidate
+        digests prevent failed tactics from being recompiled on resumed invocations.
+        """
+        for label, proof in deterministic_proof_candidates():
+            if not self._budget.allows(depth=depth, graph_nodes=self._graph.node_count()):
+                return False
+            digest = _sha256(proof)
+            if self._graph.candidate_seen(node.node_id, "deterministic", digest):
+                continue
+            attempt_id = new_id("leap_attempt")
+            code = render_direct_module(node.goal, proof)
+            rel_file = f"TCSResearch/Generated/{attempt_id}_{label}.lean"
+            started = time.monotonic()
+            verification = self.verifier.check_direct(
+                code, rel_file=rel_file, target_name=node.goal.name
+            )
+            duration = time.monotonic() - started
+            self._remember_verification(verification)
+            self._record_attempt(
+                node.node_id,
+                attempt_id=attempt_id,
+                mode="deterministic",
+                outcome="verified" if verification.accepted else "compiler_rejected",
+                digest=digest,
+                artifact_path=verification.source_path,
+                diagnostics=verification.diagnostics,
+                duration=duration,
+                note=verification.reason or f"Lean accepted deterministic tactic `{label}`.",
+            )
+            if verification.accepted:
+                self._graph.commit_direct_proof(
+                    node.node_id,
+                    proof=proof,
+                    artifact_path=verification.source_path,
+                )
+                return True
+            if verification.exit_code == 127:
+                self._unavailable = True
+                return False
+        return False
 
     def _attempt_direct(self, node: OrNode, *, depth: int) -> bool:
         diagnostics: list[LeanDiagnostic] = []
@@ -874,6 +926,20 @@ def _sketch_usage_errors(
         if not bool(child["required"]) and used is not None:
             errors.append(f"anticipatory child `{name}` is used and therefore must be required")
     return errors
+
+
+def deterministic_proof_candidates() -> tuple[tuple[str, str], ...]:
+    """Small, stable proof portfolio tried without model calls.
+
+    ``rfl`` covers definitional equalities, ``simp`` uses only simplification lemmas available from
+    the goal's pinned imports, and ``decide`` handles closed decidable propositions (including
+    quantification over finite types when Lean can synthesize the instance).
+    """
+    return (
+        ("rfl", "by\n  rfl"),
+        ("simp", "by\n  simp"),
+        ("decide", "by\n  decide"),
+    )
 
 
 def _sha256(value: str) -> str:

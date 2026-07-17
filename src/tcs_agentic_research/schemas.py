@@ -88,13 +88,22 @@ class PlanSubmission(StrictModel):
     reason: str = Field(default="", max_length=1200)
 
     @model_validator(mode="after")
-    def work_kinds_are_unique(self) -> "PlanSubmission":
-        kinds = [item.kind for item in self.work_items]
-        if len(kinds) != len(set(kinds)):
-            raise ValueError(
-                "work_items must contain at most one item of each kind; combine dependent "
-                "work into one self-contained bounded item"
-            )
+    def keep_first_work_item_of_each_kind(self) -> "PlanSubmission":
+        """Deterministically serialize duplicate subsystem work across planning rounds.
+
+        JSON Schema cannot express uniqueness by a nested field, and formatting repair often
+        preserves semantically valid duplicate-kind items.  A worker handles one item of a kind at
+        a time, so retaining the first is safer than failing the entire control-flow response.  The
+        remaining work can be proposed in a later bounded planning round.
+        """
+        unique: list[WorkItemDraft] = []
+        seen: set[WorkKind] = set()
+        for item in self.work_items:
+            if item.kind in seen:
+                continue
+            seen.add(item.kind)
+            unique.append(item)
+        object.__setattr__(self, "work_items", unique)
         return self
 
 

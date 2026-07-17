@@ -403,23 +403,30 @@ def test_generated_code_and_proof_contracts_are_application_bound(tmp_path: Path
     )
 
 
-def test_plan_rejects_dependent_duplicate_subsystem_items() -> None:
-    with pytest.raises(ValueError, match="at most one item of each kind"):
-        PlanSubmission(
-            objective="Do bounded experiment work.",
-            work_items=[
-                {
-                    "kind": "experiment",
-                    "title": "Write a benchmark",
-                    "instruction": "Write the complete benchmark program in this fresh work item.",
-                },
-                {
-                    "kind": "experiment",
-                    "title": "Run that benchmark",
-                    "instruction": "Run a benchmark expected to have been written by another item.",
-                },
-            ],
-        )
+def test_plan_serializes_duplicate_subsystem_items_deterministically() -> None:
+    plan = PlanSubmission(
+        objective="Do bounded experiment work.",
+        work_items=[
+            {
+                "kind": "experiment",
+                "title": "Write and run a benchmark",
+                "instruction": "Write and run the complete benchmark in this fresh work item.",
+            },
+            {
+                "kind": "experiment",
+                "title": "Run another benchmark",
+                "instruction": "Run a distinct benchmark in a later bounded planning round.",
+            },
+            {
+                "kind": "analysis",
+                "title": "Analyze existing evidence",
+                "instruction": "Analyze only the evidence already available in this fresh step.",
+            },
+        ],
+    )
+
+    assert [item.kind for item in plan.work_items] == [WorkKind.experiment, WorkKind.analysis]
+    assert plan.work_items[0].title == "Write and run a benchmark"
 
 
 def test_experiment_agent_fails_fast_without_configuration(tmp_path: Path) -> None:

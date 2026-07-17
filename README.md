@@ -150,9 +150,10 @@ tcs-research literature rebuild-index --workspace workspaces/demo
 
 ## Lean / LEAP subsystem
 
-Proof work uses a persistent, resumable AND-OR DAG. LEAP tries informal planning plus direct
-formalization first, performs several localized compiler-feedback revisions, and then asks for a
-Lean-verified decomposition into shared child propositions. Deterministic cycle/restatement checks
+Proof work uses a persistent, resumable AND-OR DAG. LEAP first tries a tiny deterministic,
+compiler-checked tactic portfolio, then informal planning plus direct formalization and localized
+compiler-feedback revisions, and finally a Lean-verified decomposition into shared child
+propositions. Deterministic cycle/restatement checks
 and a separate usefulness reviewer prevent formally valid but non-progressing branches. Attempts,
 compiler output, accepted sketches, and proved nodes remain in `LeanProject/LEAP/state.sqlite` across
 invocations.

@@ -42,16 +42,21 @@ different proposition fingerprint, preventing stale proof reuse.
 
 ## Search order
 
-For each new OR node the controller performs:
+For each open OR node the controller performs:
 
-1. bounded state reading and deterministic library/DAG retrieval;
-2. informal mathematical planning;
-3. direct proof generation and localized compiler-feedback revisions;
-4. blueprint generation after direct failure;
-5. deterministic canonical naming of proposed children;
-6. formal parent-sketch generation and compiler-feedback revisions;
-7. structural progress checks and decomposition review;
-8. transactional graph expansion and depth-first child solving with backtracking.
+1. a small compiler-checked deterministic tactic portfolio (`rfl`, `simp`, `decide`);
+2. bounded state reading and deterministic library/DAG retrieval;
+3. informal mathematical planning;
+4. direct proof generation and localized compiler-feedback revisions;
+5. blueprint generation after direct failure;
+6. deterministic canonical naming of proposed children;
+7. formal parent-sketch generation and compiler-feedback revisions;
+8. structural progress checks and decomposition review;
+9. transactional graph expansion and depth-first child solving with backtracking.
+
+Failed deterministic candidates are fingerprinted in SQLite and are not recompiled when a search is
+resumed. Like model-authored candidates, they create progress only after placeholder-free Lean
+compilation and final module verification.
 
 On a resumed node, previously accepted decompositions are continued before new branches are
 generated. Pausing or exhausting an invocation does not erase open nodes.

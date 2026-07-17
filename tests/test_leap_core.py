@@ -1,8 +1,14 @@
 from __future__ import annotations
 
+import shutil
+
 import pytest
 
 from tcs_agentic_research.artifact_store import ArtifactStore
+from tcs_agentic_research.leap.controller import (
+    SearchController,
+    deterministic_proof_candidates,
+)
 from tcs_agentic_research.leap.graph import GraphInvariantError, ProofGraph
 from tcs_agentic_research.leap.models import (
     BlueprintCandidate,
@@ -10,7 +16,12 @@ from tcs_agentic_research.leap.models import (
     DecompositionReview,
 )
 from tcs_agentic_research.leap.sorry import find_placeholder_lines
-from tcs_agentic_research.schemas import LeanStatement
+from tcs_agentic_research.llm import LLMRouter
+from tcs_agentic_research.schemas import (
+    LeanStatement,
+    ModelProfile,
+    RouterSettings,
+)
 
 
 def _blueprint(statement: str) -> BlueprintCandidate:
@@ -107,6 +118,45 @@ def test_graph_propagates_verified_child_success(tmp_path) -> None:
 
     assert graph.get_and(branch.node_id).status.value == "proved"
     assert graph.get_or(parent.node_id).status.value == "proved"
+
+
+def test_deterministic_proof_portfolio_is_small_and_stable() -> None:
+    assert deterministic_proof_candidates() == (
+        ("rfl", "by\n  rfl"),
+        ("simp", "by\n  simp"),
+        ("decide", "by\n  decide"),
+    )
+
+
+@pytest.mark.skipif(
+    shutil.which("lake") is None and shutil.which("lean") is None,
+    reason="Lean is not installed",
+)
+def test_controller_uses_deterministic_proof_before_model_calls(tmp_path) -> None:
+    store = ArtifactStore(tmp_path)
+    store.initialize_layout()
+    router = LLMRouter(
+        RouterSettings(
+            default_profile="reasoning",
+            repair_profile="reasoning",
+            profiles={"reasoning": ModelProfile(model="must-not-be-called")},
+        ),
+        store=store,
+    )
+    result = SearchController(store, router).prove(
+        LeanStatement(
+            name="bool_and_comm",
+            statement="∀ (a b : Bool), (a && b) = (b && a)",
+        )
+    )
+
+    assert result.status == "proved"
+    assert result.proved_artifacts
+    assert store.read_jsonl(ArtifactStore.MODEL_LEDGER) == []
+    graph = ProofGraph(store)
+    proved = graph.proved_nodes()
+    assert len(proved) == 1
+    assert proved[0].proof_content in {proof for _, proof in deterministic_proof_candidates()}
 
 
 def test_placeholder_scan_ignores_comments_and_strings() -> None:
