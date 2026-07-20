@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from ..artifact_store import ArtifactStore
 from ..experimenter.runner import BoundedExperimentRunner
 from ..schemas import ExperimentProgram, ExperimentResult, ExperimenterSettings
@@ -28,5 +30,17 @@ class ExperimentAgent:
     def reset_container(self) -> None:
         self.runner.reset_container()
 
-    def run_program(self, *, program: ExperimentProgram, name: str = "experiment") -> ExperimentResult:
-        return self.runner.run(program=program, name=name)
+    def run_program(
+        self,
+        *,
+        program: ExperimentProgram,
+        name: str = "experiment",
+        mode: Literal["smoke", "full"] = "full",
+        timeout_seconds: int | None = None,
+    ) -> ExperimentResult:
+        return self.runner.run(
+            program=program,
+            name=name,
+            mode=mode,
+            timeout_seconds=timeout_seconds,
+        )

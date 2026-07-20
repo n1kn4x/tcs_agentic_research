@@ -1,85 +1,31 @@
 services:
-  deep-reasoner:
+  qwen-research:
     image: vllm/vllm-openai:latest
     ipc: host
     ports:
-      - "8000:8000"
+      - "${QWEN_PORT:-8000}:8000"
     volumes:
       - ~/.cache/huggingface:/root/.cache/huggingface
     environment:
       - HUGGING_FACE_HUB_TOKEN=${HUGGING_FACE_HUB_TOKEN:-}
-      - CUDA_VISIBLE_DEVICES=${DEEP_GPUS:-0,1,2,3}
+      - CUDA_VISIBLE_DEVICES=${QWEN_GPUS:-0,1,2,3}
     command:
       - --model
-      - ${DEEP_MODEL:-Qwen/Qwen3.6-35B-A3B}
+      - ${QWEN_MODEL:-Qwen/Qwen3.6-35B-A3B}
       - --served-model-name
-      - deep-reasoner
+      - ${QWEN_SERVED_MODEL_NAME:-qwen-research}
       - --host
       - 0.0.0.0
       - --port
       - "8000"
       - --tensor-parallel-size
-      - ${DEEP_TP:-4}
+      - ${QWEN_TP:-4}
       - --max-model-len
-      - ${DEEP_MAX_MODEL_LEN:-131072}
+      - ${QWEN_MAX_MODEL_LEN:-32768}
       - --gpu-memory-utilization
-      - ${DEEP_GPU_MEMORY_UTILIZATION:-0.88}
+      - ${QWEN_GPU_MEMORY_UTILIZATION:-0.88}
       - --reasoning-parser
       - qwen3
       - --language-model-only
       - --default-chat-template-kwargs
       - '{"enable_thinking":true,"preserve_thinking":false}'
-
-  routine-extractor:
-    image: vllm/vllm-openai:latest
-    ipc: host
-    ports:
-      - "8001:8000"
-    volumes:
-      - ~/.cache/huggingface:/root/.cache/huggingface
-    environment:
-      - HUGGING_FACE_HUB_TOKEN=${HUGGING_FACE_HUB_TOKEN:-}
-      - CUDA_VISIBLE_DEVICES=${ROUTINE_GPUS:-4}
-    command:
-      - --model
-      - ${ROUTINE_MODEL:-Qwen/Qwen3-8B}
-      - --served-model-name
-      - routine-extractor
-      - --host
-      - 0.0.0.0
-      - --port
-      - "8000"
-      - --tensor-parallel-size
-      - ${ROUTINE_TP:-1}
-      - --max-model-len
-      - ${ROUTINE_MAX_MODEL_LEN:-32768}
-      - --gpu-memory-utilization
-      - ${ROUTINE_GPU_MEMORY_UTILIZATION:-0.85}
-      - --default-chat-template-kwargs
-      - '{"enable_thinking":false}'
-
-  lean-prover:
-    image: vllm/vllm-openai:latest
-    ipc: host
-    ports:
-      - "8003:8000"
-    volumes:
-      - ~/.cache/huggingface:/root/.cache/huggingface
-    environment:
-      - HUGGING_FACE_HUB_TOKEN=${HUGGING_FACE_HUB_TOKEN:-}
-      - CUDA_VISIBLE_DEVICES=${PROOF_GPUS:-5}
-    command:
-      - --model
-      - ${PROOF_MODEL:-Qwen/Qwen2.5-Coder-7B-Instruct}
-      - --served-model-name
-      - lean-prover
-      - --host
-      - 0.0.0.0
-      - --port
-      - "8000"
-      - --tensor-parallel-size
-      - ${PROOF_TP:-1}
-      - --max-model-len
-      - ${PROOF_MAX_MODEL_LEN:-32768}
-      - --gpu-memory-utilization
-      - ${PROOF_GPU_MEMORY_UTILIZATION:-0.85}

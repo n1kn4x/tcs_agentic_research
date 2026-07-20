@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from enum import Enum
-from pathlib import PurePosixPath
 import re
 from typing import Any, Literal
 from uuid import uuid4
@@ -58,7 +57,8 @@ class WorkKind(str, Enum):
     literature = "literature"
     proof = "proof"
     experiment = "experiment"
-    analysis = "analysis"
+    derivation = "derivation"
+    synthesis = "synthesis"
 
 
 class WorkStatus(str, Enum):
@@ -68,51 +68,107 @@ class WorkStatus(str, Enum):
     partial = "partial"
     blocked = "blocked"
     failed = "failed"
+    superseded = "superseded"
+
+
+class RequirementStatus(str, Enum):
+    open = "open"
+    in_progress = "in_progress"
+    satisfied = "satisfied"
+    blocked = "blocked"
+
+
+class EvidenceRequirement(StrictModel):
+    """One independently auditable gap. Progress is measured against these records."""
+
+    requirement_id: str
+    description: str
+    acceptance_criteria: list[str] = Field(min_length=1, max_length=5)
+    acceptable_methods: list[WorkKind] = Field(min_length=1, max_length=4)
+    mandatory: bool = True
+    status: RequirementStatus = RequirementStatus.open
+    finding_ids: list[str] = Field(default_factory=list)
+    attempted_strategy_fingerprints: list[str] = Field(default_factory=list)
+    attempt_count: int = 0
+    blocker: str = ""
+    updated_at: str = Field(default_factory=utc_now)
 
 
 class WorkItemDraft(StrictModel):
-    """Model-authored bounded unit of work. IDs and status are application-owned."""
+    """A falsifiable strategy for one evidence requirement."""
 
+    question_id: str = Field(min_length=2, max_length=40)
+    requirement_id: str = Field(min_length=4, max_length=60)
     kind: WorkKind
     title: str = Field(min_length=3, max_length=160)
-    instruction: str = Field(min_length=10, max_length=3000)
-    success_criteria: list[str] = Field(default_factory=list, max_length=4)
+    instruction: str = Field(min_length=10, max_length=4000)
+    strategy: str = Field(min_length=5, max_length=1200)
+    hypothesis: str = Field(min_length=5, max_length=1200)
+    falsification_criterion: str = Field(min_length=5, max_length=1200)
+    expected_information_gain: str = Field(min_length=5, max_length=1200)
+    success_criteria: list[str] = Field(min_length=1, max_length=6)
 
 
 class PlanSubmission(StrictModel):
-    """A deliberately small planning response: at most four independent work items."""
+    """The next small batch of non-duplicate strategies for explicit evidence gaps."""
 
     decision: Literal["continue", "review"] = "continue"
     objective: str = Field(min_length=3, max_length=1000)
-    work_items: list[WorkItemDraft] = Field(default_factory=list, max_length=4)
+    work_items: list[WorkItemDraft] = Field(default_factory=list, max_length=6)
     reason: str = Field(default="", max_length=1200)
 
-    @model_validator(mode="after")
-    def keep_first_work_item_of_each_kind(self) -> "PlanSubmission":
-        """Deterministically serialize duplicate subsystem work across planning rounds.
 
-        JSON Schema cannot express uniqueness by a nested field, and formatting repair often
-        preserves semantically valid duplicate-kind items.  A worker handles one item of a kind at
-        a time, so retaining the first is safer than failing the entire control-flow response.  The
-        remaining work can be proposed in a later bounded planning round.
-        """
-        unique: list[WorkItemDraft] = []
-        seen: set[WorkKind] = set()
-        for item in self.work_items:
-            if item.kind in seen:
-                continue
-            seen.add(item.kind)
-            unique.append(item)
-        object.__setattr__(self, "work_items", unique)
-        return self
+class ResearchQuestionDraft(StrictModel):
+    question: str = Field(min_length=10, max_length=1200)
+    hypotheses: list[str] = Field(min_length=1, max_length=4)
+    evidence_needed: list[str] = Field(min_length=1, max_length=5)
+    preferred_methods: list[WorkKind] = Field(min_length=1, max_length=4)
+
+
+class ResearchAgendaDraft(StrictModel):
+    """A conservative decomposition of an uncertain user request."""
+
+    objective: str = Field(min_length=10, max_length=2000)
+    constraints: list[str] = Field(default_factory=list, max_length=12)
+    questions: list[ResearchQuestionDraft] = Field(min_length=1, max_length=12)
+    deliverables: list[str] = Field(min_length=1, max_length=10)
+
+
+class ResearchQuestion(StrictModel):
+    question_id: str
+    question: str
+    hypotheses: list[str]
+    preferred_methods: list[WorkKind]
+    requirements: list[EvidenceRequirement]
+    finding_ids: list[str] = Field(default_factory=list)
+
+
+class ResearchAgenda(StrictModel):
+    task_sha256: str
+    objective: str
+    constraints: list[str] = Field(default_factory=list)
+    questions: list[ResearchQuestion]
+    deliverables: list[str]
+    created_at: str = Field(default_factory=utc_now)
+    updated_at: str = Field(default_factory=utc_now)
 
 
 class WorkItem(StrictModel):
     work_id: str = Field(default_factory=lambda: new_id("work"))
+    question_id: str
+    requirement_id: str
     kind: WorkKind
     title: str
     instruction: str
-    success_criteria: list[str] = Field(default_factory=list)
+    strategy: str
+    hypothesis: str
+    falsification_criterion: str
+    expected_information_gain: str
+    success_criteria: list[str]
+    strategy_fingerprint: str
+    parent_work_id: str | None = None
+    revision: int = 0
+    prior_result_ids: list[str] = Field(default_factory=list)
     status: WorkStatus = WorkStatus.open
     attempts: int = 0
     last_result_id: str | None = None
@@ -129,8 +185,9 @@ class WorkQueue(StrictModel):
 class ResearchPhase(str, Enum):
     planning = "planning"
     working = "working"
-    review = "review"
     needs_input = "needs_input"
+    system_error = "system_error"
+    complete = "complete"
 
 
 class WorkspaceState(StrictModel):
@@ -142,6 +199,11 @@ class WorkspaceState(StrictModel):
     plan_round: int = 0
     active_work_id: str | None = None
     last_result_id: str | None = None
+    no_progress_steps: int = 0
+    last_progress_cycle: int = 0
+    contribution_count: int = 0
+    diversification_count: int = 0
+    human_replan_count: int = 0
     notes: list[str] = Field(default_factory=list)
     created_at: str = Field(default_factory=utc_now)
     updated_at: str = Field(default_factory=utc_now)
@@ -151,31 +213,95 @@ class FindingStatus(str, Enum):
     hypothesis = "hypothesis"
     observed = "observed"
     supported = "supported"
+    derived = "derived"
     verified = "verified"
     refuted = "refuted"
+
+
+class FindingPolarity(str, Enum):
+    supports = "supports"
+    contradicts = "contradicts"
+    null = "null"
+    characterizes = "characterizes"
+    inconclusive = "inconclusive"
+
+
+class EvidenceStrength(str, Enum):
+    preliminary = "preliminary"
+    substantive = "substantive"
+    strong = "strong"
+    conclusive = "conclusive"
 
 
 class Finding(StrictModel):
     finding_id: str = Field(default_factory=lambda: new_id("finding"))
     work_id: str
+    question_id: str
+    requirement_id: str
     kind: WorkKind
     statement: str
     status: FindingStatus
+    polarity: FindingPolarity = FindingPolarity.characterizes
+    strength: EvidenceStrength = EvidenceStrength.preliminary
+    scope: str = ""
     evidence_refs: list[ArtifactRef] = Field(default_factory=list)
     source_ids: list[str] = Field(default_factory=list)
     caveats: list[str] = Field(default_factory=list)
     created_at: str = Field(default_factory=utc_now)
 
 
+class CriterionResult(StrictModel):
+    criterion: str = Field(min_length=3, max_length=1200)
+    satisfied: bool
+    detail: str = Field(min_length=3, max_length=1600)
+
+
 class WorkResult(StrictModel):
     result_id: str = Field(default_factory=lambda: new_id("result"))
     work_id: str
     outcome: Literal["done", "partial", "blocked", "failed"]
+    progress: Literal["meaningful", "none"] = "none"
+    failure_class: Literal[
+        "none", "operational", "engineering", "method", "evidence_gap", "invalid"
+    ] = "none"
+    attempt_class: Literal["engineering", "scientific"] = "scientific"
+    continue_work: bool = False
+    evidence_level: Literal["none", "preliminary", "substantive", "conclusive"] = "none"
+    requirement_satisfied: bool = False
+    criteria: list[CriterionResult] = Field(default_factory=list)
     summary: str
     findings: list[Finding] = Field(default_factory=list)
+    contribution_ids: list[str] = Field(default_factory=list)
     artifact_refs: list[ArtifactRef] = Field(default_factory=list)
     errors: list[str] = Field(default_factory=list)
     next_steps: list[str] = Field(default_factory=list)
+    created_at: str = Field(default_factory=utc_now)
+
+    @model_validator(mode="after")
+    def validate_evidence_claim(self) -> "WorkResult":
+        if self.requirement_satisfied:
+            if not self.findings:
+                raise ValueError("a satisfied requirement needs at least one finding")
+            if self.criteria and any(not item.satisfied for item in self.criteria):
+                raise ValueError("a satisfied requirement cannot have a failed criterion")
+            if self.evidence_level not in {"substantive", "conclusive"}:
+                raise ValueError("a satisfied requirement needs substantive evidence")
+        return self
+
+
+class Contribution(StrictModel):
+    contribution_id: str = Field(default_factory=lambda: new_id("contribution"))
+    fingerprint: str
+    work_id: str
+    result_id: str
+    question_id: str
+    requirement_id: str
+    kind: Literal[
+        "positive_result", "negative_result", "null_result", "characterization",
+        "verified_subgoal", "source_evidence", "derived_result",
+    ]
+    summary: str
+    finding_ids: list[str] = Field(default_factory=list)
     created_at: str = Field(default_factory=utc_now)
 
 
@@ -192,10 +318,75 @@ class AnalysisSubmission(StrictModel):
     suggested_next_steps: list[str] = Field(default_factory=list, max_length=6)
 
 
+class DerivationStep(StrictModel):
+    label: str = Field(min_length=1, max_length=80)
+    statement: str = Field(min_length=5, max_length=1600)
+    justification: str = Field(min_length=5, max_length=2000)
+    depends_on: list[str] = Field(default_factory=list, max_length=8)
+
+
+class DerivationSubmission(StrictModel):
+    title: str = Field(min_length=5, max_length=200)
+    result_kind: Literal[
+        "theorem", "bound", "counterexample", "equivalence", "obstruction", "characterization"
+    ]
+    target_claim: str = Field(min_length=10, max_length=1600)
+    assumptions: list[str] = Field(min_length=1, max_length=12)
+    definitions: list[str] = Field(default_factory=list, max_length=12)
+    steps: list[DerivationStep] = Field(min_length=2, max_length=20)
+    conclusion: str = Field(min_length=10, max_length=2000)
+    falsification_attempt: str = Field(min_length=10, max_length=2000)
+    limitations: list[str] = Field(min_length=1, max_length=10)
+
+
+class DerivationReview(StrictModel):
+    accepted: bool
+    confidence: float = Field(ge=0.0, le=1.0)
+    summary: str = Field(min_length=10, max_length=2000)
+    criteria: list[CriterionResult] = Field(min_length=1, max_length=12)
+    fatal_issues: list[str] = Field(default_factory=list, max_length=10)
+    attempted_counterexample: str = Field(min_length=5, max_length=2000)
+    required_revisions: list[str] = Field(default_factory=list, max_length=8)
+
+    @model_validator(mode="after")
+    def consistent_verdict(self) -> "DerivationReview":
+        if self.accepted and (self.fatal_issues or any(not item.satisfied for item in self.criteria)):
+            raise ValueError("accepted derivation review has a fatal issue or failed criterion")
+        if not self.accepted and not (self.fatal_issues or self.required_revisions):
+            raise ValueError("rejected derivation review must explain what failed")
+        return self
+
+
 class LiteraturePlan(StrictModel):
-    search_queries: list[str] = Field(default_factory=list, min_length=1, max_length=3)
-    known_source_titles: list[str] = Field(default_factory=list, max_length=3)
-    focus_questions: list[str] = Field(default_factory=list, min_length=1, max_length=4)
+    search_queries: list[str] = Field(min_length=1, max_length=4)
+    known_source_titles: list[str] = Field(default_factory=list, max_length=4)
+    focus_questions: list[str] = Field(min_length=1, max_length=4)
+
+
+class LiteratureSelection(StrictModel):
+    support_id: str
+    relevant: bool
+    relation: Literal["supports", "contradicts", "characterizes", "unrelated"]
+    rationale: str = Field(min_length=5, max_length=800)
+
+
+class LiteratureEvidenceReview(StrictModel):
+    selections: list[LiteratureSelection] = Field(default_factory=list, max_length=20)
+    search_assessment: str = Field(min_length=10, max_length=1600)
+    next_queries: list[str] = Field(default_factory=list, max_length=5)
+
+
+class ProofGoalReview(StrictModel):
+    accepted: bool
+    relevance: str = Field(min_length=5, max_length=1200)
+    route_to_requirement: str = Field(min_length=5, max_length=1200)
+    issues: list[str] = Field(default_factory=list, max_length=8)
+
+    @model_validator(mode="after")
+    def rejected_goal_has_issues(self) -> "ProofGoalReview":
+        if not self.accepted and not self.issues:
+            raise ValueError("rejected proof goal must name a relevance or formulation issue")
+        return self
 
 
 class LeanGoalDraft(StrictModel):
@@ -212,7 +403,6 @@ class LeanGoalDraft(StrictModel):
             "declaration and never a proof. Example: `∀ (a b : Bool), (a && b) = (b && a)`."
         ),
     )
-    imports: list[str] = Field(default_factory=lambda: ["TCSResearch.Basic"], max_length=6)
     namespace: str | None = "TCSResearch"
 
     @model_validator(mode="before")
@@ -242,7 +432,8 @@ class LeanGoalDraft(StrictModel):
     def validate_type_only_statement(cls, value: str) -> str:
         statement = value.strip()
         if re.match(
-            r"^(?:```|theorem\b|lemma\b|example\b|def\b|axiom\b|import\b)",
+            r"^(?:```|theorem\b|lemma\b|example\b|def\b|axiom\b|import\b|"
+            r"variables?\b|section\b|namespace\b|open\b)",
             statement,
             flags=re.IGNORECASE,
         ):
@@ -321,46 +512,170 @@ def _parse_lean_declaration(value: str) -> tuple[str, str] | None:
     return name, statement
 
 
+class NamedDescription(StrictModel):
+    """A stable identifier plus human-readable scientific meaning."""
+
+    id: str = Field(pattern=r"^[A-Za-z][A-Za-z0-9_.-]{0,63}$")
+    description: str = Field(min_length=3, max_length=1200)
+
+
+class ExperimentProtocol(StrictModel):
+    """The scientific design is frozen and reviewed before code is generated."""
+
+    title: str = Field(min_length=5, max_length=200)
+    hypothesis: str = Field(min_length=10, max_length=1200)
+    null_outcome: str = Field(min_length=10, max_length=1200)
+    experimental_unit: str = Field(min_length=3, max_length=600)
+    conditions: list[NamedDescription] = Field(min_length=2, max_length=12)
+    baselines: list[NamedDescription] = Field(min_length=1, max_length=8)
+    metrics: list[NamedDescription] = Field(min_length=1, max_length=12)
+    correctness_checks: list[NamedDescription] = Field(min_length=1, max_length=10)
+    sample_sizes: list[int] = Field(min_length=1, max_length=10)
+    seeds: list[int] = Field(min_length=1, max_length=20)
+    analysis_plan: str = Field(min_length=10, max_length=2000)
+    decision_rule: str = Field(min_length=10, max_length=1200)
+    wall_seconds: int = Field(ge=1, le=604800)
+    memory_mb: int = Field(ge=64, le=262144)
+    cpus: float = Field(gt=0, le=256)
+    known_limitations: list[str] = Field(min_length=1, max_length=10)
+
+    @model_validator(mode="after")
+    def unique_component_ids(self) -> "ExperimentProtocol":
+        for label, values in [
+            ("conditions", self.conditions),
+            ("baselines", self.baselines),
+            ("metrics", self.metrics),
+            ("correctness_checks", self.correctness_checks),
+        ]:
+            ids = [value.id for value in values]
+            if len(ids) != len(set(ids)):
+                raise ValueError(f"{label} must use unique ids")
+        condition_ids = {value.id for value in self.conditions}
+        missing = [value.id for value in self.baselines if value.id not in condition_ids]
+        if missing:
+            raise ValueError("every baseline id must also name a condition: " + ", ".join(missing))
+        return self
+
+
+class ExperimentCriterionAssessment(StrictModel):
+    criterion_id: str = Field(pattern=r"^[A-Z][A-Z0-9_]{1,63}$")
+    satisfied: bool
+    detail: str = Field(min_length=3, max_length=1600)
+
+
+class ExperimentProtocolReview(StrictModel):
+    """Python computes acceptance from exact criterion-id coverage and these assessments."""
+
+    criteria: list[ExperimentCriterionAssessment] = Field(min_length=1, max_length=20)
+    issues: list[str] = Field(default_factory=list, max_length=10)
+    required_revisions: list[str] = Field(default_factory=list, max_length=10)
+
+
+class ExperimentProgramReview(StrictModel):
+    accepted: bool
+    objective_alignment: str = Field(min_length=3, max_length=1000)
+    issues: list[str] = Field(default_factory=list, max_length=10)
+
+    @model_validator(mode="after")
+    def rejected_program_has_issues(self) -> "ExperimentProgramReview":
+        if not self.accepted and not self.issues:
+            raise ValueError("rejected program review must list concrete issues")
+        return self
+
+
+class ExperimentEvidenceReview(StrictModel):
+    usable: Literal["full", "preliminary", "unusable"]
+    outcome: Literal["supports", "contradicts", "null", "inconclusive", "characterizes"]
+    scientific_summary: str = Field(min_length=10, max_length=2400)
+    criteria: list[ExperimentCriterionAssessment] = Field(min_length=1, max_length=20)
+    issues: list[str] = Field(default_factory=list, max_length=10)
+    caveats: list[str] = Field(default_factory=list, max_length=10)
+    follow_up: list[str] = Field(default_factory=list, max_length=8)
+
+    @model_validator(mode="after")
+    def consistent_usability(self) -> "ExperimentEvidenceReview":
+        failed = any(not item.satisfied for item in self.criteria)
+        if self.usable == "full" and (failed or self.issues):
+            raise ValueError("fully usable evidence cannot have failed criteria or fatal issues")
+        if self.usable == "unusable" and not self.issues:
+            raise ValueError("unusable evidence must name the fatal issue")
+        return self
+
+
+class ExperimentCheck(StrictModel):
+    name: str = Field(min_length=2, max_length=200)
+    passed: bool
+    detail: str = Field(default="", max_length=1000)
+
+
+JSONScalar = str | int | float | bool | None
+
+
+class ExperimentObservation(StrictModel):
+    condition: str = Field(min_length=1, max_length=200)
+    sample_size: int = Field(ge=1)
+    metrics: dict[str, JSONScalar] = Field(min_length=1, max_length=40)
+
+
+class ExperimentConclusion(StrictModel):
+    hypothesis: str = Field(min_length=5, max_length=1200)
+    outcome: Literal["supports", "contradicts", "null", "inconclusive", "characterizes"]
+    basis_metrics: list[str] = Field(min_length=1, max_length=12)
+    statement: str = Field(min_length=10, max_length=1600)
+
+
+class ExperimentOutput(StrictModel):
+    """Required output: raw condition-level observations are never discarded."""
+
+    schema_version: Literal[2] = 2
+    experiment: str = Field(min_length=3, max_length=500)
+    status: Literal["completed", "capped"] = "completed"
+    parameters: dict[str, JSONScalar] = Field(min_length=1, max_length=50)
+    aggregate_metrics: dict[str, JSONScalar] = Field(min_length=1, max_length=100)
+    observations: list[ExperimentObservation] = Field(min_length=1, max_length=100)
+    checks: list[ExperimentCheck] = Field(min_length=1, max_length=50)
+    conclusion: ExperimentConclusion
+    limitations: list[str] = Field(min_length=1, max_length=20)
+
+    @model_validator(mode="after")
+    def finite_metrics_and_distinct_conditions(self) -> "ExperimentOutput":
+        import math
+
+        values = [*self.parameters.values(), *self.aggregate_metrics.values()]
+        for observation in self.observations:
+            values.extend(observation.metrics.values())
+        if any(isinstance(value, float) and not math.isfinite(value) for value in values):
+            raise ValueError("experiment metrics must be finite")
+        return self
+
+
 class ExperimentProgram(StrictModel):
+    """Model-generated scientific implementation; trusted code owns execution and output writing."""
+
     description: str = Field(min_length=10, max_length=1500)
-    python_lines: list[str] = Field(
-        min_length=1,
-        max_length=500,
+    source: str = Field(
+        min_length=20,
+        max_length=20_000,
         description=(
-            "Complete Python source as an ordered array containing exactly one source line per "
-            "element. Preserve leading indentation; do not use Markdown fences."
+            "Python source defining run_experiment(mode: str) -> dict. The function returns the "
+            "ExperimentOutput v2 payload; a trusted wrapper writes results.json."
         ),
     )
     seeds: list[int] = Field(default_factory=lambda: [0], min_length=1, max_length=20)
-    expected_outputs: list[str] = Field(default_factory=list, max_length=10)
 
-    @field_validator("python_lines", mode="before")
+    @field_validator("source", mode="before")
     @classmethod
-    def normalize_python_lines(cls, value: Any) -> Any:
-        lines = value.splitlines() if isinstance(value, str) else value
-        if not isinstance(lines, list) or not all(isinstance(line, str) for line in lines):
-            return lines
-        normalized = list(lines)
-        if normalized and re.fullmatch(r"```(?:python|py)?\s*", normalized[0].strip()):
-            normalized.pop(0)
-        if normalized and normalized[-1].strip() == "```":
-            normalized.pop()
-        return normalized
+    def normalize_source(cls, value: Any) -> Any:
+        if not isinstance(value, str):
+            return value
+        normalized = value.strip()
+        normalized = re.sub(r"^```(?:python|py)?\s*\n", "", normalized)
+        normalized = re.sub(r"\n```$", "", normalized)
+        return normalized.strip()
 
     @property
     def python_code(self) -> str:
-        return "\n".join(self.python_lines).strip()
-
-    @field_validator("expected_outputs")
-    @classmethod
-    def validate_expected_output_paths(cls, values: list[str]) -> list[str]:
-        normalized: list[str] = []
-        for value in values:
-            path = PurePosixPath(value.strip())
-            if not value.strip() or path.is_absolute() or ".." in path.parts:
-                raise ValueError("expected_outputs must be relative paths inside the run directory")
-            normalized.append(str(path))
-        return normalized
+        return self.source
 
 
 # ---------------------------------------------------------------------------
@@ -584,10 +899,45 @@ class TheoremProverResult(StrictModel):
 class ExperimentResult(StrictModel):
     run_id: str = Field(default_factory=lambda: new_id("experiment"))
     success: bool = False
+    failure_class: Literal["none", "infrastructure", "program", "contract"] = "none"
     summary: str
+    validated_output: ExperimentOutput | None = None
     artifact_refs: list[ArtifactRef] = Field(default_factory=list)
     seeds: list[int] = Field(default_factory=list)
     caveats: list[str] = Field(default_factory=list)
+
+
+class ExperimentState(StrictModel):
+    """Durable state machine for one cumulative experimental research strategy."""
+
+    work_id: str
+    stage: Literal[
+        "protocol_design",
+        "protocol_review",
+        "protocol_revision",
+        "program_design",
+        "program_review",
+        "program_revision",
+        "smoke_execution",
+        "full_execution",
+        "evidence_review",
+        "complete",
+    ] = "protocol_design"
+    protocol: ExperimentProtocol | None = None
+    protocol_sha256: str = ""
+    protocol_review: ExperimentProtocolReview | None = None
+    program: ExperimentProgram | None = None
+    program_review: ExperimentProgramReview | None = None
+    smoke_result: ExperimentResult | None = None
+    execution_result: ExperimentResult | None = None
+    last_error: str = ""
+    engineering_failures: int = 0
+    engineering_blocked: bool = False
+    scientific_attempts: int = 0
+    protocol_revision: int = 0
+    program_revision: int = 0
+    created_at: str = Field(default_factory=utc_now)
+    updated_at: str = Field(default_factory=utc_now)
 
 
 # ---------------------------------------------------------------------------
@@ -616,10 +966,16 @@ class RouterSettings(StrictModel):
 
 
 class CoreSettings(StrictModel):
-    max_model_calls_per_step: int = Field(default=5, ge=1, le=8)
-    max_plan_rounds: int = Field(default=3, ge=1, le=10)
-    max_plan_items: int = Field(default=4, ge=1, le=4)
+    max_model_calls_per_step: int = Field(default=8, ge=1, le=16)
+    max_plan_items: int = Field(default=4, ge=1, le=6)
+    # This threshold triggers diversification; it never halts while untried requirements remain.
+    max_no_progress_steps: int = Field(default=4, ge=2, le=100)
+    max_operational_retries: int = Field(default=2, ge=0, le=5)
+    max_experiment_engineering_retries: int = Field(default=12, ge=1, le=100)
+    max_strategy_revisions: int = Field(default=2, ge=0, le=5)
+    max_method_attempts_per_requirement: int = Field(default=4, ge=1, le=12)
     literature_max_imports: int = Field(default=3, ge=0, le=10)
+    literature_import_attempts: int = Field(default=8, ge=1, le=20)
     literature_results_per_query: int = Field(default=5, ge=1, le=10)
 
 

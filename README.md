@@ -11,36 +11,51 @@ calls, large schemas, replayed tool observations, and several overlapping ledger
 context to grow without bound and hard to tell whether a failure was scientific or merely a malformed
 tool call.
 
-The replacement follows five rules:
+The replacement follows seven rules:
 
-1. **One bounded work item at a time.** Literature, proof, experiment, and analysis are separate.
-2. **No model-driven tool loop.** A model returns one small JSON object. Python performs actions.
-3. **Fresh context.** Every call receives the task, one work item, and a small evidence summary—not
-   conversation history or an artifact dump.
-4. **Evidence determines status.** Lean output is `verified`, exact literature quotes are `supported`,
-   experiment output is `observed`, and model synthesis remains a `hypothesis`.
-5. **Failure is progress data.** A failed step is persisted with its input, error, and next action. It
-   is not converted into a fake scientific proposal.
+1. **Atomic evidence gaps.** Every question is split into persisted requirements with acceptance
+   criteria, allowed methods, attempt history, findings, and status.
+2. **Falsifiability before execution.** Every work item states a hypothesis, strategy, falsification
+   criterion, expected information gain in either direction, and non-execution success criteria.
+3. **Contribution-based progress.** A cycle advances progress only when it creates novel usable
+   evidence. Calls, files, imports, execution, and rewritten summaries do not count.
+4. **Negative results are results.** Counterexamples, contradictions, registered null outcomes, and
+   scoped obstructions are stored and reported as first-class contributions.
+5. **Independent gates.** Mathematical derivations receive adversarial review; Lean goals receive
+   relevance review; experiments freeze/review a protocol before code and audit evidence afterward;
+   literature statements require exact spans plus requirement-level relevance review.
+6. **Persistent recovery and diversification.** Experiment protocols and programs advance through
+   a durable stage machine and are repaired in place from exact defects. Scientific strategy caps
+   count executions that reached measurements, not protocol or code-generation failures.
+7. **No model-driven tool loop or model-owned `solved` bit.** Python owns actions, novelty,
+   requirement transitions, attempt caps, completion, and exhaustion.
 
-There is no `solved` bit. The engine eventually enters `review`; a person decides whether the task's
-success criteria are met.
+A workspace enters `complete` only when every mandatory requirement is satisfied. It enters
+`needs_input` only when all configured methods and revisions for unresolved mandatory gaps are
+exhausted—not merely because several consecutive attempts failed.
 
 ## Workspace contract
 
-Only `InitialResearchTask.md` is user-authored and required. The engine creates:
+Only `InitialResearchTask.md` is user-authored and required. This evidence-gap schema intentionally
+has no migration layer for pre-refactor `Agenda.json`/`Queue.json` workspaces; start a fresh workspace
+(or retain the old one as an archive) rather than mixing incomparable progress semantics. The engine
+creates:
 
 ```text
 InitialResearchTask.md       canonical task
-State.json                   small phase/cycle counters
-Queue.json                   bounded work items and terminal status
+State.json                   phase/cycle, contribution and diversification counters
+Agenda.json                  questions plus atomic evidence requirements and acceptance state
+Queue.json                   falsifiable strategies, lineage, revisions, and status
 Events.jsonl                 append-only lifecycle events
-Findings.jsonl               evidence-typed findings
+Findings.jsonl               evidence-typed findings with polarity, strength, and scope
+Contributions.jsonl          novelty-deduplicated positive/negative/null research progress
 ModelCalls.jsonl             tokens, latency, input size, schema, failures
 Runs/NNNN_<id>/              exact input, typed output, and step-local reports
-Reports/                     optional human-facing reports
+Reports/Progress.md          continuously updated evidence and failure dashboard
 LiteratureDB/                created when literature is used
 LeanProject/                 created when proof work is used
-ExperimentRuns/              created when experiment work is used
+ExperimentStates/            durable protocol/program/execution stage for each experiment strategy
+ExperimentRuns/              bounded smoke and full execution artifacts
 ```
 
 `Nomenclature.yml`, proposal/claim ledgers, obligation boards, and graph checkpoints are not part of
@@ -74,8 +89,13 @@ tcs-research run --workspace workspaces/demo --config config.yml --max-steps 1
 tcs-research status --workspace workspaces/demo
 ```
 
-Use small invocations. Inspect the latest `Runs/` directory, then run another step. When the engine
-enters `review`, either review the evidence or explicitly request another planning round:
+Invocations may be small or long; every completed work item updates both
+`Reports/Progress.md` (attempts, coverage, blockers) and `Reports/ResearchReport.md` (usable results).
+There is no arbitrary planning-round limit. The configured no-progress threshold triggers a durable
+diversification event; it does not halt work while another method or requirement remains. Only full
+strategy exhaustion enters `needs_input`. Review the exact blockers, then request a human replan
+(which grants two additional distinct-strategy slots per method while retaining all evidence and
+attempt history), or revise the task to start a new archived agenda:
 
 ```bash
 tcs-research replan --workspace workspaces/demo --config config.yml
@@ -84,19 +104,17 @@ tcs-research run --workspace workspaces/demo --config config.yml --max-steps 1
 
 ## Model serving and Qwen3.6
 
-Qwen's advertised native context length is a capacity, not a target. The application limits a request
-to 30,000 characters and an output to 12,288 tokens in the example profile. The larger output
-allowance is for self-contained experiment programs; control and coding calls use non-thinking
-profiles, and prompts still request compact outputs. Long contexts make failures more
-expensive and do not repair bad orchestration.
+One shared Qwen endpoint serves every agent profile using tensor parallelism across GPUs 0-3. The
+reasoning, control, coding, formatting, and proof profiles all send model name `qwen-research` to the
+same OpenAI-compatible endpoint; profiles differ only in sampling, output budget, and whether Qwen
+thinking is enabled. This avoids loading separate extraction and proof models.
 
-The default Qwen3.6 profile uses the vendor's precise-coding-style sampling (`temperature=0.6`,
-`top_p=0.95`, `top_k=20`) with `presence_penalty=0`. Qwen explicitly warns that high presence
-penalties can cause language mixing. Thinking is enabled only for reasoning calls and historical
-thinking is not preserved because calls are fresh. Lower temperature is not a JSON validator;
-`response_format` plus Pydantic validation is.
+The server defaults to `Qwen/Qwen3.6-35B-A3B`, tensor parallel size 4, and a 32,768-token model limit.
+The application separately limits request input to 30,000 characters and output to at most 12,288
+tokens. Reasoning and proof calls enable thinking; control, coding, and formatting calls disable it.
+Historical thinking is never preserved because calls are fresh.
 
-Start the provided services:
+Start the shared endpoint with either:
 
 ```bash
 docker compose -f docker-compose.vllm.yml up
@@ -104,7 +122,14 @@ docker compose -f docker-compose.vllm.yml up
 ./scripts/launch_vllm_stack.sh
 ```
 
-The deep endpoint needs `--reasoning-parser qwen3`, but not auto tool choice or a tool-call parser: the
+Both launchers default to `CUDA_VISIBLE_DEVICES=0,1,2,3`, `QWEN_TP=4`, port 8000, and served model
+name `qwen-research`. Override them when needed, for example:
+
+```bash
+QWEN_PORT=18000 QWEN_MAX_MODEL_LEN=32768 REPLACE=1 ./scripts/launch_vllm_stack.sh
+```
+
+The endpoint needs `--reasoning-parser qwen3`, but not auto tool choice or a tool-call parser: the
 core sends no tools. Use a recent vLLM version with JSON-schema response-format support.
 
 ### Structured-output failure policy
@@ -148,6 +173,17 @@ tcs-research literature query --workspace workspaces/demo --query "logarithmic d
 tcs-research literature rebuild-index --workspace workspaces/demo
 ```
 
+## Mathematical derivation subsystem
+
+Not every theoretical result is practical to formalize in the minimal Lean environment. A
+`derivation` work item therefore produces a structured assumption-to-conclusion argument with
+labelled dependencies, an explicit falsification attempt, boundary conditions, and limitations. A
+fresh adversarial referee call recomputes transitions and actively searches for counterexamples.
+Rejected derivations create targeted revisions; accepted counterexamples and obstructions are
+negative contributions, while accepted positive derivations are marked `derived` with an explicit
+caveat that they are not kernel-checked. This is distinct from synthesis, which never creates
+evidence.
+
 ## Lean / LEAP subsystem
 
 Proof work uses a persistent, resumable AND-OR DAG. LEAP first tries a tiny deterministic,
@@ -175,10 +211,16 @@ Mathlib setup, persistence, and budget details.
 
 ## Experiment subsystem
 
-Experiment work uses one structured model call to generate one Python program, then executes exactly
-that program in a resource- and time-bounded Docker container. It does **not** launch a second coding
-agent with another tool loop. The research workspace is read-only and the default container network
-is disabled.
+Experiment work advances through a durable state machine: protocol design, exact-id review,
+protocol freeze, program design/repair, program review, smoke execution, full execution, and evidence
+review. Each engine step advances one stage and persists `ExperimentStates/<work-id>.json`; restarts
+resume rather than regenerate accepted work. Engineering defects revise the preserved source using
+the exact validator error or traceback and do not consume scientific strategy attempts.
+
+The model implements `run_experiment(mode: str) -> dict`. A trusted wrapper owns the entry point,
+writes `results.json`, and validates the v2 output contract. Smoke mode exercises every condition on
+tiny samples before the frozen full run. Both execute in the resource- and time-bounded Docker
+container; the research workspace is read-only and the default container network is disabled.
 
 You can also run a reviewed script directly:
 
@@ -187,17 +229,27 @@ tcs-research experiment run --workspace workspaces/demo --config config.yml \
   --script experiment.py --description "Fixed-seed small-instance check" --seed 7
 ```
 
-Successful output is `observed`, never mathematical proof.
+Before execution the container is health-checked (including stale bind mounts), Python code is
+syntax/safety checked, and an alignment review rejects proxy experiments. The explicit script passed
+to `experiment run` must define `run_experiment(mode: str) -> dict`. The trusted wrapper writes the
+v2 `results.json` contract: scalar parameters and aggregate metrics, condition-level observations,
+passing implementation checks, a hypothesis/outcome/basis conclusion, and explicit limitations.
+This shape preserves negative and null measurements instead of collapsing them into a pass/fail bit.
+A post-run reviewer recomputes methodology and criterion coverage, grading evidence as `full`,
+`preliminary`, or `unusable`. Only full evidence closes a requirement; sound preliminary evidence is
+retained and automatically followed by a targeted revision.
 
 ## Introspection checklist
 
 For a surprising result, inspect in this order:
 
-1. `State.json` and `Queue.json` — what was selected and why did it stop?
-2. Latest `Runs/*/input.json` — exact bounded model/context input.
-3. Latest `Runs/*/result.json` — typed outcome, errors, artifacts, next steps.
-4. `ModelCalls.jsonl` — profile, input size, tokens, latency, schema, HTTP failure.
-5. Evidence artifact named by the finding — exact quote, Lean file/log, or experiment output.
+1. `State.json`, `Agenda.json`, and `Queue.json` — which requirement, strategy, and revision ran?
+2. `Contributions.jsonl` — why this result counted as novel progress (or why it did not).
+3. Latest `Runs/*/input.json` and `result.json` — exact context, criteria, errors, and next steps.
+4. Protocol/derivation/goal reviews in the run directory — which independent gate accepted it?
+5. `ModelCalls.jsonl` — profile, input size, tokens, latency, schema, and HTTP failure.
+6. Evidence artifact named by the finding — exact quote, reviewed derivation, Lean module/log, or
+   condition-level experiment output.
 
 This separation makes an engineering failure, missing source, failed proof, and genuine mathematical
 obstruction visibly different states.

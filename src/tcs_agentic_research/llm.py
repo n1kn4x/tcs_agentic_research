@@ -87,7 +87,7 @@ class LLMRouter:
                     repair_profile="reasoning",
                     profiles={
                         "reasoning": ModelProfile(
-                            model="deep-reasoner",
+                            model="qwen-research",
                             task_types=[],
                             extra_body={
                                 "top_p": 0.95,

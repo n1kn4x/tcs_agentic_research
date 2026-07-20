@@ -44,14 +44,26 @@ class DockerProjectContainer:
                 self._docker(["stop", self.container_name], timeout=60)
             self._docker(["rm", self.container_name], timeout=60)
             state = None
-        if state == "running":
+        if state == "running" and self._container_healthy():
             self._write_manifest(state="running")
             return
+        if state == "running":
+            self._docker(["stop", self.container_name], timeout=60, check=False)
+            self._docker(["rm", self.container_name], timeout=60, check=False)
+            state = None
         if state is not None:
             self._docker(["start", self.container_name], timeout=60)
-            self._write_manifest(state="running")
-            return
+            if self._container_healthy():
+                self._write_manifest(state="running")
+                return
+            self._docker(["stop", self.container_name], timeout=60, check=False)
+            self._docker(["rm", self.container_name], timeout=60, check=False)
         self._docker(self._run_args(), timeout=120)
+        if not self._container_healthy():
+            self._docker(["rm", "-f", self.container_name], timeout=60, check=False)
+            raise ExperimenterRuntimeError(
+                "Experiment container started but failed its /workspace and python3 health check."
+            )
         self._write_manifest(state="running")
 
     def status(self) -> dict[str, Any]:
@@ -249,6 +261,28 @@ class DockerProjectContainer:
         if completed.returncode != 0:
             return None
         return completed.stdout.strip() or None
+
+    def _container_healthy(self) -> bool:
+        """Detect stale bind mounts and incomplete images before spending a model call.
+
+        Docker may keep a running container after its host bind-mount directory was deleted and
+        recreated. Inspect still reports the same path, but every exec then fails before the
+        command starts. A real exec probe is the only reliable inexpensive check.
+        """
+        completed = self._docker(
+            [
+                "exec",
+                "-w",
+                "/workspace",
+                self.container_name,
+                "sh",
+                "-c",
+                "test -d /workspace/runs && command -v python3 >/dev/null && python3 -c 'import json'",
+            ],
+            timeout=30,
+            check=False,
+        )
+        return completed.returncode == 0
 
     def _container_has_expected_workspace_mount(self) -> bool:
         completed = self._docker(

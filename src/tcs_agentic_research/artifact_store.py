@@ -21,7 +21,9 @@ from pydantic import BaseModel
 from .schemas import (
     ArtifactKind,
     ArtifactRef,
+    Contribution,
     Finding,
+    ResearchAgenda,
     WorkQueue,
     WorkspaceState,
     utc_now,
@@ -34,10 +36,12 @@ class ArtifactStore:
     WORK_QUEUE = "Queue.json"
     EVENT_LEDGER = "Events.jsonl"
     FINDING_LEDGER = "Findings.jsonl"
+    CONTRIBUTION_LEDGER = "Contributions.jsonl"
     MODEL_LEDGER = "ModelCalls.jsonl"
+    RESEARCH_AGENDA = "Agenda.json"
 
     CORE_DIRECTORIES = ("Runs", "Reports")
-    CORE_JSONL = (EVENT_LEDGER, FINDING_LEDGER, MODEL_LEDGER)
+    CORE_JSONL = (EVENT_LEDGER, FINDING_LEDGER, CONTRIBUTION_LEDGER, MODEL_LEDGER)
 
     def __init__(self, workspace: str | Path):
         self.root = Path(workspace).expanduser().resolve()
@@ -167,6 +171,15 @@ class ArtifactStore:
         state.updated_at = utc_now()
         return self.write_json(self.RESEARCH_STATE, state)
 
+    def load_agenda(self) -> ResearchAgenda | None:
+        if not self.exists(self.RESEARCH_AGENDA):
+            return None
+        return ResearchAgenda.model_validate(self.read_json(self.RESEARCH_AGENDA))
+
+    def save_agenda(self, agenda: ResearchAgenda) -> ArtifactRef:
+        agenda.updated_at = utc_now()
+        return self.write_json(self.RESEARCH_AGENDA, agenda)
+
     def load_queue(self) -> WorkQueue:
         if not self.exists(self.WORK_QUEUE):
             queue = WorkQueue()
@@ -190,6 +203,16 @@ class ArtifactStore:
 
     def read_findings(self) -> list[Finding]:
         return [Finding.model_validate(row) for row in self.read_jsonl(self.FINDING_LEDGER)]
+
+    def append_contributions(self, contributions: Iterable[Contribution]) -> None:
+        for contribution in contributions:
+            self.append_jsonl(self.CONTRIBUTION_LEDGER, contribution)
+
+    def read_contributions(self) -> list[Contribution]:
+        return [
+            Contribution.model_validate(row)
+            for row in self.read_jsonl(self.CONTRIBUTION_LEDGER)
+        ]
 
     def append_model_call(self, payload: Any) -> None:
         self.append_jsonl(self.MODEL_LEDGER, payload)

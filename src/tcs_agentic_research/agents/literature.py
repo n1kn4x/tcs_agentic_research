@@ -367,6 +367,7 @@ class LiteratureResearcher:
         *,
         max_papers: int = 8,
         only_missing: bool = True,
+        use_llm: bool = False,
     ) -> dict[str, Any]:
         """Deterministically extract statements from imported papers with available text/PDF.
 
@@ -411,7 +412,9 @@ class LiteratureResearcher:
                         {"citation_key": current.citation_key, "reason": "text artifact missing"}
                     )
                     continue
-                extract = self.extract_paper(citation_key=current.citation_key, use_llm=False)
+                extract = self.extract_paper(
+                    citation_key=current.citation_key, use_llm=use_llm
+                )
                 statements = [
                     *extract.theorem_statements,
                     *extract.algorithm_statements,
@@ -499,7 +502,7 @@ class LiteratureResearcher:
                         f"Paper ID: {paper_id}\n"
                         "Paper text/excerpt (extract exact quote provenance with offsets/locators "
                         "when possible):\n"
-                        f"{paper_text[:45000]}"
+                        f"{paper_text[:22000]}"
                     ),
                 },
             ]
@@ -579,7 +582,10 @@ class LiteratureResearcher:
             raise ValueError(f"Candidate {candidate_id} already appears to be imported")
         expected_title = candidate.title or None
         expected_authors = candidate.authors or None
-        expected_year = candidate.year
+        # Discovery and fetched records commonly disagree by one year between preprint,
+        # online-first, and proceedings publication. Title/author identity is the safer automatic
+        # gate; exact year remains available for explicit manual imports.
+        expected_year = None
         # Venue metadata often differs between preprint and proceedings records; use it only
         # when explicitly supplied through import_* tools, not for candidate auto-import.
         expected_venue = None
@@ -1169,18 +1175,30 @@ def _venue_matches(expected: str, actual: str) -> bool:
 
 
 def _authors_overlap(expected: list[str], actual: list[str]) -> bool:
-    expected_tokens = {_author_key(author) for author in expected if _author_key(author)}
-    actual_tokens = {_author_key(author) for author in actual if _author_key(author)}
-    if not expected_tokens or not actual_tokens:
+    """Match author names independent of `family, given` ordering and initials."""
+    expected_names = [_author_tokens(author) for author in expected]
+    actual_names = [_author_tokens(author) for author in actual]
+    expected_names = [tokens for tokens in expected_names if tokens]
+    actual_names = [tokens for tokens in actual_names if tokens]
+    if not expected_names or not actual_names:
         return True
-    overlap = expected_tokens & actual_tokens
-    required = max(1, min(len(expected_tokens), 2))
-    return len(overlap) >= required
+    matches = 0
+    for wanted in expected_names:
+        if any(
+            len(wanted & found) >= 1
+            and len(wanted & found) / max(1, min(len(wanted), len(found))) >= 0.75
+            for found in actual_names
+        ):
+            matches += 1
+    return matches >= max(1, min(len(expected_names), 2))
 
 
-def _author_key(author: str) -> str:
-    tokens = re.findall(r"[a-z]+", author.lower())
-    return tokens[-1] if tokens else ""
+def _author_tokens(author: str) -> set[str]:
+    return {
+        token
+        for token in re.findall(r"[a-z]+", author.lower())
+        if len(token) > 1
+    }
 
 
 def _openalex_lookup_value(paper: PaperMetadata) -> str:

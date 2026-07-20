@@ -15,6 +15,7 @@ from .artifact_store import ArtifactStore
 from .engine import ResearchEngine
 from .llm import LLMRouter
 from .schemas import ExperimentProgram, LeanStatement
+from .workflow import _validate_experiment_program
 
 
 LEGACY_FILES = (
@@ -265,14 +266,13 @@ def _experiment(args: argparse.Namespace) -> int:
         payload = {"status": "reset"}
     else:
         code = Path(args.script).read_text(encoding="utf-8")
-        result = agent.run_program(
-            program=ExperimentProgram(
-                description=args.description,
-                python_lines=code.splitlines(),
-                seeds=[args.seed],
-            ),
-            name=args.name,
+        program = ExperimentProgram(
+            description=args.description,
+            source=code,
+            seeds=[args.seed],
         )
+        _validate_experiment_program(program)
+        result = agent.run_program(program=program, name=args.name)
         payload = result.model_dump(mode="json")
     print(json.dumps(payload, indent=2, ensure_ascii=False))
     return 0

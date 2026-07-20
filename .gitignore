@@ -11,6 +11,9 @@ venv/
 # Research workspaces / generated state
 workspaces/*
 !workspaces/test-integration-toy-algorithm-full-pipeline/InitialResearchTask.md
+!workspaces/test-integration-factorization-compression/
+workspaces/test-integration-factorization-compression/*
+!workspaces/test-integration-factorization-compression/InitialResearchTask.md
 !workspaces/test-lit-orthogonal-vectors-lower-bounds/InitialResearchTask.md
 !workspaces/test-exp-dpll-sat-benchmark/InitialResearchTask.md
 !workspaces/test-leap-boolean-algebra-lemmas/InitialResearchTask.md

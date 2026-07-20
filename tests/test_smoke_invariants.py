@@ -5,12 +5,22 @@ import subprocess
 from pathlib import Path
 
 import pytest
+import yaml
 
 from tcs_agentic_research.agents.experiment import ExperimentAgent
 from tcs_agentic_research.agents.literature import LiteratureResearcher
 from tcs_agentic_research.artifact_store import ArtifactStore
 from tcs_agentic_research.cli import main
-from tcs_agentic_research.engine import ResearchEngine, _validate_experiment_program
+from tcs_agentic_research.engine import (
+    ResearchEngine,
+    _experiment_criterion_errors,
+    _methods_for_requirement,
+)
+from tcs_agentic_research.workflow import (
+    _new_contributions,
+    _normalize_work_draft,
+    _validate_experiment_program,
+)
 from tcs_agentic_research.experimenter.docker_project import _diagnostic
 from tcs_agentic_research.experimenter.errors import ExperimenterConfigurationError
 from tcs_agentic_research.leap.harness import FormalProofCandidate, LEAPHarness
@@ -23,13 +33,26 @@ from tcs_agentic_research.llm import (
 )
 from tcs_agentic_research.schemas import (
     AnalysisSubmission,
+    EvidenceRequirement,
+    EvidenceStrength,
+    ExperimentConclusion,
+    ExperimentCriterionAssessment,
+    ExperimentObservation,
+    ExperimentOutput,
     ExperimentProgram,
+    ExperimentState,
+    Finding,
+    FindingPolarity,
+    FindingStatus,
     LeanGoalDraft,
     LeanStatement,
     ModelProfile,
     PaperMetadata,
     PlanSubmission,
+    ResearchPhase,
+    ResearchQuestion,
     RouterSettings,
+    WorkItemDraft,
     WorkKind,
     WorkStatus,
 )
@@ -53,6 +76,30 @@ def _router(store: ArtifactStore, *, max_input_chars: int = 30_000) -> LLMRouter
     )
 
 
+def test_all_agent_profiles_share_one_four_gpu_qwen_endpoint() -> None:
+    root = Path(__file__).resolve().parents[1]
+    config = yaml.safe_load((root / "config.example.yml").read_text())
+    profiles = config["router"]["profiles"]
+
+    assert {profile["model"] for profile in profiles.values()} == {"qwen-research"}
+    assert {profile["base_url"] for profile in profiles.values()} == {
+        "http://localhost:8000/v1"
+    }
+
+    compose = yaml.safe_load((root / "docker-compose.vllm.yml").read_text())
+    assert list(compose["services"]) == ["qwen-research"]
+    service = compose["services"]["qwen-research"]
+    assert "CUDA_VISIBLE_DEVICES=${QWEN_GPUS:-0,1,2,3}" in service["environment"]
+    assert "${QWEN_TP:-4}" in service["command"]
+
+    script = root / "scripts" / "launch_vllm_stack.sh"
+    assert subprocess.run(["bash", "-n", str(script)], check=False).returncode == 0
+    script_text = script.read_text()
+    assert 'QWEN_GPUS="${QWEN_GPUS:-0,1,2,3}"' in script_text
+    assert "ROUTINE_GPUS" not in script_text
+    assert "PROOF_GPUS" not in script_text
+
+
 def test_initialization_creates_only_new_core_artifacts(tmp_path: Path) -> None:
     engine = ResearchEngine(workspace=_task(tmp_path), dry_run=True)
     state = engine.initialize()
@@ -61,6 +108,7 @@ def test_initialization_creates_only_new_core_artifacts(tmp_path: Path) -> None:
     assert (tmp_path / "State.json").exists()
     assert (tmp_path / "Queue.json").exists()
     assert (tmp_path / "Events.jsonl").exists()
+    assert (tmp_path / "Contributions.jsonl").exists()
     assert not (tmp_path / "Nomenclature.yml").exists()
     assert not (tmp_path / "ResearchState.json").exists()
     assert not (tmp_path / "ClaimLedger.jsonl").exists()
@@ -79,11 +127,34 @@ Use the Literature subsystem and separate supported claims from gaps.
     assert 1 <= len(queue.items) <= 4
     assert queue.items[0].kind == WorkKind.literature
     assert queue.items[0].status == WorkStatus.blocked
-    assert any(item.kind == WorkKind.analysis for item in queue.items)
+    assert all(item.kind != WorkKind.synthesis for item in queue.items)
     assert all(item.kind != WorkKind.proof for item in queue.items)
+    assert (tmp_path / "Agenda.json").exists()
+    assert (tmp_path / "Reports" / "Progress.md").exists()
     assert status["state"]["cycle"] == 1
     assert list((tmp_path / "Runs").glob("*/input.json"))
     assert list((tmp_path / "Runs").glob("*/result.json"))
+
+
+def test_no_evidence_run_stops_visibly_instead_of_repeating_generic_work(
+    tmp_path: Path,
+) -> None:
+    task = "# Literature gap\nFind an exact primary-source quote about a fictional theorem.\n"
+    engine = ResearchEngine(workspace=_task(tmp_path, task), dry_run=True)
+
+    status = engine.run(max_steps=20)
+
+    assert status["state"]["phase"] == "needs_input"
+    assert status["finding_counts"]["hypothesis"] == 0
+    assert status["state"]["diversification_count"] >= 1
+    progress = (tmp_path / "Reports" / "Progress.md").read_text()
+    assert "Action required" in progress
+    assert "All configured methods reached their attempt caps" in progress
+
+    engine.replan()
+    resumed = engine.run(max_steps=1)
+    assert resumed["state"]["phase"] == "working"
+    assert resumed["state"]["human_replan_count"] == 1
 
 
 def test_full_pipeline_plan_splits_subsystems(tmp_path: Path) -> None:
@@ -95,19 +166,94 @@ LEAP/Lean for one formal proof, and provide a careful analysis.
     engine.run(max_steps=1)
     kinds = {item.kind for item in engine.store.load_queue().items}
 
-    assert kinds == {WorkKind.literature, WorkKind.experiment, WorkKind.proof, WorkKind.analysis}
+    assert kinds == {
+        WorkKind.literature,
+        WorkKind.experiment,
+        WorkKind.proof,
+        WorkKind.derivation,
+    }
+    assert WorkKind.synthesis not in kinds
+
+
+def test_experiment_pipeline_accumulates_durable_dry_run_stages(tmp_path: Path) -> None:
+    task = """# Experiment
+Run an experimental benchmark with fixed seeds and condition-level measurements.
+"""
+    engine = ResearchEngine(workspace=_task(tmp_path, task), dry_run=True)
+
+    engine.run(max_steps=8)
+
+    state_files = sorted((tmp_path / "ExperimentStates").glob("*.json"))
+    assert len(state_files) == 2
+    states = [ExperimentState.model_validate_json(path.read_text()) for path in state_files]
+    assert all(state.stage == "complete" for state in states)
+    assert all(state.protocol_sha256 for state in states)
+    assert all(state.program is not None for state in states)
+    agenda = engine.store.load_agenda()
+    assert agenda is not None
+    assert all(
+        requirement.attempt_count == 0
+        for question in agenda.questions
+        for requirement in question.requirements
+    )
+
+
+def test_experiment_reviews_require_exact_stable_criterion_ids() -> None:
+    expected = {"P_ALIGNMENT": "aligned", "P_NULL": "null rule"}
+    assessments = [
+        ExperimentCriterionAssessment(
+            criterion_id="P_ALIGNMENT", satisfied=True, detail="Directly aligned."
+        ),
+        ExperimentCriterionAssessment(
+            criterion_id="P_EXTRA", satisfied=True, detail="Unexpected generic row."
+        ),
+    ]
+
+    errors = _experiment_criterion_errors(expected, assessments)
+
+    assert any("Missing criterion assessment ids: P_NULL" in error for error in errors)
+    assert any("Unexpected criterion assessment ids: P_EXTRA" in error for error in errors)
+
+
+def test_empirical_requirements_cannot_fall_back_to_derivation() -> None:
+    methods = _methods_for_requirement(
+        "Experimental measurement of compression ratio on a real dataset.",
+        [WorkKind.experiment, WorkKind.derivation],
+    )
+
+    assert methods == [WorkKind.experiment]
+
+
+def test_interrupted_running_item_is_reopened_on_restart(tmp_path: Path) -> None:
+    engine = ResearchEngine(workspace=_task(tmp_path), dry_run=True)
+    engine.run(max_steps=1)
+    queue = engine.store.load_queue()
+    item = next(item for item in queue.items if item.status == WorkStatus.open)
+    item.status = WorkStatus.running
+    state = engine.store.load_state()
+    assert state is not None
+    state.active_work_id = item.work_id
+    engine.store.save_queue(queue)
+    engine.store.save_state(state)
+
+    engine.run(max_steps=0)
+
+    recovered = next(row for row in engine.store.load_queue().items if row.work_id == item.work_id)
+    assert recovered.status == WorkStatus.open
+    assert engine.store.load_state().active_work_id is None  # type: ignore[union-attr]
 
 
 def test_task_edit_resets_phase_to_planning_without_erasing_history(tmp_path: Path) -> None:
     engine = ResearchEngine(workspace=_task(tmp_path), dry_run=True)
     first = engine.initialize()
-    first.phase = "review"  # type: ignore[assignment]
+    first.phase = ResearchPhase.needs_input
     engine.store.save_state(first)
     (tmp_path / ArtifactStore.RESEARCH_TASK).write_text("# Changed task\nProve a Boolean lemma.\n")
 
     changed = engine.initialize()
 
     assert changed.phase == "planning"
+    assert list((tmp_path / "Archive").glob("*/State.json"))
     events = engine.store.read_jsonl(ArtifactStore.EVENT_LEDGER)
     assert events[-1]["event_type"] == "task_changed"
 
@@ -345,22 +491,44 @@ def test_literature_index_rebuilds_from_three_canonical_ledgers(tmp_path: Path) 
 def test_generated_code_and_proof_contracts_are_application_bound(tmp_path: Path) -> None:
     program = ExperimentProgram(
         description="A fenced model response is normalized before syntax validation.",
-        python_lines=["```python", "message = 'ok'", "print(message)", "```"],
-        expected_outputs=["results/data.json"],
+        source=(
+            "```python\n"
+            "import json\n\n"
+            "def run_experiment(mode: str) -> dict:\n"
+            "    return {'schema_version': 2}\n"
+            "```"
+        ),
     )
-    assert program.python_code == "message = 'ok'\nprint(message)"
-    with pytest.raises(ValueError, match="machine-readable output"):
-        _validate_experiment_program(program.model_copy(update={"expected_outputs": []}))
+    assert program.python_code.startswith("import json\n\ndef run_experiment")
+    _validate_experiment_program(program)
+    with pytest.raises(ValueError, match="must define run_experiment"):
+        _validate_experiment_program(
+            ExperimentProgram(
+                description="A helper without the required trusted entry function is rejected.",
+                source="def helper(mode: str) -> dict:\n    return {}",
+            )
+        )
+    with pytest.raises(ValueError, match="trusted wrapper owns the entry point"):
+        _validate_experiment_program(
+            ExperimentProgram(
+                description="Generated source may not execute itself at module import time.",
+                source=(
+                    "def run_experiment(mode: str) -> dict:\n"
+                    "    return {}\n\n"
+                    "run_experiment('full')"
+                ),
+            )
+        )
     with pytest.raises(ValueError, match="seeds field"):
         _validate_experiment_program(
             ExperimentProgram(
-                description="Seed provenance must match the executable source constant.",
-                python_lines=[
-                    "SEEDS = [1]",
-                    "open('result.json', 'w').write('{}')",
-                ],
+                description="Seed provenance must match an explicit source constant when present.",
+                source=(
+                    "SEEDS = [1]\n\n"
+                    "def run_experiment(mode: str) -> dict:\n"
+                    "    return {}"
+                ),
                 seeds=[2],
-                expected_outputs=["result.json"],
             )
         )
 
@@ -403,30 +571,139 @@ def test_generated_code_and_proof_contracts_are_application_bound(tmp_path: Path
     )
 
 
-def test_plan_serializes_duplicate_subsystem_items_deterministically() -> None:
+def test_plan_preserves_distinct_items_using_the_same_subsystem() -> None:
+    common = {
+        "question_id": "q01",
+        "requirement_id": "q01-r01",
+        "hypothesis": "The treatment differs from the baseline.",
+        "falsification_criterion": "The measured difference is null or opposite.",
+        "expected_information_gain": "Either direction narrows the stated requirement.",
+        "success_criteria": ["Condition-level measurements are preserved."],
+    }
     plan = PlanSubmission(
         objective="Do bounded experiment work.",
         work_items=[
             {
+                **common,
                 "kind": "experiment",
                 "title": "Write and run a benchmark",
                 "instruction": "Write and run the complete benchmark in this fresh work item.",
+                "strategy": "Use a minimal discriminating fixed-seed pilot.",
             },
             {
+                **common,
                 "kind": "experiment",
                 "title": "Run another benchmark",
                 "instruction": "Run a distinct benchmark in a later bounded planning round.",
+                "strategy": "Use an independent boundary-condition stress test.",
             },
             {
-                "kind": "analysis",
-                "title": "Analyze existing evidence",
-                "instruction": "Analyze only the evidence already available in this fresh step.",
+                **common,
+                "kind": "synthesis",
+                "title": "Synthesize existing evidence",
+                "instruction": "Synthesize only evidence already available in this fresh step.",
+                "strategy": "Generate a provenance-linked report from the evidence ledger.",
             },
         ],
     )
 
-    assert [item.kind for item in plan.work_items] == [WorkKind.experiment, WorkKind.analysis]
+    assert [item.kind for item in plan.work_items] == [
+        WorkKind.experiment,
+        WorkKind.experiment,
+        WorkKind.synthesis,
+    ]
     assert plan.work_items[0].title == "Write and run a benchmark"
+
+
+def test_expected_experiment_direction_is_not_a_success_criterion() -> None:
+    requirement = EvidenceRequirement(
+        requirement_id="q01-r01",
+        description="Compare treatment and baseline costs.",
+        acceptance_criteria=["Report both measured costs under the registered protocol."],
+        acceptable_methods=[WorkKind.experiment],
+    )
+    question = ResearchQuestion(
+        question_id="q01",
+        question="Does treatment reduce cost relative to baseline?",
+        hypotheses=["Treatment has lower cost."],
+        preferred_methods=[WorkKind.experiment],
+        requirements=[requirement],
+    )
+    draft = WorkItemDraft(
+        question_id="q01",
+        requirement_id="q01-r01",
+        kind=WorkKind.experiment,
+        title="Registered cost comparison",
+        instruction="Measure both conditions with the same fixed-seed instances.",
+        strategy="Use a paired fixed-seed comparison.",
+        hypothesis="Treatment has lower cost.",
+        falsification_criterion="Treatment is equal to or more costly than baseline.",
+        expected_information_gain="Either direction resolves the bounded comparison.",
+        success_criteria=[
+            "The treatment must outperform the baseline.",
+            "Condition-level measurements are preserved.",
+        ],
+    )
+
+    normalized = _normalize_work_draft(
+        draft, question=question, requirement=requirement
+    )
+
+    assert all("outperform" not in criterion for criterion in normalized.success_criteria)
+    assert any("condition-level" in criterion.lower() for criterion in normalized.success_criteria)
+
+
+def test_negative_and_null_results_are_first_class_novel_contributions() -> None:
+    finding = Finding(
+        work_id="work_test",
+        question_id="q01",
+        requirement_id="q01-r01",
+        kind=WorkKind.experiment,
+        statement="Across the registered conditions the measured difference was zero.",
+        status=FindingStatus.observed,
+        polarity=FindingPolarity.null,
+        strength=EvidenceStrength.strong,
+        source_ids=["experiment_1"],
+    )
+
+    first = _new_contributions(
+        findings=[finding], existing_fingerprints=set(), result_id="result_1"
+    )
+    repeated = _new_contributions(
+        findings=[finding],
+        existing_fingerprints={first[0].fingerprint},
+        result_id="result_2",
+    )
+
+    assert first[0].kind == "null_result"
+    assert repeated == []
+
+
+def test_experiment_v2_contract_preserves_negative_condition_level_output() -> None:
+    output = ExperimentOutput(
+        experiment="registered comparison",
+        parameters={"seed": 7},
+        aggregate_metrics={"difference": -0.25},
+        observations=[
+            ExperimentObservation(
+                condition="treatment", sample_size=20, metrics={"mean": 0.5}
+            ),
+            ExperimentObservation(
+                condition="baseline", sample_size=20, metrics={"mean": 0.75}
+            ),
+        ],
+        checks=[{"name": "round trip", "passed": True, "detail": "all 40 cases"}],
+        conclusion=ExperimentConclusion(
+            hypothesis="The treatment mean exceeds the baseline mean.",
+            outcome="contradicts",
+            basis_metrics=["difference"],
+            statement="The registered comparison observed a negative difference.",
+        ),
+        limitations=["Small synthetic sample."],
+    )
+
+    assert output.conclusion.outcome == "contradicts"
+    assert len(output.observations) == 2
 
 
 def test_experiment_agent_fails_fast_without_configuration(tmp_path: Path) -> None:
