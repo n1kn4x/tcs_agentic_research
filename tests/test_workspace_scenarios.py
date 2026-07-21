@@ -45,6 +45,12 @@ def test_workspace_task_decomposes_into_requested_subsystems(
         for method in requirement.acceptable_methods
     }
     assert required_methods <= methods
+    if workspace_name in {
+        "test-exp-dpll-sat-benchmark",
+        "test-leap-boolean-algebra-lemmas",
+        "test-lit-orthogonal-vectors-lower-bounds",
+    }:
+        assert methods == required_methods
     if workspace_name == "test-exp-dpll-sat-benchmark":
         assert len(agenda.questions) == 1
         assert sum(len(question.requirements) for question in agenda.questions) == 1

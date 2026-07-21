@@ -44,7 +44,7 @@ class LiteraturePipeline:
         *,
         research_context: dict[str, Any] | None = None,
     ) -> WorkResult:
-        fallback_query = _compact_query(item.instruction)
+        fallback_query = _compact_query(f"{item.hypothesis} {item.instruction}")
         mock = LiteraturePlan(search_queries=[fallback_query], focus_questions=[fallback_query])
         messages = [
             {
@@ -82,6 +82,13 @@ class LiteraturePipeline:
         except Exception as exc:
             errors.append(f"planning: {type(exc).__name__}: {exc}")
             plan = mock
+        plan = plan.model_copy(
+            update={
+                "search_queries": list(
+                    dict.fromkeys([fallback_query, *plan.search_queries])
+                )[:4]
+            }
+        )
         refs.append(self.store.write_json(f"{run_dir}/literature_plan.json", plan))
         researcher = LiteratureResearcher(
             self.store, self.router, prompt_dir=self.prompt_dir
@@ -107,7 +114,7 @@ class LiteraturePipeline:
             if _candidate_is_relevant_and_extractable(
                 candidate,
                 preferred_titles=plan.known_source_titles,
-                relevance_queries=plan.search_queries,
+                relevance_queries=[fallback_query],
             )
         ]
         imported: list[Any] = []

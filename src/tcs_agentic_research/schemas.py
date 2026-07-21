@@ -6,6 +6,7 @@ Those fields are assigned by deterministic application code after validation.
 
 from __future__ import annotations
 
+import ast
 from datetime import UTC, datetime
 from enum import Enum
 import re
@@ -171,6 +172,7 @@ class WorkItem(StrictModel):
     prior_result_ids: list[str] = Field(default_factory=list)
     status: WorkStatus = WorkStatus.open
     attempts: int = 0
+    operational_failures: int = 0
     last_result_id: str | None = None
     blocked_reason: str = ""
     created_at: str = Field(default_factory=utc_now)
@@ -617,6 +619,7 @@ class ExperimentCheck(StrictModel):
 
 
 JSONScalar = str | int | float | bool | None
+JSONParameter = JSONScalar | list[JSONScalar]
 
 
 class ExperimentObservation(StrictModel):
@@ -638,7 +641,7 @@ class ExperimentOutput(StrictModel):
     schema_version: Literal[2] = 2
     experiment: str = Field(min_length=3, max_length=500)
     status: Literal["completed", "capped"] = "completed"
-    parameters: dict[str, JSONScalar] = Field(min_length=1, max_length=50)
+    parameters: dict[str, JSONParameter] = Field(min_length=1, max_length=50)
     aggregate_metrics: dict[str, JSONScalar] = Field(min_length=1, max_length=100)
     observations: list[ExperimentObservation] = Field(min_length=1, max_length=100)
     checks: list[ExperimentCheck] = Field(min_length=1, max_length=50)
@@ -649,12 +652,45 @@ class ExperimentOutput(StrictModel):
     def finite_metrics_and_distinct_conditions(self) -> "ExperimentOutput":
         import math
 
-        values = [*self.parameters.values(), *self.aggregate_metrics.values()]
+        values: list[JSONScalar] = [*self.aggregate_metrics.values()]
+        for value in self.parameters.values():
+            values.extend(value if isinstance(value, list) else [value])
         for observation in self.observations:
             values.extend(observation.metrics.values())
         if any(isinstance(value, float) and not math.isfinite(value) for value in values):
             raise ValueError("experiment metrics must be finite")
         return self
+
+
+class LineReplacement(StrictModel):
+    start_line: int = Field(ge=1)
+    end_line: int = Field(ge=1)
+    new_lines: list[str] = Field(default_factory=list, max_length=300)
+
+    @field_validator("new_lines", mode="before")
+    @classmethod
+    def normalize_complete_lines(cls, value: Any) -> Any:
+        if not isinstance(value, list):
+            return value
+        lines: list[Any] = []
+        for item in value:
+            if isinstance(item, str):
+                lines.extend(item.splitlines() or [""])
+            else:
+                lines.append(item)
+        return lines
+
+    @model_validator(mode="after")
+    def ordered_range(self) -> "LineReplacement":
+        if self.end_line < self.start_line:
+            raise ValueError("end_line must be at least start_line")
+        return self
+
+
+class ExperimentProgramPatch(StrictModel):
+    """Small line-range replacements for repairing preserved experiment source."""
+
+    replacements: list[LineReplacement] = Field(min_length=1, max_length=6)
 
 
 class ExperimentProgram(StrictModel):
@@ -678,7 +714,14 @@ class ExperimentProgram(StrictModel):
             return value
         normalized = value.strip()
         normalized = re.sub(r"^```(?:python|py)?\s*\n", "", normalized)
-        normalized = re.sub(r"\n```$", "", normalized)
+        normalized = re.sub(r"\n```$", "", normalized).strip()
+        # Large generated programs leave too little request budget for focused repairs. Python's
+        # own parser/unparser removes comments and formatting while preserving executable semantics.
+        if len(normalized) > 16_000:
+            try:
+                normalized = ast.unparse(ast.parse(normalized))
+            except SyntaxError:
+                pass
         return normalized.strip()
 
     @property
@@ -938,6 +981,7 @@ class ExperimentState(StrictModel):
     program_review: ExperimentProgramReview | None = None
     smoke_result: ExperimentResult | None = None
     execution_result: ExperimentResult | None = None
+    final_result: WorkResult | None = None
     last_error: str = ""
     engineering_failures: int = 0
     engineering_blocked: bool = False
@@ -946,6 +990,9 @@ class ExperimentState(StrictModel):
     program_revision: int = 0
     last_protocol_candidate_sha256: str = ""
     repeated_protocol_candidates: int = 0
+    last_program_candidate_sha256: str = ""
+    repeated_program_candidates: int = 0
+    repeated_defect_failures: int = 0
     last_defect_signature: str = ""
     created_at: str = Field(default_factory=utc_now)
     updated_at: str = Field(default_factory=utc_now)

@@ -325,8 +325,10 @@ class ResearchEngine:
             draft = fallback
             self.store.write_text(f"{agenda_dir}/error.log", error + "\n")
         draft = _ensure_requested_methods(draft, task)
+        draft = _restrict_single_subsystem_task(draft, task)
         draft = _compact_single_experiment_task(draft, task)
         questions: list[ResearchQuestion] = []
+        forced_subsystem = _single_subsystem_kind(task)
         for q_index, question in enumerate(draft.questions, 1):
             question_id = f"q{q_index:02d}"
             methods: list[WorkKind] = [
@@ -345,7 +347,11 @@ class ResearchEngine:
                         ),
                         "States the assumptions, scope, and limitations needed to interpret the result.",
                     ],
-                    acceptable_methods=_methods_for_requirement(description, methods),
+                    acceptable_methods=(
+                        [forced_subsystem]
+                        if forced_subsystem is not None
+                        else _methods_for_requirement(description, methods)
+                    ),
                 )
                 for r_index, description in enumerate(question.evidence_needed, 1)
             ]
@@ -537,7 +543,7 @@ class ResearchEngine:
                 outcome="failed" if item.kind != WorkKind.experiment else "partial",
                 failure_class="operational",
                 attempt_class="engineering",
-                continue_work=item.kind == WorkKind.experiment,
+                continue_work=False,
                 summary=f"Work step failed: {type(exc).__name__}",
                 artifact_refs=[input_ref],
                 errors=[f"{type(exc).__name__}: {exc}"],
@@ -587,7 +593,14 @@ class ResearchEngine:
         elif result.findings:
             requirement.status = RequirementStatus.in_progress
         elif result.failure_class == "engineering" and not result.continue_work:
-            requirement.status = RequirementStatus.blocked
+            # One implementation can be exhausted without exhausting the scientific method for
+            # this gap. Keep the requirement schedulable; `_mark_exhausted_requirements` owns the
+            # transition to blocked after all distinct strategy slots are consumed.
+            requirement.status = (
+                RequirementStatus.in_progress
+                if requirement.finding_ids
+                else RequirementStatus.open
+            )
             requirement.blocker = "; ".join(result.errors)[-2000:]
         elif result.errors and not result.continue_work:
             requirement.blocker = "; ".join(result.errors)[-2000:]
@@ -600,9 +613,13 @@ class ResearchEngine:
 
         item.last_result_id = result.result_id
         item.blocked_reason = "; ".join(result.errors) if result.outcome != "done" else ""
+        if result.failure_class == "operational":
+            item.operational_failures += 1
+        else:
+            item.operational_failures = 0
         operational_retry = (
             result.failure_class == "operational"
-            and item.attempts <= self.router.core.max_operational_retries
+            and item.operational_failures <= self.router.core.max_operational_retries
         )
         resume_same_work = result.continue_work or operational_retry
         item.status = WorkStatus.open if resume_same_work else WorkStatus(result.outcome)
@@ -827,6 +844,14 @@ class ResearchEngine:
                         "work_id": experiment.work_id,
                         "description": experiment.program.description,
                         "source": experiment.program.python_code[:8_000],
+                        "audit_defects": (
+                            [
+                                *experiment.final_result.errors,
+                                *experiment.final_result.next_steps,
+                            ][:8]
+                            if experiment.final_result is not None
+                            else []
+                        ),
                     }
                 )
                 if len(reusable_code) >= 1:
@@ -882,7 +907,11 @@ class ResearchEngine:
                 method: sum(
                     item.requirement_id == requirement.requirement_id
                     and item.kind == method
-                    and item.strategy_fingerprint in requirement.attempted_strategy_fingerprints
+                    and (
+                        item.strategy_fingerprint
+                        in requirement.attempted_strategy_fingerprints
+                        or item.status == WorkStatus.failed
+                    )
                     for item in queue.items
                 )
                 for method in requirement.acceptable_methods
@@ -917,6 +946,33 @@ class ResearchEngine:
         if state is None:
             raise RuntimeError("State.json is missing")
         return state
+
+
+def _single_subsystem_kind(task: str) -> WorkKind | None:
+    lowered = task.lower()
+    if re.search(r"full[- ]pipeline|integration test for the full", lowered):
+        return None
+    if re.search(r"test case for (?:the )?literature subsystem", lowered):
+        return WorkKind.literature
+    if re.search(r"test case for (?:the )?(?:leap\s*/\s*lean|leap|lean) ", lowered):
+        return WorkKind.proof
+    if re.search(r"test case for (?:the )?experimenter subsystem", lowered):
+        return WorkKind.experiment
+    return None
+
+
+def _restrict_single_subsystem_task(
+    draft: ResearchAgendaDraft, task: str
+) -> ResearchAgendaDraft:
+    """Keep explicit subsystem acceptance workspaces from spawning unrelated pipelines."""
+    target = _single_subsystem_kind(task)
+    if target is None:
+        return draft
+    questions = [
+        question.model_copy(update={"preferred_methods": [target]})
+        for question in draft.questions
+    ]
+    return draft.model_copy(update={"questions": questions})
 
 
 def _compact_single_experiment_task(
@@ -998,6 +1054,19 @@ def _methods_for_requirement(
 ) -> list[WorkKind]:
     """Choose methods by the evidence product, not by broad question-level preferences."""
     lowered = description.lower()
+    # Formal evidence takes precedence over generic words such as "source code", "compiler", or
+    # "test": a Lean snippet is not an empirical experiment.
+    if re.search(
+        r"\b(?:lean|leap|kernel[- ]checked|formaliz(?:e|ation)|compiler-verified)\b",
+        lowered,
+    ):
+        return [WorkKind.proof]
+    if re.search(
+        r"\b(?:exact quote|verbatim quote|primary source|from the literature|literature review|published result|"
+        r"citation|bibliograph)\b",
+        lowered,
+    ):
+        return [WorkKind.literature]
     if re.search(
         r"\b(?:empirical|experiment(?:al)?|benchmark(?:ing)?|measurement|measured|observed|"
         r"statistical test|compression ratio|p-value|data ?set|plot|runtime comparison|"
@@ -1006,13 +1075,6 @@ def _methods_for_requirement(
         lowered,
     ):
         return [WorkKind.experiment]
-    if re.search(
-        r"\b(?:exact quote|primary source|literature review|published result|citation|bibliograph)\b",
-        lowered,
-    ):
-        return [WorkKind.literature]
-    if re.search(r"\b(?:lean|kernel[- ]checked|formaliz(?:e|ation)|compiler-verified)\b", lowered):
-        return [WorkKind.proof]
     if re.search(
         r"\b(?:proof|prove|deriv(?:e|ation)|lower bound|upper bound|complexity|entropy|"
         r"criterion|theorem|reduction|inequality)\b",

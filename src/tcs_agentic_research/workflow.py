@@ -59,7 +59,10 @@ def _default_plan(
         if requirement_pair is None:
             continue
         _, requirement = requirement_pair
-        if item.strategy_fingerprint not in requirement.attempted_strategy_fingerprints:
+        if (
+            item.strategy_fingerprint not in requirement.attempted_strategy_fingerprints
+            and item.status != WorkStatus.failed
+        ):
             continue
         key = (item.requirement_id, item.kind)
         attempted[key] = attempted.get(key, 0) + 1
@@ -550,9 +553,14 @@ def _candidate_is_relevant_and_extractable(
             (candidate.title + " " + (candidate.abstract or "")[:5000]).lower(),
         )
     )
-    for target in [*preferred_titles, *relevance_queries]:
+    # Model-suggested titles can be hallucinated. They help rank a candidate but cannot, by
+    # themselves, establish relevance; at least one requirement-derived search query must overlap.
+    for target in relevance_queries:
         terms = set(re.findall(r"[a-z0-9]{3,}", target.lower()))
-        if terms and (len(source_terms & terms) >= 2 or len(source_terms & terms) / len(terms) >= 0.3):
+        if terms and (
+            len(source_terms & terms) >= 2
+            or len(source_terms & terms) / len(terms) >= 0.3
+        ):
             return True
     return False
 
@@ -594,15 +602,9 @@ def _validate_experiment_program(program: Any) -> None:
         raise ValueError(
             "run_experiment must branch on mode so smoke uses tiny per-condition samples"
         )
-    safe_top_level = (
-        ast.Import,
-        ast.ImportFrom,
-        ast.FunctionDef,
-        ast.ClassDef,
-        ast.Assign,
-        ast.AnnAssign,
-    )
-    if any(not isinstance(node, safe_top_level) for node in tree.body):
+    if any(isinstance(node, ast.Pass) for node in ast.walk(run_function)):
+        raise ValueError("run_experiment contains an unfinished `pass` placeholder")
+    if any(not _safe_experiment_top_level(node) for node in tree.body):
         raise ValueError(
             "generated experiment may only define imports, constants, classes, and functions; "
             "the trusted wrapper owns the entry point"
@@ -622,7 +624,7 @@ def _validate_experiment_program(program: Any) -> None:
         if isinstance(declared_seeds, (list, tuple)) and list(declared_seeds) != program.seeds:
             raise ValueError("the seeds field does not match the program's SEEDS constant")
     forbidden_modules = {
-        "asyncio", "httpx", "multiprocessing", "os", "requests", "shutil", "socket",
+        "asyncio", "httpx", "multiprocessing", "requests", "shutil", "socket",
         "subprocess", "urllib",
     }
     forbidden_calls = {"compile", "eval", "exec", "__import__", "exit", "quit"}
@@ -633,8 +635,20 @@ def _validate_experiment_program(program: Any) -> None:
                 raise ValueError(f"generated experiment imports forbidden module(s): {sorted(blocked)}")
         elif isinstance(node, ast.ImportFrom):
             root = (node.module or "").split(".", 1)[0]
-            if root in forbidden_modules:
+            if root in forbidden_modules or root == "os":
                 raise ValueError(f"generated experiment imports forbidden module: {root}")
+        elif isinstance(node, ast.Attribute) and _attribute_chain(node)[:1] == ["os"]:
+            chain = _attribute_chain(node)
+            if chain not in (
+                ["os", "path"],
+                ["os", "path", "join"],
+                ["os", "makedirs"],
+                ["os", "environ"],
+                ["os", "environ", "get"],
+            ):
+                raise ValueError(
+                    "generated experiment may use os only for relative paths and read-only environment access"
+                )
         elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
             if node.func.id in forbidden_calls:
                 raise ValueError(f"generated experiment calls forbidden builtin: {node.func.id}")
@@ -650,6 +664,54 @@ def _validate_experiment_program(program: Any) -> None:
             and node.func.attr == "exit"
         ):
             raise ValueError("generated experiment calls sys.exit; raise on correctness defects instead")
+
+
+def _safe_experiment_top_level(node: ast.stmt) -> bool:
+    if isinstance(
+        node,
+        (ast.Import, ast.ImportFrom, ast.FunctionDef, ast.ClassDef, ast.Assign, ast.AnnAssign),
+    ):
+        return True
+    if isinstance(node, ast.Expr):
+        if isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+            return True
+        return (
+            isinstance(node.value, ast.Call)
+            and isinstance(node.value.func, ast.Attribute)
+            and (
+                _attribute_chain(node.value.func) == ["os", "makedirs"]
+                or (
+                    node.value.func.attr == "mkdir"
+                    and isinstance(node.value.func.value, ast.Name)
+                )
+            )
+        )
+    if isinstance(node, ast.If):
+        # This guard is false when the trusted wrapper imports the implementation.  It is harmless
+        # boilerplate, while an unguarded generated entry-point call remains rejected.
+        test = node.test
+        return (
+            isinstance(test, ast.Compare)
+            and isinstance(test.left, ast.Name)
+            and test.left.id == "__name__"
+            and len(test.ops) == 1
+            and isinstance(test.ops[0], ast.Eq)
+            and len(test.comparators) == 1
+            and isinstance(test.comparators[0], ast.Constant)
+            and test.comparators[0].value == "__main__"
+        )
+    return False
+
+
+def _attribute_chain(node: ast.Attribute) -> list[str]:
+    parts = [node.attr]
+    value: ast.expr = node.value
+    while isinstance(value, ast.Attribute):
+        parts.append(value.attr)
+        value = value.value
+    if isinstance(value, ast.Name):
+        parts.append(value.id)
+    return list(reversed(parts))
 
 
 def _existing_refs(
