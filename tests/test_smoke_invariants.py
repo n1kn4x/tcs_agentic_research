@@ -11,10 +11,10 @@ from tcs_agentic_research.agents.experiment import ExperimentAgent
 from tcs_agentic_research.agents.literature import LiteratureResearcher
 from tcs_agentic_research.artifact_store import ArtifactStore
 from tcs_agentic_research.cli import main
-from tcs_agentic_research.engine import (
-    ResearchEngine,
-    _experiment_criterion_errors,
-    _methods_for_requirement,
+from tcs_agentic_research.engine import ResearchEngine, _methods_for_requirement
+from tcs_agentic_research.pipelines.experiment import (
+    _criterion_id_errors,
+    _review_errors,
 )
 from tcs_agentic_research.workflow import (
     _new_contributions,
@@ -40,6 +40,8 @@ from tcs_agentic_research.schemas import (
     ExperimentObservation,
     ExperimentOutput,
     ExperimentProgram,
+    ExperimentProtocol,
+    ExperimentProtocolReview,
     ExperimentState,
     Finding,
     FindingPolarity,
@@ -47,6 +49,7 @@ from tcs_agentic_research.schemas import (
     LeanGoalDraft,
     LeanStatement,
     ModelProfile,
+    NamedDescription,
     PaperMetadata,
     PlanSubmission,
     ResearchPhase,
@@ -209,10 +212,56 @@ def test_experiment_reviews_require_exact_stable_criterion_ids() -> None:
         ),
     ]
 
-    errors = _experiment_criterion_errors(expected, assessments)
+    errors = _criterion_id_errors(expected, assessments)
 
-    assert any("Missing criterion assessment ids: P_NULL" in error for error in errors)
-    assert any("Unexpected criterion assessment ids: P_EXTRA" in error for error in errors)
+    assert any("Missing criterion IDs: P_NULL" in error for error in errors)
+    assert any("Unexpected criterion IDs: P_EXTRA" in error for error in errors)
+
+
+def test_protocol_requires_a_distinct_treatment_condition() -> None:
+    conditions = [
+        NamedDescription(id="n8", description="Eight-bit factor code."),
+        NamedDescription(id="n16", description="Sixteen-bit factor code."),
+    ]
+    with pytest.raises(ValueError, match="proper subset"):
+        ExperimentProtocol(
+            title="Invalid all-baseline comparison",
+            hypothesis="The factor code expands uniform values.",
+            null_outcome="No expansion is observed.",
+            experimental_unit="one sampled integer",
+            conditions=conditions,
+            baselines=conditions,
+            metrics=[NamedDescription(id="bits", description="Encoded bits.")],
+            correctness_checks=[
+                NamedDescription(id="roundtrip", description="Decode equals input.")
+            ],
+            sample_sizes=[10],
+            seeds=[1],
+            analysis_plan="Compare mean encoded bits to literal coding.",
+            decision_rule="Classify from the signed paired difference.",
+            wall_seconds=30,
+            memory_mb=256,
+            cpus=1,
+            known_limitations=["Small pilot."],
+        )
+
+
+def test_failed_protocol_assessment_detail_becomes_repair_input() -> None:
+    review = ExperimentProtocolReview(
+        criteria=[
+            ExperimentCriterionAssessment(
+                criterion_id="P_BASELINES",
+                satisfied=False,
+                detail="Add binary_n8 as a separate baseline condition.",
+            )
+        ]
+    )
+
+    errors = _review_errors({"P_BASELINES": "Distinct baseline."}, review)
+
+    assert errors == [
+        "P_BASELINES: Add binary_n8 as a separate baseline condition."
+    ]
 
 
 def test_empirical_requirements_cannot_fall_back_to_derivation() -> None:
@@ -495,12 +544,19 @@ def test_generated_code_and_proof_contracts_are_application_bound(tmp_path: Path
             "```python\n"
             "import json\n\n"
             "def run_experiment(mode: str) -> dict:\n"
-            "    return {'schema_version': 2}\n"
+            "    return {'schema_version': 2, 'mode': mode}\n"
             "```"
         ),
     )
     assert program.python_code.startswith("import json\n\ndef run_experiment")
     _validate_experiment_program(program)
+    with pytest.raises(ValueError, match="must branch on mode"):
+        _validate_experiment_program(
+            ExperimentProgram(
+                description="A smoke path must be explicit rather than silently running full scale.",
+                source="def run_experiment(mode: str) -> dict:\n    return {}",
+            )
+        )
     with pytest.raises(ValueError, match="must define run_experiment"):
         _validate_experiment_program(
             ExperimentProgram(
@@ -514,7 +570,7 @@ def test_generated_code_and_proof_contracts_are_application_bound(tmp_path: Path
                 description="Generated source may not execute itself at module import time.",
                 source=(
                     "def run_experiment(mode: str) -> dict:\n"
-                    "    return {}\n\n"
+                    "    return {'mode': mode}\n\n"
                     "run_experiment('full')"
                 ),
             )
@@ -526,7 +582,7 @@ def test_generated_code_and_proof_contracts_are_application_bound(tmp_path: Path
                 source=(
                     "SEEDS = [1]\n\n"
                     "def run_experiment(mode: str) -> dict:\n"
-                    "    return {}"
+                    "    return {'mode': mode}"
                 ),
                 seeds=[2],
             )

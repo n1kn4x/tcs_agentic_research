@@ -67,7 +67,7 @@ def _default_plan(
     candidates: list[tuple[int, int, ResearchQuestion, EvidenceRequirement, WorkKind]] = []
     for q_index, question in enumerate(agenda.questions):
         for requirement in question.requirements:
-            if requirement.status == RequirementStatus.satisfied:
+            if requirement.status in {RequirementStatus.satisfied, RequirementStatus.blocked}:
                 continue
             for method in requirement.acceptable_methods:
                 if method == WorkKind.synthesis:
@@ -372,7 +372,11 @@ def _new_contributions(
 
 
 def _next_open(queue: WorkQueue) -> WorkItem | None:
-    return next((item for item in queue.items if item.status == WorkStatus.open), None)
+    """Choose fairly instead of letting one resumable pipeline starve every other gap."""
+    candidates = [item for item in queue.items if item.status == WorkStatus.open]
+    if not candidates:
+        return None
+    return min(candidates, key=lambda item: (item.attempts, item.updated_at, item.created_at))
 
 
 def _task_summary(markdown: str, *, limit: int = 600) -> str:
@@ -420,13 +424,14 @@ def _deterministic_agenda(task: str) -> ResearchAgendaDraft:
             ],
             preferred_methods=methods,
         )
-        for title in list(dict.fromkeys(headings))[:12]
+        for title in list(dict.fromkeys(headings))[:24]
     ]
     constraints = [
         re.sub(r"\s+", " ", line).strip(" *-")[:500]
         for line in task.splitlines()
         if re.search(
-            r"(?i)\b(?:must|assume|excluded|include all|fixed[- ]width|uniquely decodable)\b",
+            r"(?i)\b(?:must|assume|excluded|include all|do not|avoid|keep|"
+            r"fixed[- ]width|fixed seeds?|uniquely decodable)\b",
             line,
         )
     ][:12]
@@ -579,6 +584,16 @@ def _validate_experiment_program(program: Any) -> None:
     positional = [*run_function.args.posonlyargs, *run_function.args.args]
     if len(positional) != 1 or run_function.args.vararg or run_function.args.kwarg:
         raise ValueError("run_experiment must accept exactly one positional mode argument")
+    mode_used = any(
+        isinstance(node, ast.Name)
+        and node.id == positional[0].arg
+        and isinstance(node.ctx, ast.Load)
+        for node in ast.walk(run_function)
+    )
+    if not mode_used:
+        raise ValueError(
+            "run_experiment must branch on mode so smoke uses tiny per-condition samples"
+        )
     safe_top_level = (
         ast.Import,
         ast.ImportFrom,

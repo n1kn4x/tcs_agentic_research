@@ -1,8 +1,8 @@
 # Bounded Agentic TCS Research
 
-A small, inspectable research loop for theoretical computer science. The language model proposes
-**typed, bounded work**; deterministic Python executes it. Models never receive a general tool loop
-and never decide that their own claims are verified.
+A small, inspectable research loop for theoretical computer science. The model proposes typed
+scientific content; deterministic Python owns fair scheduling, execution, persistence, and acceptance
+gates. Models never receive a general tool loop and never decide that their own claims are verified.
 
 ## Why this design
 
@@ -24,15 +24,19 @@ The replacement follows seven rules:
 5. **Independent gates.** Mathematical derivations receive adversarial review; Lean goals receive
    relevance review; experiments freeze/review a protocol before code and audit evidence afterward;
    literature statements require exact spans plus requirement-level relevance review.
-6. **Persistent recovery and diversification.** Experiment protocols and programs advance through
-   a durable stage machine and are repaired in place from exact defects. Scientific strategy caps
-   count executions that reached measurements, not protocol or code-generation failures.
+6. **Persistent recovery without stage churn.** One research cycle drives an experiment through as
+   many durable protocol, implementation, execution, and review stages as its bounded call budget
+   permits. Exact defects are repaired in place; repeated no-op repairs stop quickly, and one blocked
+   experiment never stops unrelated research.
 7. **No model-driven tool loop or model-owned `solved` bit.** Python owns actions, novelty,
    requirement transitions, attempt caps, completion, and exhaustion.
 
 A workspace enters `complete` only when every mandatory requirement is satisfied. It enters
 `needs_input` only when all configured methods and revisions for unresolved mandatory gaps are
 exhausted—not merely because several consecutive attempts failed.
+
+See [`ARCHITECTURE.md`](ARCHITECTURE.md) for the cycle, persistence, scheduling, and pipeline
+invariants.
 
 ## Workspace contract
 
@@ -211,11 +215,13 @@ Mathlib setup, persistence, and budget details.
 
 ## Experiment subsystem
 
-Experiment work advances through a durable state machine: protocol design, exact-id review,
-protocol freeze, program design/repair, program review, smoke execution, full execution, and evidence
-review. Each engine step advances one stage and persists `ExperimentStates/<work-id>.json`; restarts
-resume rather than regenerate accepted work. Engineering defects revise the preserved source using
-the exact validator error or traceback and do not consume scientific strategy attempts.
+Experiment work uses a durable state machine: protocol design/review, program design/review, smoke
+execution, full execution, and evidence review. A single research cycle drives the machine until it
+produces evidence, reaches its model/resource budget, or encounters a repeated concrete blocker.
+Every transition persists `ExperimentStates/<work-id>.json`, so restarts resume accepted work instead
+of regenerating it. Failed review details are passed verbatim into repair, identical repairs are
+rejected after two attempts, and repair limits apply to a repeated defect rather than harmless stage
+transitions.
 
 The model implements `run_experiment(mode: str) -> dict`. A trusted wrapper owns the entry point,
 writes `results.json`, and validates the v2 output contract. Smoke mode exercises every condition on
@@ -229,15 +235,15 @@ tcs-research experiment run --workspace workspaces/demo --config config.yml \
   --script experiment.py --description "Fixed-seed small-instance check" --seed 7
 ```
 
-Before execution the container is health-checked (including stale bind mounts), Python code is
-syntax/safety checked, and an alignment review rejects proxy experiments. The explicit script passed
-to `experiment run` must define `run_experiment(mode: str) -> dict`. The trusted wrapper writes the
-v2 `results.json` contract: scalar parameters and aggregate metrics, condition-level observations,
-passing implementation checks, a hypothesis/outcome/basis conclusion, and explicit limitations.
-This shape preserves negative and null measurements instead of collapsing them into a pass/fail bit.
-A post-run reviewer recomputes methodology and criterion coverage, grading evidence as `full`,
-`preliminary`, or `unusable`. Only full evidence closes a requirement; sound preliminary evidence is
-retained and automatically followed by a targeted revision.
+Before execution the container is health-checked (including stale bind mounts), and Python code is
+syntax/safety checked. Smoke mode must branch from full mode and exercise every condition on tiny
+samples. The explicit script passed to `experiment run` must define
+`run_experiment(mode: str) -> dict`. The trusted wrapper writes the v2 `results.json` contract: scalar
+parameters and aggregate metrics, condition-level observations, implementation checks, a
+hypothesis/outcome/basis conclusion, and explicit limitations. This shape preserves negative and null
+measurements instead of collapsing them into a pass/fail bit. A post-run reviewer performs the one
+semantic alignment/methodology audit and grades evidence as `full`, `preliminary`, or `unusable`.
+Only full evidence closes a requirement; sound preliminary evidence is retained for follow-up.
 
 ## Introspection checklist
 

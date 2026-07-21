@@ -2,12 +2,13 @@
 # Profiles differ only in sampling, output budget, and thinking mode.
 core:
   # Protocol/design/review/code/evidence are separate calls; all are still fresh and bounded.
-  max_model_calls_per_step: 8
+  max_model_calls_per_step: 12
   max_plan_items: 4
   # This triggers method/question diversification. It does not stop while untried gaps remain.
   max_no_progress_steps: 4
   max_operational_retries: 2
-  max_experiment_engineering_retries: 12
+  # Consecutive retries per identical defect; the pipeline also rejects no-op repairs.
+  max_experiment_engineering_retries: 4
   max_strategy_revisions: 2
   max_method_attempts_per_requirement: 4
   literature_max_imports: 3

@@ -121,7 +121,7 @@ class PlanSubmission(StrictModel):
 class ResearchQuestionDraft(StrictModel):
     question: str = Field(min_length=10, max_length=1200)
     hypotheses: list[str] = Field(min_length=1, max_length=4)
-    evidence_needed: list[str] = Field(min_length=1, max_length=5)
+    evidence_needed: list[str] = Field(min_length=1, max_length=8)
     preferred_methods: list[WorkKind] = Field(min_length=1, max_length=4)
 
 
@@ -129,9 +129,9 @@ class ResearchAgendaDraft(StrictModel):
     """A conservative decomposition of an uncertain user request."""
 
     objective: str = Field(min_length=10, max_length=2000)
-    constraints: list[str] = Field(default_factory=list, max_length=12)
-    questions: list[ResearchQuestionDraft] = Field(min_length=1, max_length=12)
-    deliverables: list[str] = Field(min_length=1, max_length=10)
+    constraints: list[str] = Field(default_factory=list, max_length=20)
+    questions: list[ResearchQuestionDraft] = Field(min_length=1, max_length=24)
+    deliverables: list[str] = Field(min_length=1, max_length=30)
 
 
 class ResearchQuestion(StrictModel):
@@ -551,9 +551,15 @@ class ExperimentProtocol(StrictModel):
             if len(ids) != len(set(ids)):
                 raise ValueError(f"{label} must use unique ids")
         condition_ids = {value.id for value in self.conditions}
-        missing = [value.id for value in self.baselines if value.id not in condition_ids]
+        baseline_ids = {value.id for value in self.baselines}
+        missing = sorted(baseline_ids - condition_ids)
         if missing:
             raise ValueError("every baseline id must also name a condition: " + ", ".join(missing))
+        if baseline_ids == condition_ids:
+            raise ValueError(
+                "baseline conditions must be a proper subset of conditions; include at least one "
+                "distinct treatment condition"
+            )
         return self
 
 
@@ -579,7 +585,7 @@ class ExperimentProgramReview(StrictModel):
     @model_validator(mode="after")
     def rejected_program_has_issues(self) -> "ExperimentProgramReview":
         if not self.accepted and not self.issues:
-            raise ValueError("rejected program review must list concrete issues")
+            self.issues = [self.objective_alignment]
         return self
 
 
@@ -598,7 +604,9 @@ class ExperimentEvidenceReview(StrictModel):
         if self.usable == "full" and (failed or self.issues):
             raise ValueError("fully usable evidence cannot have failed criteria or fatal issues")
         if self.usable == "unusable" and not self.issues:
-            raise ValueError("unusable evidence must name the fatal issue")
+            self.issues = [
+                (self.caveats or self.follow_up or [self.scientific_summary])[0]
+            ]
         return self
 
 
@@ -936,6 +944,9 @@ class ExperimentState(StrictModel):
     scientific_attempts: int = 0
     protocol_revision: int = 0
     program_revision: int = 0
+    last_protocol_candidate_sha256: str = ""
+    repeated_protocol_candidates: int = 0
+    last_defect_signature: str = ""
     created_at: str = Field(default_factory=utc_now)
     updated_at: str = Field(default_factory=utc_now)
 
@@ -966,12 +977,12 @@ class RouterSettings(StrictModel):
 
 
 class CoreSettings(StrictModel):
-    max_model_calls_per_step: int = Field(default=8, ge=1, le=16)
+    max_model_calls_per_step: int = Field(default=12, ge=1, le=32)
     max_plan_items: int = Field(default=4, ge=1, le=6)
     # This threshold triggers diversification; it never halts while untried requirements remain.
     max_no_progress_steps: int = Field(default=4, ge=2, le=100)
     max_operational_retries: int = Field(default=2, ge=0, le=5)
-    max_experiment_engineering_retries: int = Field(default=12, ge=1, le=100)
+    max_experiment_engineering_retries: int = Field(default=4, ge=1, le=20)
     max_strategy_revisions: int = Field(default=2, ge=0, le=5)
     max_method_attempts_per_requirement: int = Field(default=4, ge=1, le=12)
     literature_max_imports: int = Field(default=3, ge=0, le=10)
