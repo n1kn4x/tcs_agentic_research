@@ -137,6 +137,49 @@ class LiteratureFetcher:
             self.store.append_jsonl("LiteratureDB/papers.jsonl", paper)
         return paper
 
+    def import_discovered_arxiv(
+        self,
+        arxiv_id: str,
+        *,
+        title: str,
+        authors: list[str],
+        year: int | None,
+        abstract: str,
+        pdf_url: str = "",
+        landing_url: str = "",
+        citation_key: str | None = None,
+        commit: bool = True,
+    ) -> PaperMetadata:
+        """Import an arXiv search result without fetching its Atom metadata a second time."""
+        clean_id = normalize_arxiv_id(arxiv_id)
+        key = citation_key or f"arxiv_{_safe_slug(clean_id)}"
+        rel_dir = self._paper_dir(key)
+        source_pdf = pdf_url or f"https://arxiv.org/pdf/{clean_id}.pdf"
+        pdf = self._download(source_pdf)
+        pdf_ref = self.store.write_bytes(f"{rel_dir}/paper.pdf", pdf.content)
+        source_landing = landing_url or f"https://arxiv.org/abs/{clean_id}"
+        paper = PaperMetadata(
+            citation_key=key,
+            title=title or f"arXiv:{clean_id}",
+            authors=authors,
+            year=year,
+            venue="arXiv",
+            url=source_landing,
+            arxiv_id=clean_id,
+            abstract=abstract,
+            source_type="arxiv",
+            source_urls=list(dict.fromkeys([source_landing, pdf.final_url])),
+            pdf_path=pdf_ref.path,
+            artifact_refs=[pdf_ref],
+        )
+        metadata_ref = self._write_paper_metadata(paper)
+        paper.metadata_path = metadata_ref.path
+        paper.artifact_refs.append(metadata_ref)
+        self._rewrite_paper_metadata(paper)
+        if commit:
+            self.store.append_jsonl("LiteratureDB/papers.jsonl", paper)
+        return paper
+
     def import_doi(
         self,
         doi: str,

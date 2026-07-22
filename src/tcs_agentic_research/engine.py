@@ -204,16 +204,22 @@ class ResearchEngine:
             state.human_replan_count += 1
             queue = self.store.load_queue()
             for item in queue.items:
-                if item.kind != WorkKind.experiment or item.status != WorkStatus.failed:
+                if item.kind != WorkKind.experiment or item.status not in {
+                    WorkStatus.failed,
+                    WorkStatus.partial,
+                    WorkStatus.blocked,
+                }:
                     continue
                 experiment_path = f"ExperimentStates/{item.work_id}.json"
                 if not self.store.exists(experiment_path):
                     continue
                 experiment = ExperimentState.model_validate(self.store.read_json(experiment_path))
-                if not experiment.engineering_blocked:
+                if experiment.stage == "complete":
                     continue
                 experiment.engineering_blocked = False
                 experiment.engineering_failures = 0
+                experiment.repeated_defect_failures = 0
+                experiment.last_defect_signature = ""
                 experiment.updated_at = utc_now()
                 self.store.write_json(experiment_path, experiment)
                 item.status = WorkStatus.open
@@ -290,10 +296,14 @@ class ResearchEngine:
                 "role": "system",
                 "content": (
                     "Turn the user's research request into atomic scientific evidence requirements. "
+                    "Use at most eight questions and one independently auditable evidence need per "
+                    "question; organize them by explicit research-scope topics, not by report sections "
+                    "or artifact deliverables. Preserve every acronym exactly as defined by the user. "
+                    "Never invent an author, date, title, theorem attribution, or expected answer. "
                     "The objective field must summarize the USER'S research objective, never this "
                     "decomposition instruction. Cover every explicitly requested theorem, benchmark, "
-                    "dataset comparison, and success criterion; use up to twenty-four narrow questions "
-                    "when the task is broad. Every evidence need must name one independently auditable "
+                    "dataset comparison, and success criterion with the smallest set of atomic questions. "
+                    "Every evidence need must name one independently auditable "
                     "output and be satisfiable by its methods. Never treat a requested hypothesis as "
                     "true. Choose methods precisely: literature obtains primary-source statements; "
                     "experiment produces measurements; derivation produces explicit mathematical "
@@ -327,6 +337,8 @@ class ResearchEngine:
         draft = _ensure_requested_methods(draft, task)
         draft = _restrict_single_subsystem_task(draft, task)
         draft = _compact_single_experiment_task(draft, task)
+        draft = _compact_single_literature_agenda(draft)
+        draft = _drop_non_evidence_questions(draft)
         questions: list[ResearchQuestion] = []
         forced_subsystem = _single_subsystem_kind(task)
         for q_index, question in enumerate(draft.questions, 1):
@@ -704,9 +716,19 @@ class ResearchEngine:
         ):
             return
         defects = [*result.errors, *result.next_steps]
+        defects.extend(
+            f"Unsatisfied criterion: {criterion.criterion}. Review: {criterion.detail}"
+            for criterion in result.criteria
+            if not criterion.satisfied
+        )
+        if not defects and result.evidence_level == "preliminary":
+            defects.append(
+                "Extend the sound preliminary experiment to cover the full acceptance criteria and "
+                "requested parameter regimes while preserving its implementation and raw evidence."
+            )
         if not defects:
             return
-        defect_text = "; ".join(defects)[:1800]
+        defect_text = "; ".join(dict.fromkeys(defects))[:1800]
         draft = WorkItemDraft(
             question_id=item.question_id,
             requirement_id=item.requirement_id,
@@ -733,6 +755,61 @@ class ResearchEngine:
         )
         position = queue.items.index(item) + 1
         queue.items.insert(position, recovery)
+        if item.kind == WorkKind.experiment:
+            self._seed_experiment_recovery(
+                item,
+                recovery,
+                defect_text,
+                revise_protocol=(
+                    result.evidence_level == "preliminary"
+                    or any(
+                        marker in defect_text.lower()
+                        for marker in [
+                            "revise the protocol",
+                            "protocol design",
+                            "parameter regime",
+                            "sample size",
+                        ]
+                    )
+                ),
+            )
+
+    def _seed_experiment_recovery(
+        self,
+        parent: WorkItem,
+        recovery: WorkItem,
+        defect: str,
+        *,
+        revise_protocol: bool,
+    ) -> None:
+        """Carry the reviewed protocol and implementation into a scientific revision.
+
+        A follow-up must build on the measured implementation rather than regenerate a fresh
+        experiment that can reintroduce already-fixed defects. The parent remains immutable and the
+        child gets its own durable state and audit trail.
+        """
+        parent_path = f"ExperimentStates/{parent.work_id}.json"
+        if not self.store.exists(parent_path):
+            return
+        previous = ExperimentState.model_validate(self.store.read_json(parent_path))
+        if previous.protocol is None or previous.program is None:
+            return
+        recovered = previous.model_copy(deep=True)
+        recovered.work_id = recovery.work_id
+        recovered.stage = "protocol_revision" if revise_protocol else "program_revision"
+        recovered.smoke_result = None
+        recovered.execution_result = None
+        recovered.final_result = None
+        recovered.last_error = defect
+        recovered.engineering_failures = 0
+        recovered.engineering_blocked = False
+        recovered.scientific_attempts = 0
+        recovered.repeated_program_candidates = 0
+        recovered.repeated_defect_failures = 0
+        recovered.last_defect_signature = ""
+        recovered.created_at = utc_now()
+        recovered.updated_at = utc_now()
+        self.store.write_json(f"ExperimentStates/{recovery.work_id}.json", recovered)
 
     def _diversify_after_stagnation(self, state: WorkspaceState, last_requirement_id: str) -> None:
         queue = self.store.load_queue()
@@ -903,15 +980,26 @@ class ResearchEngine:
         for _, requirement in requirement_index(agenda).values():
             if requirement.status == RequirementStatus.satisfied:
                 continue
+            if any(
+                item.requirement_id == requirement.requirement_id
+                and item.status in {WorkStatus.open, WorkStatus.running}
+                for item in queue.items
+            ):
+                if requirement.status == RequirementStatus.blocked:
+                    requirement.status = (
+                        RequirementStatus.in_progress
+                        if requirement.finding_ids
+                        else RequirementStatus.open
+                    )
+                    requirement.blocker = ""
+                    requirement.updated_at = utc_now()
+                continue
             counts = {
                 method: sum(
                     item.requirement_id == requirement.requirement_id
                     and item.kind == method
-                    and (
-                        item.strategy_fingerprint
-                        in requirement.attempted_strategy_fingerprints
-                        or item.status == WorkStatus.failed
-                    )
+                    and item.strategy_fingerprint
+                    in requirement.attempted_strategy_fingerprints
                     for item in queue.items
                 )
                 for method in requirement.acceptable_methods
@@ -973,6 +1061,49 @@ def _restrict_single_subsystem_task(
         for question in draft.questions
     ]
     return draft.model_copy(update={"questions": questions})
+
+
+def _compact_single_literature_agenda(
+    draft: ResearchAgendaDraft,
+) -> ResearchAgendaDraft:
+    """Keep a source audit broad enough to triangulate but small enough to revisit cumulatively."""
+    methods = {
+        method
+        for question in draft.questions
+        for method in question.preferred_methods
+        if method != WorkKind.synthesis
+    }
+    if methods != {WorkKind.literature}:
+        return draft
+    questions = [
+        question.model_copy(update={"evidence_needed": question.evidence_needed[:1]})
+        for question in draft.questions[:8]
+    ]
+    return draft.model_copy(update={"questions": questions})
+
+
+def _drop_non_evidence_questions(
+    draft: ResearchAgendaDraft,
+) -> ResearchAgendaDraft:
+    """Do not schedule reports and run metadata as independent scientific questions.
+
+    Logs, status lists, seed manifests, and final reports are generated from real work. Turning them
+    into proof or experiment requirements lets an unrelated theorem or a synthetic report-format
+    benchmark falsely count as research progress.
+    """
+    meta = re.compile(
+        r"(?i)(?:complete list|status (?:list|report)|proved, blocked|blocked, and failed|"
+        r"compiler (?:logs?|errors?)|proof state dumps?|formalization obstacles?|"
+        r"follow-up obligations?|reproducibility status|specific random seeds .*documented|"
+        r"negative or null results .*reported|separate in the final report|final report)"
+    )
+    questions = []
+    for question in draft.questions:
+        combined = " ".join([question.question, *question.evidence_needed])
+        if meta.search(combined):
+            continue
+        questions.append(question)
+    return draft.model_copy(update={"questions": questions or draft.questions[:1]})
 
 
 def _compact_single_experiment_task(

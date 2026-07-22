@@ -44,7 +44,10 @@ class LiteraturePipeline:
         *,
         research_context: dict[str, Any] | None = None,
     ) -> WorkResult:
-        fallback_query = _compact_query(f"{item.hypothesis} {item.instruction}")
+        fallback_query = _compact_query(
+            f"{(research_context or {}).get('research_objective', '')} "
+            f"{item.hypothesis} {item.instruction}"
+        )
         mock = LiteraturePlan(search_queries=[fallback_query], focus_questions=[fallback_query])
         messages = [
             {
@@ -60,6 +63,9 @@ class LiteraturePipeline:
                 "content": json.dumps(
                     {
                         "work_item": item.model_dump(mode="json"),
+                        "research_objective": (research_context or {}).get(
+                            "research_objective", ""
+                        ),
                         "accepted_prior_evidence": (research_context or {}).get(
                             "accepted_prior_evidence", []
                         ),
@@ -205,6 +211,20 @@ class LiteraturePipeline:
                 and row.relation != "unrelated"
                 and row.support_id in supports
             }
+            if not accepted:
+                # Some constrained decoders place an explicitly selected support ID in the
+                # assessment/follow-up fields while leaving `selections` empty. Recover only the
+                # narrow, unambiguous case where the reviewer literally says the requirement is
+                # satisfied; topical overlap or a merely suggested next query is never promoted.
+                review_text = " ".join(
+                    [review.search_assessment, *review.next_queries]
+                )
+                if "requirement satisfied" in review_text.lower():
+                    accepted = {
+                        support_id: "characterizes"
+                        for support_id in supports
+                        if support_id in review_text
+                    }
         findings: list[Finding] = []
         for support_id, relation in accepted.items():
             row = supports[support_id]

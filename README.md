@@ -159,7 +159,8 @@ LiteratureDB/index.sqlite       rebuildable search index (not canonical)
 ```
 
 A literature step asks the model only for search queries and focus questions. Python then performs a
-bounded OpenAlex search, imports at most the configured number of candidates, extracts statements
+bounded OpenAlex search with an arXiv fallback and a fast rate-limit circuit breaker, imports at most
+the configured number of candidates, extracts statements
 deterministically, and runs local retrieval. Stable statement/quote/support IDs are content-derived.
 A finding is `supported` only when its quote span is found in imported text; otherwise it stays a
 `hypothesis` with an explicit caveat.
@@ -219,9 +220,10 @@ Experiment work uses a durable state machine: protocol design/review, program de
 execution, full execution, and evidence review. A single research cycle drives the machine until it
 produces evidence, reaches its model/resource budget, or encounters a repeated concrete blocker.
 Every transition persists `ExperimentStates/<work-id>.json`, so restarts resume accepted work instead
-of regenerating it. Failed review details are passed verbatim into repair, identical repairs are
-rejected after two attempts, and repair limits apply to a repeated defect rather than harmless stage
-transitions.
+of regenerating it. A repair first produces a bounded reasoning plan, then a non-thinking coding call
+emits one complete replacement file from the exact defect and prior source; fragile line-number patch
+chains are not used. Two repairs per outer cycle preserve fairness, and repair limits apply only to a
+repeated defect rather than harmless stage transitions or distinct later defects.
 
 The model implements `run_experiment(mode: str) -> dict`. A trusted wrapper owns the entry point,
 writes `results.json`, and validates the v2 output contract. Smoke mode exercises every condition on

@@ -132,8 +132,11 @@ class BoundedExperimentRunner:
         results_path = portable_dir / "results.json"
         if completed.returncode == 0 and not missing_outputs:
             try:
-                output_contract = ExperimentOutput.model_validate_json(
-                    results_path.read_text(encoding="utf-8")
+                raw_payload = json.loads(results_path.read_text(encoding="utf-8"))
+                output_contract = ExperimentOutput.model_validate(
+                    _normalize_output_payload(
+                        raw_payload, fallback_experiment=program.description
+                    )
                 )
                 # A valid output is preserved even when a check is false. The evidence reviewer,
                 # which sees the protocol and measurements, decides whether this is a genuine
@@ -226,6 +229,148 @@ class BoundedExperimentRunner:
 
 # Kept as an import alias for the thin ExperimentAgent adapter.
 PiExperimentRunner = BoundedExperimentRunner
+
+
+def _normalize_output_payload(
+    payload: Any, *, fallback_experiment: str = "generated experiment"
+) -> Any:
+    """Normalize harmless representation variation without changing scientific values.
+
+    Generated programs often include useful metadata or group aggregate metrics by condition.  The
+    canonical contract stays flat and bounded, while the original unmodified ``results.json`` is
+    retained as an artifact.  Unknown top-level metadata is ignored; measured leaves, checks,
+    conclusions, and observations are never fabricated or force-passed.
+    """
+    if not isinstance(payload, dict):
+        return payload
+    allowed = {
+        "schema_version",
+        "experiment",
+        "status",
+        "parameters",
+        "aggregate_metrics",
+        "observations",
+        "checks",
+        "conclusion",
+        "limitations",
+    }
+    normalized = {key: value for key, value in payload.items() if key in allowed}
+    experiment = normalized.get("experiment")
+    if experiment is None:
+        normalized["experiment"] = fallback_experiment
+    elif not isinstance(experiment, str):
+        if isinstance(experiment, dict):
+            normalized["experiment"] = str(
+                experiment.get("title")
+                or experiment.get("name")
+                or experiment.get("description")
+                or json.dumps(experiment, ensure_ascii=False, sort_keys=True)
+            )
+        else:
+            normalized["experiment"] = str(experiment)
+    normalized["parameters"] = _flatten_mapping(
+        normalized.get("parameters"), preserve_scalar_lists=True
+    )
+    normalized["aggregate_metrics"] = _flatten_mapping(
+        normalized.get("aggregate_metrics"), preserve_scalar_lists=False
+    )
+    observations = normalized.get("observations")
+    if isinstance(observations, list):
+        normalized["observations"] = [
+            {
+                **{
+                    key: value
+                    for key, value in row.items()
+                    if key in {"condition", "sample_size", "metrics"}
+                },
+                **(
+                    {"condition": row["condition_id"]}
+                    if "condition" not in row and "condition_id" in row
+                    else {}
+                ),
+                "metrics": _flatten_mapping(
+                    row.get("metrics"), preserve_scalar_lists=False
+                ),
+            }
+            if isinstance(row, dict)
+            else row
+            for row in observations
+        ]
+    checks = normalized.get("checks")
+    if isinstance(checks, list):
+        # A generated implementation may naturally record one check result per known case. Fold
+        # those records into the protocol's one aggregate decision without hiding any failure.
+        grouped: dict[str, list[dict[str, Any]]] = {}
+        ungrouped: list[Any] = []
+        for row in checks:
+            if isinstance(row, dict):
+                name = row.get("name") or row.get("check_id")
+                if isinstance(name, str):
+                    grouped.setdefault(name, []).append(row)
+                    continue
+            ungrouped.append(row)
+        normalized["checks"] = [
+            {
+                "name": name,
+                "passed": all(row.get("passed") is True for row in rows),
+                "detail": " | ".join(
+                    str(row.get("detail") or "").strip()
+                    for row in rows
+                    if str(row.get("detail") or "").strip()
+                )[:1000],
+            }
+            for name, rows in grouped.items()
+        ] + ungrouped
+    conclusion = normalized.get("conclusion")
+    if isinstance(conclusion, dict):
+        conclusion = {
+            key: value
+            for key, value in conclusion.items()
+            if key in {"hypothesis", "outcome", "basis_metrics", "statement"}
+        }
+        basis = conclusion.get("basis_metrics")
+        if isinstance(basis, dict):
+            conclusion["basis_metrics"] = list(
+                _flatten_mapping(basis, preserve_scalar_lists=False)
+            )[:12]
+        elif isinstance(basis, str):
+            conclusion["basis_metrics"] = [basis]
+        valid_outcomes = {"supports", "contradicts", "null", "inconclusive", "characterizes"}
+        if conclusion.get("outcome") not in valid_outcomes:
+            conclusion["outcome"] = "inconclusive"
+        normalized["conclusion"] = conclusion
+    limitations = normalized.get("limitations")
+    if isinstance(limitations, str):
+        normalized["limitations"] = [limitations]
+    elif isinstance(limitations, dict):
+        normalized["limitations"] = [
+            f"{key}: {value}" for key, value in limitations.items()
+        ][:20]
+    return normalized
+
+
+def _flatten_mapping(value: Any, *, preserve_scalar_lists: bool) -> Any:
+    if not isinstance(value, dict):
+        return value
+    flat: dict[str, Any] = {}
+
+    def visit(prefix: str, item: Any) -> None:
+        if isinstance(item, dict):
+            for key, child in item.items():
+                visit(f"{prefix}.{key}" if prefix else str(key), child)
+            return
+        if isinstance(item, list) and not (
+            preserve_scalar_lists
+            and all(child is None or isinstance(child, (str, int, float, bool)) for child in item)
+        ):
+            for index, child in enumerate(item):
+                visit(f"{prefix}.{index}", child)
+            return
+        flat[prefix] = item
+
+    for key, item in value.items():
+        visit(str(key), item)
+    return flat
 
 
 def _short_value(value: Any, *, limit: int = 240) -> str:

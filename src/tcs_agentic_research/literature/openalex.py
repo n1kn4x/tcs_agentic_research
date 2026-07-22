@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 import time
 from typing import Any
+from xml.etree import ElementTree
 
 import httpx
 
@@ -13,6 +14,7 @@ from .fetchers import normalize_doi, parse_arxiv_id, parse_doi
 
 OPENALEX_API = "https://api.openalex.org"
 USER_AGENT = "agentic-tcs-research-system/0.1 (OpenAlex discovery)"
+_ARXIV_RATE_LIMITED_UNTIL = 0.0
 
 
 class OpenAlexClient:
@@ -22,11 +24,13 @@ class OpenAlexClient:
     It can later grow into cursor pagination, scoring policies, and provider abstraction.
     """
 
+    _rate_limited_until: float = 0.0
+
     def __init__(
         self,
         *,
         timeout_seconds: float = 30.0,
-        max_retries: int = 3,
+        max_retries: int = 2,
         backoff_seconds: float = 1.0,
     ):
         self.timeout_seconds = timeout_seconds
@@ -38,10 +42,15 @@ class OpenAlexClient:
         query = query.strip()
         if not query:
             raise ValueError("query must be non-empty")
-        payload = self._get_json(
-            "/works",
-            params={"search": query, "per-page": str(min(max(limit, 1), 200))},
-        )
+        try:
+            payload = self._get_json(
+                "/works",
+                params={"search": query, "per-page": str(min(max(limit, 1), 200))},
+            )
+        except (httpx.HTTPError, RuntimeError):
+            # OpenAlex can impose multi-hour anonymous budget cooldowns. arXiv is narrower but gives
+            # a primary-source discovery path instead of making every later literature cycle a no-op.
+            return _search_arxiv(query, limit=limit, timeout_seconds=self.timeout_seconds)
         return [
             _candidate_from_work(
                 work,
@@ -123,6 +132,11 @@ class OpenAlexClient:
         cache_key = (path, tuple(sorted((params or {}).items())))
         if cache_key in self._cache:
             return dict(self._cache[cache_key])
+        if time.monotonic() < type(self)._rate_limited_until:
+            raise RuntimeError(
+                "OpenAlex discovery is temporarily rate-limited; use imported local sources and "
+                "retry discovery in a later cycle."
+            )
         headers = {"User-Agent": USER_AGENT}
         last_exc: Exception | None = None
         with httpx.Client(timeout=self.timeout_seconds, headers=headers) as client:
@@ -136,11 +150,16 @@ class OpenAlexClient:
                     response.raise_for_status()
                 except httpx.HTTPStatusError as exc:
                     last_exc = exc
-                    if response.status_code not in {429, 500, 502, 503, 504} or attempt >= self.max_retries:
+                    if response.status_code == 429:
+                        retry_after = _retry_after_seconds(response)
+                        cooldown = min(retry_after if retry_after is not None else 60.0, 300.0)
+                        type(self)._rate_limited_until = time.monotonic() + cooldown
+                        # Sleeping once per query multiplies a provider throttle into hours of no-op
+                        # work. Preserve the 429 immediately; later cycles can use local evidence.
                         raise
-                    retry_after = _retry_after_seconds(response)
-                    delay = retry_after if retry_after is not None else self.backoff_seconds * (2**attempt)
-                    time.sleep(min(delay, 30.0))
+                    if response.status_code not in {500, 502, 503, 504} or attempt >= self.max_retries:
+                        raise
+                    time.sleep(min(self.backoff_seconds * (2**attempt), 5.0))
             if last_exc is not None:
                 raise last_exc
         raise RuntimeError(f"OpenAlex request failed for {path}")
@@ -154,6 +173,86 @@ def _retry_after_seconds(response: httpx.Response) -> float | None:
         return max(0.0, float(value))
     except ValueError:
         return None
+
+
+def _search_arxiv(
+    query: str, *, limit: int, timeout_seconds: float
+) -> list[LiteratureCandidate]:
+    global _ARXIV_RATE_LIMITED_UNTIL
+    if time.monotonic() < _ARXIV_RATE_LIMITED_UNTIL:
+        raise RuntimeError(
+            "arXiv discovery is temporarily rate-limited; retry in a later cycle."
+        )
+    stop = {
+        "and", "does", "exact", "for", "from", "how", "in", "of", "paper", "primary",
+        "source", "the", "this", "to", "what", "which", "with",
+    }
+    terms = [
+        term
+        for term in re.findall(r"[A-Za-z0-9_-]{2,}", query)
+        if term.lower() not in stop
+    ][:6]
+    search_query = " AND ".join(f"all:{term}" for term in terms) or f'all:"{query}"'
+    response = httpx.get(
+        "https://export.arxiv.org/api/query",
+        params={
+            "search_query": search_query,
+            "start": "0",
+            "max_results": str(min(max(limit, 1), 30)),
+            "sortBy": "relevance",
+        },
+        headers={"User-Agent": USER_AGENT},
+        timeout=timeout_seconds,
+    )
+    if response.status_code == 429:
+        _ARXIV_RATE_LIMITED_UNTIL = time.monotonic() + 60.0
+    response.raise_for_status()
+    root = ElementTree.fromstring(response.content)
+    atom = "{http://www.w3.org/2005/Atom}"
+    arxiv = "{http://arxiv.org/schemas/atom}"
+    candidates: list[LiteratureCandidate] = []
+    for entry in root.findall(f"{atom}entry")[:limit]:
+        entry_id = (entry.findtext(f"{atom}id") or "").strip()
+        arxiv_id = parse_arxiv_id(entry_id) or ""
+        if not arxiv_id:
+            continue
+        title = re.sub(r"\s+", " ", entry.findtext(f"{atom}title") or "").strip()
+        abstract = re.sub(r"\s+", " ", entry.findtext(f"{atom}summary") or "").strip()
+        authors = [
+            re.sub(r"\s+", " ", author.findtext(f"{atom}name") or "").strip()
+            for author in entry.findall(f"{atom}author")
+        ]
+        authors = [author for author in authors if author]
+        published = (entry.findtext(f"{atom}published") or "")[:4]
+        pdf_url = ""
+        landing_url = entry_id
+        for link in entry.findall(f"{atom}link"):
+            href = str(link.attrib.get("href") or "")
+            if link.attrib.get("title") == "pdf" or link.attrib.get("type") == "application/pdf":
+                pdf_url = href
+            elif link.attrib.get("rel") == "alternate":
+                landing_url = href
+        doi = (entry.findtext(f"{arxiv}doi") or "").strip()
+        candidates.append(
+            LiteratureCandidate(
+                title=title or f"arXiv:{arxiv_id}",
+                authors=authors,
+                year=int(published) if published.isdigit() else None,
+                doi=normalize_doi(doi) if doi else "",
+                arxiv_id=arxiv_id,
+                abstract=abstract,
+                landing_url=landing_url,
+                pdf_url=pdf_url or f"https://arxiv.org/pdf/{arxiv_id}.pdf",
+                source_urls=[
+                    url
+                    for url in [landing_url, pdf_url or f"https://arxiv.org/pdf/{arxiv_id}.pdf"]
+                    if url
+                ],
+                discovery_reason=f"arXiv fallback search result for query: {query}",
+                score=float(max(limit - len(candidates), 1)),
+            )
+        )
+    return candidates
 
 
 def _candidate_from_work(

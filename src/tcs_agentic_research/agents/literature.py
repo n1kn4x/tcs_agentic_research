@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import unicodedata
 from pathlib import Path
 from typing import Any
 
@@ -590,14 +591,27 @@ class LiteratureResearcher:
         # when explicitly supplied through import_* tools, not for candidate auto-import.
         expected_venue = None
         if candidate.arxiv_id:
-            paper = self.import_arxiv(
+            # Discovery already supplied arXiv metadata. Re-querying the Atom API here both wastes a
+            # request and can fail under an API throttle after the candidate was successfully found.
+            provisional = self.fetcher.import_discovered_arxiv(
                 candidate.arxiv_id,
-                extract_text=extract_text,
+                title=candidate.title,
+                authors=candidate.authors,
+                year=candidate.year,
+                abstract=candidate.abstract,
+                pdf_url=candidate.pdf_url,
+                landing_url=candidate.landing_url,
+                commit=False,
+            )
+            self._validate_expected_metadata(
+                provisional,
                 expected_title=expected_title,
                 expected_authors=expected_authors,
                 expected_year=expected_year,
                 expected_venue=expected_venue,
             )
+            paper = self.import_paper(provisional)
+            paper = self._extract_text_if_requested(paper, extract_text=extract_text)
         elif candidate.pdf_url:
             try:
                 paper = self.import_url(
@@ -1014,7 +1028,12 @@ def _iter_statement_matches(text: str) -> list[_StatementMatch]:
         start = match.start("label")
         next_start = matches[idx + 1].start() if idx + 1 < len(matches) else len(text)
         proof_pos = _find_after(text, start, next_start, ["\nProof", "\n proof", "\nPROOF"])
-        paragraph_pos = text.find("\n\n", match.end(), next_start)
+        # PDF layout often puts a blank line immediately after a theorem heading and before its
+        # body. Starting the paragraph search at match.end() then extracts only the heading.
+        content_start = match.end()
+        while content_start < next_start and text[content_start].isspace():
+            content_start += 1
+        paragraph_pos = text.find("\n\n", content_start, next_start)
         end_candidates = [pos for pos in [proof_pos, paragraph_pos, next_start] if pos != -1]
         end = min(end_candidates) if end_candidates else next_start
         # Avoid swallowing whole papers when PDFs have poor paragraphing.
@@ -1194,9 +1213,10 @@ def _authors_overlap(expected: list[str], actual: list[str]) -> bool:
 
 
 def _author_tokens(author: str) -> set[str]:
+    folded = unicodedata.normalize("NFKD", author).encode("ascii", "ignore").decode("ascii")
     return {
         token
-        for token in re.findall(r"[a-z]+", author.lower())
+        for token in re.findall(r"[a-z]+", folded.lower())
         if len(token) > 1
     }
 
@@ -1241,7 +1261,8 @@ def _paper_candidate_keys(paper: PaperMetadata) -> list[str]:
 
 
 def _normalize_title(title: str) -> str:
-    return re.sub(r"[^a-z0-9]+", " ", title.lower()).strip()
+    folded = unicodedata.normalize("NFKD", title).encode("ascii", "ignore").decode("ascii")
+    return re.sub(r"[^a-z0-9]+", " ", folded.lower()).strip()
 
 
 def _safe_slug(value: str, *, default: str = "paper") -> str:

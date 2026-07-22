@@ -54,6 +54,8 @@ router:
         - decomposition_review
         - literature_review
         - proof_formulation_review
+        - experiment_implementation
+        - experiment_debug
       extra_body:
         top_p: 0.95
         top_k: 20
@@ -77,7 +79,6 @@ router:
         - proof_formulation
         - experiment_review
         - experiment_protocol
-        - experiment_patch
       extra_body:
         top_p: 0.95
         top_k: 20

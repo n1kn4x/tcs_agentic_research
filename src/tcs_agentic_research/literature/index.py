@@ -642,8 +642,10 @@ class LiteratureIndex:
 def _row_to_dict(row: sqlite3.Row, *, boost: float) -> dict[str, Any]:
     payload = dict(row)
     rank = float(payload.pop("rank", 0.0) or 0.0)
-    # bm25() returns smaller/better values, commonly negative. Convert to positive-ish score.
-    payload["score"] = round(boost + 1.0 / (1.0 + max(rank, 0.0)), 4)
+    # SQLite FTS5 bm25() returns smaller (usually more negative) values for better matches.
+    # Clamping every negative rank to zero made all extracted statements tie and reduced retrieval
+    # to insertion order, so newly imported exact definitions could remain permanently invisible.
+    payload["score"] = round(boost + max(0.0, -rank), 4)
     return payload
 
 
@@ -734,7 +736,11 @@ def _terms(text: str) -> list[str]:
     return [t for t in re.findall(r"[A-Za-z0-9_\\-]{3,}", text.lower()) if t not in _STOP]
 
 
-_STOP = {"and", "are", "for", "from", "into", "that", "the", "then", "this", "with", "where"}
+_STOP = {
+    "and", "are", "does", "exact", "explicitly", "for", "from", "how", "into", "paper",
+    "primary", "source", "state", "states", "that", "the", "then", "this", "what", "whether",
+    "which", "with", "where",
+}
 
 
 def _fts_query(query: str) -> str:

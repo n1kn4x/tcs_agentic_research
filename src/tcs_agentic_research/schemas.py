@@ -609,6 +609,10 @@ class ExperimentEvidenceReview(StrictModel):
             self.issues = [
                 (self.caveats or self.follow_up or [self.scientific_summary])[0]
             ]
+        if self.usable == "preliminary" and not self.follow_up:
+            self.follow_up = [
+                "Extend the sound pilot to every acceptance criterion and requested regime."
+            ]
         return self
 
 
@@ -642,9 +646,9 @@ class ExperimentOutput(StrictModel):
     experiment: str = Field(min_length=3, max_length=500)
     status: Literal["completed", "capped"] = "completed"
     parameters: dict[str, JSONParameter] = Field(min_length=1, max_length=50)
-    aggregate_metrics: dict[str, JSONScalar] = Field(min_length=1, max_length=100)
-    observations: list[ExperimentObservation] = Field(min_length=1, max_length=100)
-    checks: list[ExperimentCheck] = Field(min_length=1, max_length=50)
+    aggregate_metrics: dict[str, JSONScalar] = Field(min_length=1, max_length=200)
+    observations: list[ExperimentObservation] = Field(default_factory=list, max_length=1000)
+    checks: list[ExperimentCheck] = Field(min_length=1, max_length=200)
     conclusion: ExperimentConclusion
     limitations: list[str] = Field(min_length=1, max_length=20)
 
@@ -662,35 +666,14 @@ class ExperimentOutput(StrictModel):
         return self
 
 
-class LineReplacement(StrictModel):
-    start_line: int = Field(ge=1)
-    end_line: int = Field(ge=1)
-    new_lines: list[str] = Field(default_factory=list, max_length=300)
+class ExperimentImplementationPlan(StrictModel):
+    """A bounded reasoning pass before emitting a complete experiment source file."""
 
-    @field_validator("new_lines", mode="before")
-    @classmethod
-    def normalize_complete_lines(cls, value: Any) -> Any:
-        if not isinstance(value, list):
-            return value
-        lines: list[Any] = []
-        for item in value:
-            if isinstance(item, str):
-                lines.extend(item.splitlines() or [""])
-            else:
-                lines.append(item)
-        return lines
-
-    @model_validator(mode="after")
-    def ordered_range(self) -> "LineReplacement":
-        if self.end_line < self.start_line:
-            raise ValueError("end_line must be at least start_line")
-        return self
-
-
-class ExperimentProgramPatch(StrictModel):
-    """Small line-range replacements for repairing preserved experiment source."""
-
-    replacements: list[LineReplacement] = Field(min_length=1, max_length=6)
+    approach: str = Field(min_length=10, max_length=2000)
+    components: list[str] = Field(min_length=1, max_length=12)
+    correctness_strategy: str = Field(min_length=10, max_length=2000)
+    output_strategy: str = Field(min_length=10, max_length=1600)
+    defect_repairs: list[str] = Field(default_factory=list, max_length=12)
 
 
 class ExperimentProgram(StrictModel):

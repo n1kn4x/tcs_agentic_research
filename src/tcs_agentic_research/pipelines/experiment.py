@@ -22,10 +22,10 @@ from ..schemas import (
     ExperimentConclusion,
     ExperimentCriterionAssessment,
     ExperimentEvidenceReview,
+    ExperimentImplementationPlan,
     ExperimentObservation,
     ExperimentOutput,
     ExperimentProgram,
-    ExperimentProgramPatch,
     ExperimentProtocol,
     ExperimentProtocolReview,
     ExperimentState,
@@ -45,7 +45,8 @@ class ExperimentPipeline:
     """Run one experiment requirement without exposing engineering stages as research cycles."""
 
     MAX_TRANSITIONS = 32
-    MAX_IDENTICAL_REPAIRS = 2
+    MAX_IDENTICAL_REPAIRS = 5
+    MAX_IDENTICAL_CANDIDATES = 2
 
     def __init__(self, store: ArtifactStore, router: LLMRouter):
         self.store = store
@@ -269,54 +270,53 @@ class ExperimentPipeline:
         if state.stage in {"program_design", "program_revision"}:
             assert state.protocol is not None and state.protocol_sha256
             revision = state.stage == "program_revision"
-            if (
-                revision
-                and state.program is not None
-                and (
-                    "source budget" in state.last_error
-                    or "at most 20000 characters" in state.last_error
-                    or "may use os only" in state.last_error
-                )
-            ):
-                try:
-                    _validate_experiment_program(state.program)
-                except ValueError:
-                    pass
-                else:
-                    state.stage = "smoke_execution"
-                    persist(step_dir)
-                    return None
-            messages = self._program_messages(
-                item, state, revision=revision, research_context=research_context
-            )
-            add(self.store.write_json(f"{step_dir}/input.json", {"messages": messages}))
             repair_defect = state.last_error
-            rewrite = revision and _needs_program_rewrite(repair_defect)
             try:
                 if self.router.dry_run:
                     program = _dry_program(item, state.protocol)
-                elif revision and state.program is not None and not rewrite:
-                    patch = self.router.complete_structured(
-                        task_type="experiment_patch",
-                        messages=messages,
-                        schema=ExperimentProgramPatch,
-                        temperature=0.1,
-                        max_tokens=4096,
-                        allow_repair=False,
-                    )
-                    add(self.store.write_json(f"{step_dir}/program_patch.json", patch))
-                    source = _apply_program_patch(state.program.python_code, patch)
-                    program = ExperimentProgram(
-                        description=state.program.description,
-                        source=source,
-                        seeds=state.protocol.seeds,
-                    )
                 else:
+                    plan_messages = self._implementation_plan_messages(
+                        item, state, revision=revision
+                    )
+                    add(
+                        self.store.write_json(
+                            f"{step_dir}/plan_input.json", {"messages": plan_messages}
+                        )
+                    )
+                    implementation_plan = self.router.complete_structured(
+                        task_type=(
+                            "experiment_debug" if revision else "experiment_implementation"
+                        ),
+                        messages=plan_messages,
+                        schema=ExperimentImplementationPlan,
+                        temperature=0.2,
+                        max_tokens=3072,
+                        allow_repair=True,
+                    )
+                    add(
+                        self.store.write_json(
+                            f"{step_dir}/implementation_plan.json", implementation_plan
+                        )
+                    )
+                    messages = self._program_messages(
+                        item,
+                        state,
+                        revision=revision,
+                        research_context=research_context,
+                        implementation_plan=implementation_plan,
+                    )
+                    add(
+                        self.store.write_json(
+                            f"{step_dir}/input.json", {"messages": messages}
+                        )
+                    )
+                    # A reasoning pass diagnoses the algorithm; the non-thinking coding profile then
+                    # emits a compact complete file instead of spending its output budget thinking.
                     source = self.router.complete_text(
-                        task_type="experiment_revision" if rewrite else "experiment_design",
+                        task_type="experiment_revision" if revision else "experiment_design",
                         messages=messages,
-                        temperature=0.1,
-                        max_tokens=8192,
+                        temperature=0.2 if revision else 0.1,
+                        max_tokens=12288,
                     )
                     program = ExperimentProgram(
                         description=f"Executable implementation of {state.protocol.title}",
@@ -335,10 +335,13 @@ class ExperimentPipeline:
                         state,
                         step_dir,
                         persist,
-                        "Program revision made no source change. The unresolved defect remains: "
-                        + repair_defect,
+                        (
+                            "Program revision made no source change; independently reimplement the "
+                            "frozen protocol. Underlying defect: "
+                            + _underlying_program_defect(repair_defect)
+                        ),
                         force_block=(
-                            state.repeated_program_candidates >= self.MAX_IDENTICAL_REPAIRS
+                            state.repeated_program_candidates >= self.MAX_IDENTICAL_CANDIDATES
                         ),
                     )
                 state.last_program_candidate_sha256 = candidate_sha
@@ -424,7 +427,9 @@ class ExperimentPipeline:
                     item, state, step_dir, persist, "; ".join(errors)
                 )
             state.stage = "full_execution"
-            self._clear_failure(state)
+            # A repair may pass tiny smoke data and reproduce the same defect only at full scale.
+            # Keep its signature until the full run succeeds so that repetition remains bounded.
+            state.last_error = ""
             persist(step_dir)
             return None
 
@@ -566,10 +571,21 @@ class ExperimentPipeline:
         *,
         force_block: bool = False,
     ) -> WorkResult | None:
-        state.engineering_failures += 1
+        signature = _defect_signature(error)
+        if signature == state.last_defect_signature:
+            state.repeated_defect_failures += 1
+        else:
+            state.last_defect_signature = signature
+            state.repeated_defect_failures = 1
+        # Count the current repeated defect, not every distinct issue encountered while a durable
+        # experiment advances through many stages over days or weeks.
+        state.engineering_failures = state.repeated_defect_failures
         state.last_error = error[-4000:]
-        repair_limit = self.router.core.max_experiment_engineering_retries
-        if force_block or state.engineering_failures >= repair_limit:
+        repair_limit = min(
+            self.MAX_IDENTICAL_REPAIRS,
+            self.router.core.max_experiment_engineering_retries,
+        )
+        if force_block or state.repeated_defect_failures >= repair_limit:
             state.engineering_blocked = True
             persist(step_dir)
             return self._blocked(item, state)
@@ -579,6 +595,8 @@ class ExperimentPipeline:
     @staticmethod
     def _clear_failure(state: ExperimentState) -> None:
         state.engineering_failures = 0
+        state.repeated_defect_failures = 0
+        state.last_defect_signature = ""
         state.last_error = ""
 
     @staticmethod
@@ -615,7 +633,9 @@ class ExperimentPipeline:
             "scientifically valid requested comparator (often the simplest requested method). Never add "
             "a dummy, no-op, deliberately incorrect, or oracle condition merely to make a baseline look "
             "separate. Include all dominant costs and requested parameter regimes. Correctness checks "
-            "test implementation validity, never the expected result. A reproducibility check may "
+            "test implementation validity, never the expected result. Prefer an independent exhaustive "
+            "oracle on tiny known cases and cross-condition agreement over circular assertions or "
+            "guessed search-tree sizes. A reproducibility check may "
             "require deterministic generated instances, decisions, and operation counts, but never "
             "identical wall-clock timings. Use fixed seeds and a decision rule that is executable with "
             "the stated samples. Preserve negative and null outcomes."
@@ -690,28 +710,69 @@ class ExperimentPipeline:
         ]
 
     @staticmethod
+    def _implementation_plan_messages(
+        item: WorkItem,
+        state: ExperimentState,
+        *,
+        revision: bool,
+    ) -> list[dict[str, str]]:
+        assert state.protocol is not None
+        return [
+            {
+                "role": "system",
+                "content": (
+                    "Design a compact implementation plan for one frozen experiment. Diagnose the "
+                    "underlying algorithm or contract defect when revising. Plan independent tiny "
+                    "correctness oracles, shared condition inputs, bounded smoke/full branches, raw "
+                    "measurements, and the exact v2 return shape. Do not emit Python source and do not "
+                    "weaken a check to make it pass."
+                ),
+            },
+            {
+                "role": "user",
+                "content": json.dumps(
+                    {
+                        "work_title": item.title,
+                        "protocol": _program_protocol_context(state.protocol),
+                        "previous_source": (
+                            state.program.python_code[:12_000]
+                            if revision and state.program is not None
+                            else None
+                        ),
+                        "defect": state.last_error if revision else "",
+                    },
+                    ensure_ascii=False,
+                ),
+            },
+        ]
+
+    @staticmethod
     def _program_messages(
         item: WorkItem,
         state: ExperimentState,
         *,
         revision: bool,
         research_context: dict[str, Any],
+        implementation_plan: ExperimentImplementationPlan,
     ) -> list[dict[str, str]]:
         assert state.protocol is not None
         system = (
             "Return only compact raw Python source, with no Markdown fence, JSON wrapper, explanation, "
             "unfinished comments, dead code, or placeholders. Keep the complete source under 12,000 "
             "characters. Define run_experiment(mode: str) -> dict and implement the whole frozen protocol. "
-            "Near the start of that function, branch explicitly on mode (for example "
+            "Reserve the argument `mode` for the execution mode ('smoke' or 'full') and use names such "
+            "as condition_id or solver_variant for experimental conditions. Near the start of that "
+            "function, branch explicitly on mode (for example "
             "`sample_count = 1 if mode == 'smoke' else full_sample_count`) and actually use the selected "
-            "bound. Smoke must run every condition on at most one tiny unit and finish well under 60 "
-            "seconds; full mode uses the frozen seeds and sample sizes. The function must return exactly "
+            "bound. Smoke must run every condition on at most ten tiny units and finish well under 60 "
+            "seconds; full mode uses the frozen seeds and sample sizes. The function must return "
             "this v2 shape: "
             "{'schema_version': 2, 'experiment': str, 'status': 'completed'|'capped', "
             "'parameters': {str: scalar}, 'aggregate_metrics': {str: scalar}, "
             "'observations': [{'condition': str, 'sample_size': int, 'metrics': {str: scalar}}], "
-            "with exactly one aggregate observation per protocol condition (sample_size is the number "
-            "of units summarized, not one row per replicate), "
+            "with one or more condition records. A record may summarize several units or represent one "
+            "replicate; sample_size states how many units it represents. Preserve raw replicate records "
+            "when they are needed for audit. "
             "'checks': [{'name': str, 'passed': bool, 'detail': str}], "
             "'conclusion': {'hypothesis': str, 'outcome': "
             "'supports'|'contradicts'|'null'|'inconclusive'|'characterizes', "
@@ -724,7 +785,10 @@ class ExperimentPipeline:
             "When conditions are variants of one algorithm, prefer one small shared core parameterized "
             "by explicit feature flags so correctness fixes apply to every variant; feature flags must still "
             "produce the protocol's material differences. Validate the core on both positive and negative "
-            "known cases before benchmarking. Never alias a treatment as a baseline, "
+            "known cases before benchmarking. For algorithmic experiments, use an independent "
+            "tiny oracle (such as exhaustive enumeration) to establish known-case answers and compare "
+            "all condition outputs on the same units; never declare an UNSAT result correct merely from "
+            "an expected node count. Never alias a treatment as a baseline, "
             "invent an unavailable external solver, hard-code measurements, or mark a check passed "
             "without computing it. Begin with imports, constants, classes, or function definitions. "
             "Use no network, subprocess, async, or multiprocessing; `os` is limited to makedirs, "
@@ -735,26 +799,28 @@ class ExperimentPipeline:
             "there is no `pass`, guessed result, proxy metric, hard-coded outcome, or prose about work "
             "that the source does not perform."
         )
-        if revision and _needs_program_rewrite(state.last_error):
+        if revision:
+            independent = state.repeated_program_candidates > 0
             system = (
-                "Return only one complete compact replacement Python source file. The prior program "
-                "failed a semantic correctness or runtime check, so repair the underlying algorithm; "
-                "do not merely alter, remove, or force-pass the check. Preserve the frozen protocol, "
-                "run_experiment(mode: str) -> dict, the v2 contract, tiny smoke behavior, negative/null "
-                "outcomes, and requested artifacts. Reuse sound helpers when useful, but a clear rewrite "
-                "is preferable to layering patches over faulty state."
+                "Return only one complete compact replacement Python source file, with no Markdown. "
+                "Repair the exact preserved defect while retaining sound parts of the prior source. Do "
+                "not disable checks, discard measurements, hard-code outcomes, or change the frozen "
+                "protocol to make the run pass. Preserve run_experiment(mode: str) -> dict, the v2 "
+                "contract, tiny smoke behavior, negative/null outcomes, and requested artifacts. Keep "
+                "the complete replacement under 12,000 characters and verify its syntax before return. "
+                "The returned dict must have exactly these top-level fields: schema_version=2, "
+                "experiment=str, status='completed'|'capped', parameters=dict, aggregate_metrics=dict "
+                "of scalar leaves, observations=list of {condition, sample_size, metrics}, checks=list "
+                "of {name, passed, detail}, conclusion={hypothesis, outcome, basis_metrics, statement}, "
+                "and limitations=list[str]. Valid outcomes are supports, contradicts, null, "
+                "inconclusive, and characterizes. Reserve the run_experiment argument `mode` for only "
+                "'smoke' or 'full'; use a different variable for algorithm variants."
             )
-        elif revision:
-            system = (
-                "Repair the preserved Python source with a small line-range patch. Return one to six "
-                "replacements using the one-based line numbers in previous_program.numbered_source. "
-                "start_line and end_line are inclusive; new_lines contains complete replacement lines "
-                "without line-number prefixes (an empty list deletes the range). Change only what is "
-                "needed for the concrete defect, but fix every part named by that defect. Do not return "
-                "the whole program. Preserve run_experiment(mode: str) -> dict, the frozen protocol, the "
-                "v2 output contract, negative/null outcomes, and bounded smoke behavior. Never silence a "
-                "failed check or exception; repair the underlying computation."
-            )
+            if independent:
+                system += (
+                    " The previous repair was byte-identical and made no progress. Do not copy it. "
+                    "Independently reimplement the protocol with a smaller design from the specification."
+                )
         return [
             {"role": "system", "content": system},
             {
@@ -772,33 +838,22 @@ class ExperimentPipeline:
                             else state.protocol.model_dump(mode="json")
                         ),
                         "protocol_sha256": state.protocol_sha256,
+                        "implementation_plan": implementation_plan.model_dump(mode="json"),
                         "previous_program": (
-                            (
-                                {
-                                    "description": state.program.description,
-                                    "source_omitted": (
-                                        "The prior algorithm failed semantic checks; implement a "
-                                        "fresh complete replacement from the frozen protocol."
-                                    ),
-                                    "seeds": state.program.seeds,
-                                }
-                                if revision and _needs_program_rewrite(state.last_error)
-                                else {
-                                    "description": state.program.description,
-                                    "numbered_source": _numbered_source(
-                                        state.program.python_code
-                                    ),
-                                    "seeds": state.program.seeds,
-                                }
-                            )
+                            {
+                                "description": state.program.description,
+                                "source": state.program.python_code,
+                                "seeds": state.program.seeds,
+                            }
                             if state.program
+                            and not (revision and state.repeated_program_candidates > 0)
                             else None
                         ),
                         "defect": state.last_error if revision else "",
                         "agenda_constraints": research_context.get("agenda_constraints", []),
                         "reusable_code_from_prior_completed_experiment": (
                             []
-                            if revision
+                            if revision or state.program is not None
                             else research_context.get("reusable_experiment_code", [])
                         ),
                     },
@@ -825,9 +880,18 @@ class ExperimentPipeline:
                     "content": (
                         "Audit measurements against the frozen protocol. Assess every supplied work "
                         "criterion ID exactly once and recompute conclusions from observations. Preserve "
-                        "sound negative and null outcomes. Full evidence requires every mandatory "
-                        "criterion; use preliminary for scoped interpretable pilots and unusable for "
-                        "wrong metrics, invalid baselines, leakage, or failed implementation checks."
+                        "sound negative and null outcomes. `source_excerpt` is intentionally only a "
+                        "prefix; never call the implementation truncated merely because the excerpt ends. "
+                        "The complete source is preserved in the listed execution artifacts and a successful "
+                        "execution imported it. The trusted wrapper invoked the validated output in full "
+                        "mode; do not infer otherwise from an inert __main__ default in the "
+                        "source. Repeated or equal measurements across distinct conditions are not by "
+                        "themselves evidence of a bug: require a failed oracle/check or a concrete code "
+                        "defect. One observation may aggregate multiple units when sample_size records "
+                        "that count, and significance tests are required only if the frozen protocol says "
+                        "so. Full evidence requires every mandatory criterion; use preliminary for scoped "
+                        "interpretable pilots and unusable for wrong metrics, invalid baselines, leakage, "
+                        "or failed implementation checks."
                     ),
                 },
                 {
@@ -849,13 +913,13 @@ class ExperimentPipeline:
                                 "source_sha256": hashlib.sha256(
                                     program.python_code.encode("utf-8")
                                 ).hexdigest(),
-                                "source_excerpt": program.python_code[:8_000],
+                                "source_excerpt": program.python_code[:4_000],
                             },
                             "execution_artifacts": [
-                                ref.path for ref in execution.artifact_refs[:80]
+                                ref.path for ref in execution.artifact_refs[:30]
                             ],
                             "validated_output": (
-                                output.model_dump(mode="json") if output else None
+                                _evidence_output_context(output) if output else None
                             ),
                         },
                         ensure_ascii=False,
@@ -991,15 +1055,6 @@ def _protocol_output_errors(
         errors.append("Output omitted protocol conditions: " + ", ".join(missing_conditions))
     if unexpected_conditions:
         errors.append("Output added unregistered conditions: " + ", ".join(unexpected_conditions))
-    duplicate_conditions = sorted(
-        condition for condition in observed_conditions if observed_ids.count(condition) > 1
-    )
-    if duplicate_conditions:
-        errors.append(
-            "Output must aggregate to one observation per condition; duplicate conditions: "
-            + ", ".join(duplicate_conditions)
-        )
-
     expected_metrics = {metric.id for metric in protocol.metrics}
     for observation in output.observations:
         missing_metrics = sorted(expected_metrics - set(observation.metrics))
@@ -1008,55 +1063,119 @@ def _protocol_output_errors(
                 f"Observation `{observation.condition}` omitted protocol metrics: "
                 + ", ".join(missing_metrics)
             )
-        if smoke and observation.sample_size > 1:
-            errors.append(
-                f"Smoke observation `{observation.condition}` used sample_size="
-                f"{observation.sample_size}; the smoke limit is 1."
+    if smoke:
+        for condition in observed_conditions:
+            represented = sum(
+                observation.sample_size
+                for observation in output.observations
+                if observation.condition == condition
             )
+            if represented > 10:
+                errors.append(
+                    f"Smoke condition `{condition}` represented {represented} units; "
+                    "the smoke limit is 10."
+                )
 
     expected_checks = {check.id for check in protocol.correctness_checks}
-    actual_checks = {check.name for check in output.checks}
+    check_names = [check.name for check in output.checks]
+    actual_checks = set(check_names)
     missing_checks = sorted(expected_checks - actual_checks)
     if missing_checks:
         errors.append("Output omitted protocol correctness checks: " + ", ".join(missing_checks))
+    duplicate_checks = sorted(name for name in actual_checks if check_names.count(name) > 1)
+    if duplicate_checks:
+        errors.append("Output repeated protocol correctness checks: " + ", ".join(duplicate_checks))
     if _normalized_text(output.conclusion.hypothesis) != _normalized_text(protocol.hypothesis):
         errors.append("Output conclusion changed the frozen protocol hypothesis.")
     return errors
 
 
-def _needs_program_rewrite(error: str) -> bool:
-    lowered = error.lower()
-    return any(
-        marker in lowered
-        for marker in [
-            "implementation checks failed",
-            "experiment program failed",
-            "failed scientific audit",
-            "syntax error in",
-            "rewrite the",
-        ]
-    )
+def _underlying_program_defect(error: str) -> str:
+    marker = "Underlying defect:"
+    return error.rsplit(marker, 1)[-1].strip() if marker in error else error.strip()
 
 
-def _apply_program_patch(source: str, patch: ExperimentProgramPatch) -> str:
-    lines = source.splitlines()
-    ranges = sorted(
-        (row.start_line, row.end_line, row.new_lines) for row in patch.replacements
-    )
-    if any(start < 1 or end > len(lines) for start, end, _ in ranges):
-        raise ValueError("program patch line range is outside the preserved source")
-    if any(left[1] >= right[0] for left, right in zip(ranges, ranges[1:])):
-        raise ValueError("program patch line ranges overlap")
-    for start, end, new_lines in reversed(ranges):
-        lines[start - 1 : end] = new_lines
-    return "\n".join(lines)
+def _defect_signature(error: str) -> str:
+    """Return a stable category for bounded retries without conflating distinct defects."""
+    import re
+
+    first_line = (error.strip().splitlines() or ["unknown experiment defect"])[0].lower()
+    first_line = re.sub(r"[0-9a-f]{16,}", "<id>", first_line)
+    first_line = re.sub(r"\d+", "<n>", first_line)
+    return re.sub(r"\s+", " ", first_line).strip()[:500]
 
 
-def _numbered_source(source: str) -> str:
-    return "\n".join(
-        f"{line_number:04d}: {line}"
-        for line_number, line in enumerate(source.splitlines(), 1)
-    )
+def _evidence_output_context(output: ExperimentOutput) -> dict[str, Any]:
+    """Bound raw observations into auditable summaries for the semantic review call.
+
+    The unmodified payload remains in ``results.json``.  This context includes weighted numeric
+    summaries, categorical counts, and examples so a long experiment cannot overflow later model
+    calls merely by preserving more raw replicates.
+    """
+    by_condition: dict[str, list[ExperimentObservation]] = {}
+    for observation in output.observations:
+        by_condition.setdefault(observation.condition, []).append(observation)
+
+    summaries: list[dict[str, Any]] = []
+    examples: list[dict[str, Any]] = []
+    for condition, rows in sorted(by_condition.items()):
+        metric_names = sorted({name for row in rows for name in row.metrics})[:12]
+        metrics: dict[str, Any] = {}
+        for name in metric_names:
+            values = [
+                (row.metrics[name], row.sample_size)
+                for row in rows
+                if name in row.metrics and row.metrics[name] is not None
+            ]
+            numeric = [
+                (float(value), weight)
+                for value, weight in values
+                if isinstance(value, (int, float)) and not isinstance(value, bool)
+            ]
+            if numeric and len(numeric) == len(values):
+                total_weight = sum(weight for _, weight in numeric)
+                metrics[name] = {
+                    "count": total_weight,
+                    "mean": sum(value * weight for value, weight in numeric) / total_weight,
+                    "min": min(value for value, _ in numeric),
+                    "max": max(value for value, _ in numeric),
+                }
+            else:
+                counts: dict[str, int] = {}
+                for value, weight in values:
+                    key = json.dumps(value, ensure_ascii=False, sort_keys=True)
+                    counts[key] = counts.get(key, 0) + weight
+                metrics[name] = {"counts": dict(list(sorted(counts.items()))[:8])}
+        summaries.append(
+            {
+                "condition": condition,
+                "record_count": len(rows),
+                "represented_sample_size": sum(row.sample_size for row in rows),
+                "metrics": metrics,
+            }
+        )
+        examples.extend(row.model_dump(mode="json") for row in rows[:1])
+
+    return {
+        "schema_version": output.schema_version,
+        "experiment": output.experiment,
+        "status": output.status,
+        "parameters": dict(list(output.parameters.items())[:30]),
+        "aggregate_metrics": dict(list(output.aggregate_metrics.items())[:40]),
+        "observation_summaries": summaries,
+        "observation_examples": examples,
+        "checks": [
+            {
+                "name": row.name,
+                "passed": row.passed,
+                "detail": row.detail[:500],
+            }
+            for row in output.checks[:20]
+        ],
+        "conclusion": output.conclusion.model_dump(mode="json"),
+        "limitations": [value[:300] for value in output.limitations[:10]],
+        "raw_observation_count": len(output.observations),
+    }
 
 
 def _normalized_text(value: str) -> str:

@@ -37,9 +37,11 @@ Only the protocol and final evidence receive semantic model reviews. Generated c
 syntactically and for unsafe operations, must explicitly use `mode`, and must pass tiny smoke
 execution before a full run. This avoids subjective code-review loops.
 
-Every stage is persisted under `ExperimentStates/`. Repairs receive exact validator/reviewer/runtime
-defects and the prior candidate. Two repairs per outer cycle prevent one experiment from monopolizing
-a long run. Repeated identical defects stop after a small per-defect budget.
+Every stage is persisted under `ExperimentStates/`. Repairs use one bounded reasoning plan followed
+by a complete replacement source from the coding profile, with the exact validator/reviewer/runtime
+defect and prior candidate. Two repairs per outer cycle prevent one experiment from monopolizing a
+long run. Repeated identical defects stop after a small per-defect budget; distinct defects do not
+consume one cumulative retry counter.
 
 ## Evidence policy
 

@@ -52,22 +52,27 @@ def _default_plan(
     limit: int = 4,
 ) -> PlanSubmission:
     """Schedule least-attempted gaps and methods without inventing a scientific claim."""
-    attempted: dict[tuple[str, WorkKind], int] = {}
+    scientific_attempts: dict[tuple[str, WorkKind], int] = {}
+    scheduled_variants: dict[tuple[str, WorkKind], int] = {}
     requirements = requirement_index(agenda)
     for item in queue.items:
         requirement_pair = requirements.get(item.requirement_id)
         if requirement_pair is None:
             continue
         _, requirement = requirement_pair
-        if (
-            item.strategy_fingerprint not in requirement.attempted_strategy_fingerprints
-            and item.status != WorkStatus.failed
-        ):
-            continue
         key = (item.requirement_id, item.kind)
-        attempted[key] = attempted.get(key, 0) + 1
+        scheduled_variants[key] = scheduled_variants.get(key, 0) + 1
+        if item.strategy_fingerprint in requirement.attempted_strategy_fingerprints:
+            scientific_attempts[key] = scientific_attempts.get(key, 0) + 1
     drafts: list[WorkItemDraft] = []
-    candidates: list[tuple[int, int, ResearchQuestion, EvidenceRequirement, WorkKind]] = []
+    active_pairs = {
+        (item.requirement_id, item.kind)
+        for item in queue.items
+        if item.status in {WorkStatus.open, WorkStatus.running}
+    }
+    candidates: list[
+        tuple[int, int, int, ResearchQuestion, EvidenceRequirement, WorkKind]
+    ] = []
     for q_index, question in enumerate(agenda.questions):
         for requirement in question.requirements:
             if requirement.status in {RequirementStatus.satisfied, RequirementStatus.blocked}:
@@ -75,17 +80,25 @@ def _default_plan(
             for method in requirement.acceptable_methods:
                 if method == WorkKind.synthesis:
                     continue
-                count = attempted.get((requirement.requirement_id, method), 0)
-                if count >= max_method_attempts:
+                if (requirement.requirement_id, method) in active_pairs:
                     continue
-                candidates.append((count, q_index, question, requirement, method))
+                key = (requirement.requirement_id, method)
+                attempt_count = scientific_attempts.get(key, 0)
+                variant = scheduled_variants.get(key, 0)
+                if attempt_count >= max_method_attempts or (
+                    attempt_count == 0 and variant >= max_method_attempts
+                ):
+                    continue
+                candidates.append(
+                    (attempt_count, q_index, variant, question, requirement, method)
+                )
     # First cover distinct methods (triangulation), then distinct requirements, then fill. This
     # prevents a broad agenda from spending its first batch on four near-identical experiments.
     ordered = sorted(candidates, key=lambda row: row[:2])
     used_pairs: set[tuple[str, WorkKind]] = set()
     used_methods: set[WorkKind] = set()
     for pass_number in range(3):
-        for attempt_count, _, question, requirement, method in ordered:
+        for _, _, variant, question, requirement, method in ordered:
             pair = (requirement.requirement_id, method)
             if pair in used_pairs:
                 continue
@@ -96,7 +109,7 @@ def _default_plan(
             ):
                 continue
             drafts.append(
-                _work_for_requirement(question, requirement, method, variant=attempt_count)
+                _work_for_requirement(question, requirement, method, variant=variant)
             )
             used_pairs.add(pair)
             used_methods.add(method)
@@ -602,8 +615,18 @@ def _validate_experiment_program(program: Any) -> None:
         raise ValueError(
             "run_experiment must branch on mode so smoke uses tiny per-condition samples"
         )
-    if any(isinstance(node, ast.Pass) for node in ast.walk(run_function)):
-        raise ValueError("run_experiment contains an unfinished `pass` placeholder")
+    meaningful_body = [
+        node
+        for node in run_function.body
+        if not isinstance(node, ast.Pass)
+        and not (
+            isinstance(node, ast.Expr)
+            and isinstance(node.value, ast.Constant)
+            and isinstance(node.value.value, str)
+        )
+    ]
+    if not meaningful_body:
+        raise ValueError("run_experiment contains only an unfinished `pass` placeholder")
     if any(not _safe_experiment_top_level(node) for node in tree.body):
         raise ValueError(
             "generated experiment may only define imports, constants, classes, and functions; "
@@ -628,7 +651,13 @@ def _validate_experiment_program(program: Any) -> None:
         "subprocess", "urllib",
     }
     forbidden_calls = {"compile", "eval", "exec", "__import__", "exit", "quit"}
-    for node in ast.walk(tree):
+    implementation_nodes = (
+        node
+        for top_node in tree.body
+        if not (isinstance(top_node, ast.If) and _is_main_guard(top_node))
+        for node in ast.walk(top_node)
+    )
+    for node in implementation_nodes:
         if isinstance(node, ast.Import):
             blocked = {alias.name.split(".", 1)[0] for alias in node.names} & forbidden_modules
             if blocked:
@@ -687,20 +716,24 @@ def _safe_experiment_top_level(node: ast.stmt) -> bool:
             )
         )
     if isinstance(node, ast.If):
-        # This guard is false when the trusted wrapper imports the implementation.  It is harmless
-        # boilerplate, while an unguarded generated entry-point call remains rejected.
-        test = node.test
-        return (
-            isinstance(test, ast.Compare)
-            and isinstance(test.left, ast.Name)
-            and test.left.id == "__name__"
-            and len(test.ops) == 1
-            and isinstance(test.ops[0], ast.Eq)
-            and len(test.comparators) == 1
-            and isinstance(test.comparators[0], ast.Constant)
-            and test.comparators[0].value == "__main__"
-        )
+        # This guard is false when the trusted wrapper imports the implementation. It is harmless
+        # boilerplate and is excluded from executable-implementation safety scanning.
+        return _is_main_guard(node)
     return False
+
+
+def _is_main_guard(node: ast.If) -> bool:
+    test = node.test
+    return (
+        isinstance(test, ast.Compare)
+        and isinstance(test.left, ast.Name)
+        and test.left.id == "__name__"
+        and len(test.ops) == 1
+        and isinstance(test.ops[0], ast.Eq)
+        and len(test.comparators) == 1
+        and isinstance(test.comparators[0], ast.Constant)
+        and test.comparators[0].value == "__main__"
+    )
 
 
 def _attribute_chain(node: ast.Attribute) -> list[str]:
