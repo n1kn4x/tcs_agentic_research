@@ -18,6 +18,7 @@ from tcs_agentic_research.pipelines.experiment import (
     _protocol_output_errors,
     _review_errors,
 )
+from tcs_agentic_research.pipelines.literature import _preserves_required_acronyms
 from tcs_agentic_research.workflow import (
     _new_contributions,
     _normalize_work_draft,
@@ -58,6 +59,7 @@ from tcs_agentic_research.schemas import (
     ResearchPhase,
     ResearchQuestion,
     RouterSettings,
+    WorkItem,
     WorkItemDraft,
     WorkKind,
     WorkStatus,
@@ -276,6 +278,15 @@ def test_empirical_requirements_cannot_fall_back_to_derivation() -> None:
     assert methods == [WorkKind.experiment]
 
 
+def test_generic_mathematical_formalization_routes_to_derivation_not_lean() -> None:
+    methods = _methods_for_requirement(
+        "A formalization and NP-hardness proof for weighted multiset cover.",
+        [WorkKind.proof, WorkKind.derivation],
+    )
+
+    assert methods == [WorkKind.derivation]
+
+
 def test_interrupted_running_item_is_reopened_on_restart(tmp_path: Path) -> None:
     engine = ResearchEngine(workspace=_task(tmp_path), dry_run=True)
     engine.run(max_steps=1)
@@ -473,6 +484,26 @@ def test_no_model_tool_interface_is_emitted(tmp_path: Path) -> None:
     assert "tools" not in captured
     assert captured["max_tokens"] == 8192
     assert captured["response_format"]
+
+
+def test_literature_acceptance_requires_explicit_acronym_anchors() -> None:
+    item = WorkItem.model_construct(
+        instruction="Quote the OV lower bound under SETH rather than ETH.",
+        hypothesis="The OV result depends on SETH.",
+    )
+
+    assert _preserves_required_acronyms(
+        item,
+        "Assuming SETH, the Orthogonal Vectors (OV) bound is not stated under ETH.",
+    )
+    assert _preserves_required_acronyms(
+        item,
+        "The Orthogonal Vectors bound assumes the Strong Exponential Time Hypothesis, not ETH.",
+    )
+    assert not _preserves_required_acronyms(
+        item,
+        "Assuming SETH, Bichromatic Closest Pair requires quadratic time.",
+    )
 
 
 def test_deterministic_literature_extraction_has_stable_exact_support(tmp_path: Path) -> None:

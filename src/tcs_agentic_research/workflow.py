@@ -471,7 +471,7 @@ def _ensure_requested_methods(draft: ResearchAgendaDraft, task: str) -> Research
         requested.append(WorkKind.literature)
     if re.search(r"\b(?:experimenter|experiments?|empirical|benchmarks?|datasets?)\b", lowered):
         requested.append(WorkKind.experiment)
-    if re.search(r"\b(?:lean|leap|formaliz|kernel[- ]checked)\b", lowered):
+    if re.search(r"\b(?:lean|leap|kernel[- ]checked|compiler[- ]verified)\b", lowered):
         requested.append(WorkKind.proof)
     if re.search(r"\b(?:proof|prove|theorems?|derive|analysis|complexity)\b", lowered):
         requested.append(WorkKind.derivation)

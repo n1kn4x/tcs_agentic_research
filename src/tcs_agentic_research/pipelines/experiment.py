@@ -290,7 +290,12 @@ class ExperimentPipeline:
                         messages=plan_messages,
                         schema=ExperimentImplementationPlan,
                         temperature=0.2,
-                        max_tokens=3072,
+                        # Reasoning profiles may spend several thousand tokens in an internal
+                        # thinking block before emitting the constrained JSON. A 3k cap repeatedly
+                        # truncated the answer before the implementation plan, causing formatter
+                        # defaults and low-quality repair code. Keep this below the global router
+                        # cap, but large enough for both diagnosis and the typed plan.
+                        max_tokens=8192,
                         allow_repair=True,
                     )
                     add(

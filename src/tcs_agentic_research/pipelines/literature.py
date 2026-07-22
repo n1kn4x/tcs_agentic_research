@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from typing import Any
 
 from ..agents.literature import LiteratureResearcher
@@ -171,60 +172,103 @@ class LiteraturePipeline:
                 supports[support_id] = row
         accepted: dict[str, str] = {}
         if supports and not self.router.dry_run:
+            statement_payload = [
+                {
+                    "support_id": support_id,
+                    "citation_key": row.citation_key,
+                    "statement": row.statement_text,
+                }
+                for support_id, row in list(supports.items())[:20]
+            ]
+            review_messages = [
+                {
+                    "role": "system",
+                    "content": (
+                        "Review each exact primary-source statement against the atomic evidence "
+                        "requirement. Return exactly one selection for every supplied support_id; "
+                        "the selections list must not be empty when statements are supplied. Topical "
+                        "overlap is unrelated. Judge only the quoted statement: do not use an unstated "
+                        "equivalence, reduction, paper-level context, or outside knowledge."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": json.dumps(
+                        {
+                            "requirement": item.instruction,
+                            "hypothesis": item.hypothesis,
+                            "statements": statement_payload,
+                        },
+                        ensure_ascii=False,
+                    ),
+                },
+            ]
             review = self.router.complete_structured(
                 task_type="literature_review",
-                messages=[
-                    {
-                        "role": "system",
-                        "content": (
-                            "Review each exact primary-source statement against the atomic evidence "
-                            "requirement. Topical overlap is unrelated. Do not extend beyond the quote."
-                        ),
-                    },
-                    {
-                        "role": "user",
-                        "content": json.dumps(
-                            {
-                                "requirement": item.instruction,
-                                "hypothesis": item.hypothesis,
-                                "statements": [
-                                    {
-                                        "support_id": support_id,
-                                        "citation_key": row.citation_key,
-                                        "statement": row.statement_text,
-                                    }
-                                    for support_id, row in list(supports.items())[:20]
-                                ],
-                            },
-                            ensure_ascii=False,
-                        ),
-                    },
-                ],
+                messages=review_messages,
                 schema=LiteratureEvidenceReview,
                 allow_repair=False,
             )
             refs.append(self.store.write_json(f"{run_dir}/evidence_review.json", review))
-            accepted = {
-                row.support_id: row.relation
-                for row in review.selections
-                if row.relevant
-                and row.relation != "unrelated"
-                and row.support_id in supports
-            }
-            if not accepted:
-                # Some constrained decoders place an explicitly selected support ID in the
-                # assessment/follow-up fields while leaving `selections` empty. Recover only the
-                # narrow, unambiguous case where the reviewer literally says the requirement is
-                # satisfied; topical overlap or a merely suggested next query is never promoted.
-                review_text = " ".join(
-                    [review.search_assessment, *review.next_queries]
+            if not review.selections:
+                # Empty reviews have repeatedly discarded exact definitions already present in the
+                # supplied passages. One fresh, smaller retry is bounded and safer than either
+                # accepting by lexical overlap or silently exhausting a valid source.
+                retry_payload = statement_payload[:8]
+                review = self.router.complete_structured(
+                    task_type="literature_review",
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": (
+                                "The previous audit omitted every statement. Assess each supplied "
+                                "support_id exactly once as relevant or unrelated. Use only its exact "
+                                "quoted text and never infer an unstated relationship."
+                            ),
+                        },
+                        {
+                            "role": "user",
+                            "content": json.dumps(
+                                {
+                                    "requirement": item.instruction,
+                                    "hypothesis": item.hypothesis,
+                                    "statements": retry_payload,
+                                },
+                                ensure_ascii=False,
+                            ),
+                        },
+                    ],
+                    schema=LiteratureEvidenceReview,
+                    allow_repair=False,
                 )
-                if "requirement satisfied" in review_text.lower():
-                    accepted = {
-                        support_id: "characterizes"
-                        for support_id in supports
-                        if support_id in review_text
-                    }
+                refs.append(
+                    self.store.write_json(f"{run_dir}/evidence_review_retry.json", review)
+                )
+            accepted = {
+                selection.support_id: selection.relation
+                for selection in review.selections
+                if selection.relevant
+                and selection.relation != "unrelated"
+                and selection.support_id in supports
+                and _preserves_required_acronyms(
+                    item, supports[selection.support_id].statement_text
+                )
+            }
+            rejected_for_missing_anchors = [
+                selection.support_id
+                for selection in review.selections
+                if selection.relevant
+                and selection.relation != "unrelated"
+                and selection.support_id in supports
+                and not _preserves_required_acronyms(
+                    item, supports[selection.support_id].statement_text
+                )
+            ]
+            if rejected_for_missing_anchors:
+                errors.append(
+                    "review accepted quote(s) that omit explicit requirement acronym(s): "
+                    + ", ".join(rejected_for_missing_anchors)
+                )
         findings: list[Finding] = []
         for support_id, relation in accepted.items():
             row = supports[support_id]
@@ -308,6 +352,44 @@ class LiteraturePipeline:
                 else []
             ),
         )
+
+
+def _preserves_required_acronyms(item: WorkItem, statement: str) -> bool:
+    """Prevent a reviewer from supplying an unstated cross-problem relationship.
+
+    Acronyms are useful conservative entity anchors in technical requirements. If a requirement
+    explicitly asks about OV under SETH, a quote about SETH hardness for another problem cannot be
+    promoted by claiming an outside equivalence. Ordinary title-case words are intentionally not
+    treated as anchors.
+    """
+    requirement_text = f"{item.instruction} {item.hypothesis}"
+    anchors = set(
+        re.findall(
+            r"(?<![A-Za-z0-9])([A-Z][A-Z0-9]{1,9})(?![A-Za-z0-9])",
+            requirement_text,
+        )
+    )
+    return all(_statement_contains_anchor(statement, anchor) for anchor in anchors)
+
+
+def _statement_contains_anchor(statement: str, anchor: str) -> bool:
+    if re.search(
+        rf"(?<![A-Za-z0-9]){re.escape(anchor)}(?![A-Za-z0-9])",
+        statement,
+    ):
+        return True
+    # Exact spans often spell out an acronym rather than repeating it. Accept a contiguous
+    # capitalized expansion (for example, "Orthogonal Vectors" for OV) without introducing a
+    # domain-specific acronym dictionary.
+    words = re.findall(r"[A-Za-z][A-Za-z-]*", statement)
+    width = len(anchor)
+    return any(
+        len(window) == width
+        and all(word[0].isupper() for word in window)
+        and "".join(word[0] for word in window).upper() == anchor
+        for start in range(len(words) - width + 1)
+        for window in [words[start : start + width]]
+    )
 
 
 def _support_id(

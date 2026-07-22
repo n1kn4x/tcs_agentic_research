@@ -767,8 +767,6 @@ class ResearchEngine:
                         for marker in [
                             "revise the protocol",
                             "protocol design",
-                            "parameter regime",
-                            "sample size",
                         ]
                     )
                 ),
@@ -1188,7 +1186,7 @@ def _methods_for_requirement(
     # Formal evidence takes precedence over generic words such as "source code", "compiler", or
     # "test": a Lean snippet is not an empirical experiment.
     if re.search(
-        r"\b(?:lean|leap|kernel[- ]checked|formaliz(?:e|ation)|compiler-verified)\b",
+        r"\b(?:lean|leap|kernel[- ]checked|compiler[- ]verified)\b",
         lowered,
     ):
         return [WorkKind.proof]
