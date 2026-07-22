@@ -163,7 +163,9 @@ class LLMRouter:
             max_tokens=max_tokens,
         )
         try:
-            return str(response["choices"][0]["message"].get("content") or "")
+            return _strip_reasoning_blocks(
+                str(response["choices"][0]["message"].get("content") or "")
+            ).strip()
         except (KeyError, IndexError, TypeError) as exc:
             raise StructuredLLMError("provider response has no assistant content") from exc
 

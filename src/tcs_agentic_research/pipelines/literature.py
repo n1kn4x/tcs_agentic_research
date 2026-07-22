@@ -46,8 +46,8 @@ class LiteraturePipeline:
         research_context: dict[str, Any] | None = None,
     ) -> WorkResult:
         fallback_query = _compact_query(
-            f"{(research_context or {}).get('research_objective', '')} "
-            f"{item.hypothesis} {item.instruction}"
+            f"{item.instruction} {item.hypothesis} "
+            f"{(research_context or {}).get('research_objective', '')}"
         )
         mock = LiteraturePlan(search_queries=[fallback_query], focus_questions=[fallback_query])
         messages = [
@@ -90,11 +90,7 @@ class LiteraturePipeline:
             errors.append(f"planning: {type(exc).__name__}: {exc}")
             plan = mock
         plan = plan.model_copy(
-            update={
-                "search_queries": list(
-                    dict.fromkeys([fallback_query, *plan.search_queries])
-                )[:4]
-            }
+            update={"search_queries": list(dict.fromkeys(plan.search_queries))[:4]}
         )
         refs.append(self.store.write_json(f"{run_dir}/literature_plan.json", plan))
         researcher = LiteratureResearcher(
@@ -121,7 +117,7 @@ class LiteraturePipeline:
             if _candidate_is_relevant_and_extractable(
                 candidate,
                 preferred_titles=plan.known_source_titles,
-                relevance_queries=[fallback_query],
+                relevance_queries=plan.search_queries,
             )
         ]
         imported: list[Any] = []
@@ -136,7 +132,7 @@ class LiteraturePipeline:
                 errors.append(f"import {candidate.title!r}: {type(exc).__name__}: {exc}")
         try:
             extraction = researcher.extract_imported_papers(
-                max_papers=max(1, min(2, self.router.core.literature_max_imports)),
+                max_papers=max(1, self.router.core.literature_max_imports),
                 only_missing=True,
                 use_llm=not self.router.dry_run,
             )
@@ -145,7 +141,10 @@ class LiteraturePipeline:
             errors.append(f"extraction: {type(exc).__name__}: {exc}")
         refs.append(self.store.write_json(f"{run_dir}/extraction.json", extraction))
         answers = []
-        for question in plan.focus_questions:
+        retrieval_queries = list(
+            dict.fromkeys([fallback_query, *plan.focus_questions, *plan.search_queries])
+        )
+        for question in retrieval_queries:
             try:
                 answers.append(
                     researcher.answer_query(
@@ -160,7 +159,7 @@ class LiteraturePipeline:
                 [answer.model_dump(mode="json") for answer in answers],
             )
         )
-        supports: dict[str, Any] = {}
+        support_rows: dict[str, Any] = {}
         for answer in answers:
             for row in answer.results:
                 if not (row.provenance and row.provenance[0].validated and row.statement_text):
@@ -169,7 +168,16 @@ class LiteraturePipeline:
                 support_id = row.support_id or _support_id(
                     row.citation_key, quote.char_start, quote.char_end, quote.quote
                 )
-                supports[support_id] = row
+                prior = support_rows.get(support_id)
+                if prior is None or row.score > prior.score:
+                    support_rows[support_id] = row
+        supports = dict(
+            sorted(
+                support_rows.items(),
+                key=lambda pair: pair[1].score,
+                reverse=True,
+            )[:20]
+        )
         accepted: dict[str, str] = {}
         if supports and not self.router.dry_run:
             statement_payload = [
@@ -253,6 +261,10 @@ class LiteraturePipeline:
                 and _preserves_required_acronyms(
                     item, supports[selection.support_id].statement_text
                 )
+                and _preserves_objective_anchor(
+                    (research_context or {}).get("research_objective", ""),
+                    supports[selection.support_id].statement_text,
+                )
             }
             rejected_for_missing_anchors = [
                 selection.support_id
@@ -260,13 +272,19 @@ class LiteraturePipeline:
                 if selection.relevant
                 and selection.relation != "unrelated"
                 and selection.support_id in supports
-                and not _preserves_required_acronyms(
-                    item, supports[selection.support_id].statement_text
+                and not (
+                    _preserves_required_acronyms(
+                        item, supports[selection.support_id].statement_text
+                    )
+                    and _preserves_objective_anchor(
+                        (research_context or {}).get("research_objective", ""),
+                        supports[selection.support_id].statement_text,
+                    )
                 )
             ]
             if rejected_for_missing_anchors:
                 errors.append(
-                    "review accepted quote(s) that omit explicit requirement acronym(s): "
+                    "review accepted quote(s) that omit a required entity or task-topic anchor: "
                     + ", ".join(rejected_for_missing_anchors)
                 )
         findings: list[Finding] = []
@@ -357,19 +375,41 @@ class LiteraturePipeline:
 def _preserves_required_acronyms(item: WorkItem, statement: str) -> bool:
     """Prevent a reviewer from supplying an unstated cross-problem relationship.
 
-    Acronyms are useful conservative entity anchors in technical requirements. If a requirement
-    explicitly asks about OV under SETH, a quote about SETH hardness for another problem cannot be
-    promoted by claiming an outside equivalence. Ordinary title-case words are intentionally not
-    treated as anchors.
+    Acronyms are useful conservative entity anchors in technical requirements. The primary (first)
+    acronym must occur in the exact span, so a quote about SETH hardness for another problem cannot
+    be promoted as an OV result by claiming an outside equivalence. Later acronyms may denote examples
+    or alternatives and are left to semantic review. Ordinary title-case words are not anchors.
     """
     requirement_text = f"{item.instruction} {item.hypothesis}"
-    anchors = set(
-        re.findall(
-            r"(?<![A-Za-z0-9])([A-Z][A-Z0-9]{1,9})(?![A-Za-z0-9])",
-            requirement_text,
+    anchors = list(
+        dict.fromkeys(
+            re.findall(
+                r"(?<![A-Za-z0-9])([A-Z][A-Z0-9]{1,9})(?![A-Za-z0-9])",
+                requirement_text,
+            )
         )
     )
-    return all(_statement_contains_anchor(statement, anchor) for anchor in anchors)
+    # The first acronym is the primary technical entity in the normalized instruction. Requiring
+    # every later acronym made examples and alternative hypotheses impossible to document in one
+    # exact span (for example OV compared with several related problems). The semantic reviewer
+    # still decides whether the primary-entity quote actually resolves the full requirement.
+    return not anchors or _statement_contains_anchor(statement, anchors[0])
+
+
+def _preserves_objective_anchor(objective: str, statement: str) -> bool:
+    """Require one task-topic token so a permissive reviewer cannot accept another field."""
+    stop = {
+        "around", "audit", "based", "conditions", "determine", "empirical", "identify",
+        "investigate", "precise", "produce", "research", "study", "system", "task",
+        "theoretical", "under", "which",
+    }
+    terms = [
+        term
+        for term in re.findall(r"[a-z0-9]{4,}", objective.lower())
+        if term not in stop
+    ][:10]
+    statement_terms = set(re.findall(r"[a-z0-9]{4,}", statement.lower()))
+    return not terms or any(term in statement_terms for term in terms)
 
 
 def _statement_contains_anchor(statement: str, anchor: str) -> bool:

@@ -16,10 +16,13 @@ from tcs_agentic_research.pipelines.experiment import (
     _criterion_id_errors,
     _evidence_output_context,
     _protocol_output_errors,
+    _protocol_semantic_errors,
+    _reconcile_evidence_review,
     _review_errors,
 )
 from tcs_agentic_research.pipelines.literature import _preserves_required_acronyms
 from tcs_agentic_research.workflow import (
+    _ensure_requested_methods,
     _new_contributions,
     _normalize_work_draft,
     _validate_experiment_program,
@@ -41,6 +44,7 @@ from tcs_agentic_research.schemas import (
     EvidenceStrength,
     ExperimentConclusion,
     ExperimentCriterionAssessment,
+    ExperimentEvidenceReview,
     ExperimentObservation,
     ExperimentOutput,
     ExperimentProgram,
@@ -52,12 +56,15 @@ from tcs_agentic_research.schemas import (
     FindingStatus,
     LeanGoalDraft,
     LeanStatement,
+    LiteratureEvidenceReview,
     ModelProfile,
     NamedDescription,
     PaperMetadata,
     PlanSubmission,
+    ResearchAgendaDraft,
     ResearchPhase,
     ResearchQuestion,
+    ResearchQuestionDraft,
     RouterSettings,
     WorkItem,
     WorkItemDraft,
@@ -183,6 +190,45 @@ LEAP/Lean for one formal proof, and provide a careful analysis.
     assert WorkKind.synthesis not in kinds
 
 
+def test_requested_evidence_products_survive_a_one_method_model_agenda() -> None:
+    literature_only = ResearchQuestionDraft(
+        question="Which source discusses the proposed compression transform?",
+        hypotheses=["A primary source discusses the transform."],
+        evidence_needed=["A literature review with exact primary-source citations."],
+        preferred_methods=[WorkKind.literature],
+    )
+    draft = ResearchAgendaDraft(
+        objective="Study a compression transform theoretically and empirically.",
+        questions=[literature_only.model_copy(deep=True) for _ in range(8)],
+        deliverables=["Auditable evidence."],
+    )
+    task = """# Study
+## Literature Review
+Audit prior work.
+## Theorems and Formal Results to Prove
+### Theorem 1: Entropy invariance
+### Theorem 2: Uniform lower bound
+## Experimental Plan
+Run fixed-seed benchmarks on synthetic datasets.
+"""
+
+    covered = _ensure_requested_methods(draft, task)
+    routed = {
+        method
+        for question in covered.questions
+        for description in question.evidence_needed
+        for method in _methods_for_requirement(description, question.preferred_methods)
+    }
+
+    assert {WorkKind.literature, WorkKind.derivation, WorkKind.experiment} <= routed
+    injected = [
+        question for question in covered.questions if question.preferred_methods == [WorkKind.derivation]
+    ]
+    assert len(injected) == 2
+    assert any("Entropy invariance" in question.question for question in injected)
+    assert any("Uniform lower bound" in question.question for question in injected)
+
+
 def test_experiment_pipeline_accumulates_durable_dry_run_stages(tmp_path: Path) -> None:
     task = """# Experiment
 Run an experimental benchmark with fixed seeds and condition-level measurements.
@@ -223,6 +269,46 @@ def test_experiment_reviews_require_exact_stable_criterion_ids() -> None:
     assert any("Unexpected criterion IDs: P_EXTRA" in error for error in errors)
 
 
+def test_unanimous_evidence_criteria_do_not_erase_a_separate_fatal_issue() -> None:
+    output = ExperimentOutput(
+        experiment="fixed-seed comparison",
+        parameters={"seed": 1},
+        aggregate_metrics={"matches": 10},
+        observations=[
+            ExperimentObservation(
+                condition="treatment", sample_size=10, metrics={"matches": 10}
+            )
+        ],
+        checks=[{"name": "oracle", "passed": True, "detail": "All cases passed."}],
+        conclusion=ExperimentConclusion(
+            hypothesis="The implementations agree on registered cases.",
+            outcome="supports",
+            basis_metrics=["matches"],
+            statement="All ten registered cases agreed.",
+        ),
+        limitations=["Small registered sample."],
+    )
+    review = ExperimentEvidenceReview(
+        usable="unusable",
+        outcome="inconclusive",
+        scientific_summary="The overall label mistakenly rejects this run.",
+        criteria=[
+            ExperimentCriterionAssessment(
+                criterion_id="W01", satisfied=True, detail="The criterion is satisfied."
+            )
+        ],
+        issues=["The measured result is valid but unsurprising."],
+    )
+
+    missing = _reconcile_evidence_review(review, output, {"W01": "Valid evidence."})
+
+    assert missing == []
+    assert review.usable == "preliminary"
+    assert review.outcome == "inconclusive"
+    assert review.scientific_summary == "The overall label mistakenly rejects this run."
+    assert review.issues == ["The measured result is valid but unsurprising."]
+
+
 def test_protocol_requires_a_distinct_treatment_condition() -> None:
     conditions = [
         NamedDescription(id="n8", description="Eight-bit factor code."),
@@ -249,6 +335,42 @@ def test_protocol_requires_a_distinct_treatment_condition() -> None:
             cpus=1,
             known_limitations=["Small pilot."],
         )
+
+
+def test_protocol_requires_an_independent_correctness_anchor() -> None:
+    item = WorkItem.model_construct(
+        instruction="Validate the algorithms on known cases before measuring them.",
+        success_criteria=["All correctness checks pass."],
+    )
+    protocol = ExperimentProtocol(
+        title="Cross-condition comparison without an oracle",
+        hypothesis="The two implementations may have different measured costs.",
+        null_outcome="No measured cost difference is observed.",
+        experimental_unit="one generated instance",
+        conditions=[
+            NamedDescription(id="treatment", description="Treatment implementation."),
+            NamedDescription(id="baseline", description="Baseline implementation."),
+        ],
+        baselines=[NamedDescription(id="baseline", description="Baseline implementation.")],
+        metrics=[NamedDescription(id="cost", description="Measured operation count.")],
+        correctness_checks=[
+            NamedDescription(
+                id="agreement", description="Verify both implementations return the same answer."
+            )
+        ],
+        sample_sizes=[10],
+        seeds=[1],
+        analysis_plan="Compare paired operation counts and preserve every result.",
+        decision_rule="Classify from the signed paired operation-count difference.",
+        wall_seconds=30,
+        memory_mb=256,
+        cpus=1,
+        known_limitations=["Small generated sample."],
+    )
+
+    errors = _protocol_semantic_errors(item, protocol)
+
+    assert errors and "independent" in errors[0]
 
 
 def test_failed_protocol_assessment_detail_becomes_repair_input() -> None:
@@ -285,6 +407,15 @@ def test_generic_mathematical_formalization_routes_to_derivation_not_lean() -> N
     )
 
     assert methods == [WorkKind.derivation]
+
+
+def test_mixed_lean_or_derivation_requirement_retains_both_methods() -> None:
+    methods = _methods_for_requirement(
+        "A formal result verified by a Lean kernel proof or peer-reviewed mathematical derivation.",
+        [WorkKind.proof, WorkKind.derivation],
+    )
+
+    assert methods == [WorkKind.proof, WorkKind.derivation]
 
 
 def test_interrupted_running_item_is_reopened_on_restart(tmp_path: Path) -> None:
@@ -506,6 +637,22 @@ def test_literature_acceptance_requires_explicit_acronym_anchors() -> None:
     )
 
 
+def test_literature_review_accepts_selection_only_provider_shape() -> None:
+    review = LiteratureEvidenceReview.model_validate(
+        [
+            {
+                "support_id": "support_1",
+                "relevant": True,
+                "relation": "characterizes",
+                "rationale": "The quote directly defines the requested object.",
+            }
+        ]
+    )
+
+    assert review.selections[0].support_id == "support_1"
+    assert "selection rows" in review.search_assessment
+
+
 def test_deterministic_literature_extraction_has_stable_exact_support(tmp_path: Path) -> None:
     store = ArtifactStore(tmp_path)
     store.initialize_layout()
@@ -654,6 +801,11 @@ def test_generated_code_and_proof_contracts_are_application_bound(tmp_path: Path
     )
     assert normalized_goal.name == "other"
     assert normalized_goal.statement == "∀ (a : Bool), a = a"
+    qualified_name_goal = LeanGoalDraft(
+        name="Bool.and_comm",
+        statement="∀ (a b : Bool), (a && b) = (b && a)",
+    )
+    assert qualified_name_goal.name == "and_comm"
     precedence_goal = LeanGoalDraft(
         name="and_comm",
         statement="∀ (a b : Bool), a && b = b && a",

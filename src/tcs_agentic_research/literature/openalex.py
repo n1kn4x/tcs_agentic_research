@@ -184,13 +184,16 @@ def _search_arxiv(
             "arXiv discovery is temporarily rate-limited; retry in a later cycle."
         )
     stop = {
-        "and", "does", "exact", "for", "from", "how", "in", "of", "paper", "primary",
-        "source", "the", "this", "to", "what", "which", "with",
+        "and", "arxiv", "author", "citation", "does", "exact", "for", "from", "how", "in",
+        "of", "or", "org", "paper", "primary", "site", "source", "the", "theorem", "this",
+        "title", "to", "what", "which", "with",
     }
     terms = [
         term
         for term in re.findall(r"[A-Za-z0-9_-]{2,}", query)
         if term.lower() not in stop
+        and re.search(r"[A-Za-z]", term)
+        and not term.lower().startswith("x0")
     ][:6]
     search_query = " AND ".join(f"all:{term}" for term in terms) or f'all:"{query}"'
     response = httpx.get(

@@ -377,11 +377,24 @@ class LiteratureEvidenceReview(StrictModel):
     search_assessment: str = Field(min_length=10, max_length=1600)
     next_queries: list[str] = Field(default_factory=list, max_length=5)
 
+    @model_validator(mode="before")
+    @classmethod
+    def wrap_selection_only_response(cls, value: Any) -> Any:
+        """Recover the common bare-list response without changing any relevance verdict."""
+        if isinstance(value, list):
+            return {
+                "selections": value,
+                "search_assessment": "The model returned selection rows without a search assessment.",
+                "next_queries": [],
+            }
+        return value
+
 
 class ProofGoalReview(StrictModel):
     accepted: bool
     relevance: str = Field(min_length=5, max_length=1200)
     route_to_requirement: str = Field(min_length=5, max_length=1200)
+    closes_requirement: bool
     issues: list[str] = Field(default_factory=list, max_length=8)
 
     @model_validator(mode="after")
@@ -421,10 +434,14 @@ class LeanGoalDraft(StrictModel):
             data["statement"] = statement
         return data
 
-    @field_validator("name")
+    @field_validator("name", mode="before")
     @classmethod
-    def validate_declaration_name(cls, value: str) -> str:
+    def validate_declaration_name(cls, value: Any) -> str:
+        if not isinstance(value, str):
+            raise ValueError("name must be one unqualified Lean identifier")
         name = value.strip()
+        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_']*(?:\.[A-Za-z_][A-Za-z0-9_']*)+", name):
+            name = name.rsplit(".", 1)[-1]
         if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_']*", name):
             raise ValueError("name must be one unqualified Lean identifier")
         return name
@@ -700,7 +717,7 @@ class ExperimentProgram(StrictModel):
         normalized = re.sub(r"\n```$", "", normalized).strip()
         # Large generated programs leave too little request budget for focused repairs. Python's
         # own parser/unparser removes comments and formatting while preserving executable semantics.
-        if len(normalized) > 16_000:
+        if len(normalized) > 12_000:
             try:
                 normalized = ast.unparse(ast.parse(normalized))
             except SyntaxError:
@@ -1012,7 +1029,7 @@ class CoreSettings(StrictModel):
     # This threshold triggers diversification; it never halts while untried requirements remain.
     max_no_progress_steps: int = Field(default=4, ge=2, le=100)
     max_operational_retries: int = Field(default=2, ge=0, le=5)
-    max_experiment_engineering_retries: int = Field(default=4, ge=1, le=20)
+    max_experiment_engineering_retries: int = Field(default=12, ge=1, le=20)
     max_strategy_revisions: int = Field(default=2, ge=0, le=5)
     max_method_attempts_per_requirement: int = Field(default=4, ge=1, le=12)
     literature_max_imports: int = Field(default=3, ge=0, le=10)

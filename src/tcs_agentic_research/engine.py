@@ -296,7 +296,7 @@ class ResearchEngine:
                 "role": "system",
                 "content": (
                     "Turn the user's research request into atomic scientific evidence requirements. "
-                    "Use at most eight questions and one independently auditable evidence need per "
+                    "Use at most twelve questions and one independently auditable evidence need per "
                     "question; organize them by explicit research-scope topics, not by report sections "
                     "or artifact deliverables. Preserve every acronym exactly as defined by the user. "
                     "Never invent an author, date, title, theorem attribution, or expected answer. "
@@ -338,6 +338,7 @@ class ResearchEngine:
         draft = _restrict_single_subsystem_task(draft, task)
         draft = _compact_single_experiment_task(draft, task)
         draft = _compact_single_literature_agenda(draft)
+        draft = _compact_full_pipeline_acceptance_task(draft, task)
         draft = _drop_non_evidence_questions(draft)
         questions: list[ResearchQuestion] = []
         forced_subsystem = _single_subsystem_kind(task)
@@ -895,16 +896,16 @@ class ResearchEngine:
                 "status": finding.status.value,
                 "polarity": finding.polarity.value,
                 "strength": finding.strength.value,
-                "statement": finding.statement[:700],
-                "scope": finding.scope[:400],
-                "caveats": [value[:300] for value in finding.caveats[:2]],
-                "artifacts": [ref.path for ref in finding.evidence_refs[:4]],
+                "statement": finding.statement[:500],
+                "scope": finding.scope[:250],
+                "caveats": [value[:200] for value in finding.caveats[:1]],
+                "artifacts": [ref.path for ref in finding.evidence_refs[:2]],
             }
-            for finding in ranked[:8]
+            for finding in ranked[:6]
         ]
         reusable_code: list[dict[str, Any]] = []
         state_dir = self.store.resolve("ExperimentStates")
-        if state_dir.exists():
+        if item.kind == WorkKind.experiment and state_dir.exists():
             for path in sorted(
                 state_dir.glob("*.json"), key=lambda value: value.stat().st_mtime, reverse=True
             ):
@@ -918,7 +919,7 @@ class ResearchEngine:
                     {
                         "work_id": experiment.work_id,
                         "description": experiment.program.description,
-                        "source": experiment.program.python_code[:8_000],
+                        "source": experiment.program.python_code[:6_000],
                         "audit_defects": (
                             [
                                 *experiment.final_result.errors,
@@ -933,8 +934,10 @@ class ResearchEngine:
                     break
         agenda = self.store.load_agenda()
         return {
-            "research_objective": agenda.objective if agenda else "",
-            "agenda_constraints": agenda.constraints if agenda else [],
+            "research_objective": agenda.objective[:1200] if agenda else "",
+            "agenda_constraints": (
+                [value[:300] for value in agenda.constraints[:8]] if agenda else []
+            ),
             "accepted_prior_evidence": evidence,
             "reusable_experiment_code": reusable_code,
             "parent_revision": self._revision_context(item),
@@ -957,18 +960,33 @@ class ResearchEngine:
             if result_path.exists():
                 result = self.store.read_json(result_path)
                 context["result"] = {
-                    key: result.get(key)
-                    for key in ["summary", "errors", "next_steps", "criteria", "evidence_level"]
+                    "summary": str(result.get("summary") or "")[:700],
+                    "errors": [str(value)[:500] for value in (result.get("errors") or [])[:4]],
+                    "next_steps": [
+                        str(value)[:500] for value in (result.get("next_steps") or [])[:4]
+                    ],
+                    "failed_criteria": [
+                        {
+                            "criterion": str(row.get("criterion") or "")[:300],
+                            "detail": str(row.get("detail") or "")[:400],
+                        }
+                        for row in (result.get("criteria") or [])
+                        if isinstance(row, dict) and not row.get("satisfied")
+                    ][:4],
+                    "evidence_level": result.get("evidence_level"),
                 }
+            remaining = 6_000
             for name in [
-                "protocol.json", "program.json", "invalid_program.json", "rejected_program.json",
                 "derivation.json", "derivation_review.json", "lean_goal.json",
-                "lean_goal_attempt_1.json", "lean_goal_attempt_2.json",
+                "lean_goal_attempt_1.json", "lean_goal_attempt_2.json", "protocol.json",
+                "program.json", "invalid_program.json", "rejected_program.json",
             ]:
                 path = run_dir / name
-                if path.exists():
+                if path.exists() and remaining > 0:
                     text = path.read_text(encoding="utf-8")
-                    context[name] = text[:12000]
+                    excerpt = text[: min(3_000, remaining)]
+                    context[name] = excerpt
+                    remaining -= len(excerpt)
             return context
         return {"parent_work_id": item.parent_work_id, "error": "parent run not found"}
 
@@ -1080,6 +1098,52 @@ def _compact_single_literature_agenda(
     return draft.model_copy(update={"questions": questions})
 
 
+def _compact_full_pipeline_acceptance_task(
+    draft: ResearchAgendaDraft, task: str
+) -> ResearchAgendaDraft:
+    """A modest integration acceptance task needs one scientific gap per requested subsystem.
+
+    Model decompositions sometimes turn seeds, config files, logs, and the statement of the same
+    lemma into a dozen mandatory research claims. For tasks that explicitly describe themselves as
+    full-pipeline integration tests, retain the first actual evidence product for each method; the
+    selected pipelines already preserve their configs, logs, source, and reports as artifacts.
+    """
+    if not re.search(
+        r"(?is)(?:full[- ]pipeline.*(?:test|integration)|integration test for the full)",
+        task,
+    ):
+        return draft
+    selected: list[ResearchQuestionDraft] = []
+    for method in [
+        WorkKind.literature,
+        WorkKind.experiment,
+        WorkKind.proof,
+        WorkKind.derivation,
+    ]:
+        found: tuple[ResearchQuestionDraft, str] | None = None
+        for question in draft.questions:
+            for description in question.evidence_needed:
+                if method in _methods_for_requirement(
+                    description, question.preferred_methods
+                ):
+                    found = (question, description)
+                    break
+            if found is not None:
+                break
+        if found is None:
+            continue
+        question, description = found
+        selected.append(
+            question.model_copy(
+                update={
+                    "evidence_needed": [description],
+                    "preferred_methods": [method],
+                }
+            )
+        )
+    return draft.model_copy(update={"questions": selected or draft.questions[:1]})
+
+
 def _drop_non_evidence_questions(
     draft: ResearchAgendaDraft,
 ) -> ResearchAgendaDraft:
@@ -1091,7 +1155,9 @@ def _drop_non_evidence_questions(
     """
     meta = re.compile(
         r"(?i)(?:complete list|status (?:list|report)|proved, blocked|blocked, and failed|"
+        r"blocked or failed|nature of the failure|new axioms used|absence of any `?axiom|"
         r"compiler (?:logs?|errors?)|proof state dumps?|formalization obstacles?|"
+        r"configuration (?:file|log)|experimental parameters used for reproducibility|"
         r"follow-up obligations?|reproducibility status|specific random seeds .*documented|"
         r"negative or null results .*reported|separate in the final report|final report)"
     )
@@ -1181,21 +1247,23 @@ def _bounded_task_context(task: str, *, limit: int = 26000) -> str:
 def _methods_for_requirement(
     description: str, preferred: list[WorkKind] | tuple[WorkKind, ...]
 ) -> list[WorkKind]:
-    """Choose methods by the evidence product, not by broad question-level preferences."""
+    """Choose methods by explicit evidence products, retaining genuine mixed-method options."""
     lowered = description.lower()
-    # Formal evidence takes precedence over generic words such as "source code", "compiler", or
-    # "test": a Lean snippet is not an empirical experiment.
-    if re.search(
-        r"\b(?:lean|leap|kernel[- ]checked|compiler[- ]verified)\b",
-        lowered,
-    ):
-        return [WorkKind.proof]
-    if re.search(
-        r"\b(?:exact quote|verbatim quote|primary source|from the literature|literature review|published result|"
-        r"citation|bibliograph)\b",
-        lowered,
-    ):
-        return [WorkKind.literature]
+    methods: list[WorkKind] = []
+    explicit_proof = bool(
+        re.search(r"\b(?:lean|leap|kernel[- ]checked|compiler[- ]verified)\b", lowered)
+    )
+    if explicit_proof:
+        methods.append(WorkKind.proof)
+    explicit_literature = bool(
+        re.search(
+            r"\b(?:exact quote|verbatim quote|primary[- ]source|from the literature|"
+            r"literature review|published result|citation|bibliograph)\b",
+            lowered,
+        )
+    )
+    if explicit_literature:
+        methods.append(WorkKind.literature)
     if re.search(
         r"\b(?:empirical|experiment(?:al)?|benchmark(?:ing)?|measurement|measured|observed|"
         r"statistical test|compression ratio|p-value|data ?set|plot|runtime comparison|"
@@ -1203,13 +1271,22 @@ def _methods_for_requirement(
         r"csv|json results?|visualization)\b",
         lowered,
     ):
-        return [WorkKind.experiment]
-    if re.search(
-        r"\b(?:proof|prove|deriv(?:e|ation)|lower bound|upper bound|complexity|entropy|"
-        r"criterion|theorem|reduction|inequality)\b",
-        lowered,
+        methods.append(WorkKind.experiment)
+    explicit_derivation = bool(
+        re.search(
+            r"\b(?:prove|deriv(?:e|ation)|mathematical argument|counterexample|lower bound|"
+            r"upper bound|complexity analysis|entropy calculation|reduction|inequality)\b",
+            lowered,
+        )
+    )
+    if explicit_derivation or (
+        not explicit_proof
+        and not explicit_literature
+        and re.search(r"\b(?:proof|theorem|complexity|entropy|criterion)\b", lowered)
     ):
-        return [WorkKind.derivation]
+        methods.append(WorkKind.derivation)
+    if methods:
+        return list(dict.fromkeys(methods))[:4]
     unique: list[WorkKind] = []
     for method in preferred:
         if method != WorkKind.synthesis and method not in unique:

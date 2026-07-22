@@ -40,8 +40,9 @@ execution before a full run. This avoids subjective code-review loops.
 Every stage is persisted under `ExperimentStates/`. Repairs use one bounded reasoning plan followed
 by a complete replacement source from the coding profile, with the exact validator/reviewer/runtime
 defect and prior candidate. Two repairs per outer cycle prevent one experiment from monopolizing a
-long run. Repeated identical defects stop after a small per-defect budget; distinct defects do not
-consume one cumulative retry counter.
+long run. Repeated identical defects stop after a small per-defect budget, while a larger cumulative
+source-revision cap retires strategies that oscillate among distinct defects without producing sound
+measurements.
 
 ## Evidence policy
 

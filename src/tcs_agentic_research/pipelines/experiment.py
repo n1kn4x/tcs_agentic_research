@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from typing import Any
 
 from ..agents.experiment import ExperimentAgent
@@ -22,7 +23,6 @@ from ..schemas import (
     ExperimentConclusion,
     ExperimentCriterionAssessment,
     ExperimentEvidenceReview,
-    ExperimentImplementationPlan,
     ExperimentObservation,
     ExperimentOutput,
     ExperimentProgram,
@@ -254,7 +254,10 @@ class ExperimentPipeline:
             )
             state.protocol_review = protocol_review
             add(self.store.write_json(f"{step_dir}/review.json", protocol_review))
-            errors = _review_errors(criteria, protocol_review)
+            errors = [
+                *_review_errors(criteria, protocol_review),
+                *_protocol_semantic_errors(item, state.protocol),
+            ]
             if errors:
                 state.stage = "protocol_revision"
                 return self._failure(
@@ -283,24 +286,18 @@ class ExperimentPipeline:
                             f"{step_dir}/plan_input.json", {"messages": plan_messages}
                         )
                     )
-                    implementation_plan = self.router.complete_structured(
+                    implementation_plan = self.router.complete_text(
                         task_type=(
                             "experiment_debug" if revision else "experiment_implementation"
                         ),
                         messages=plan_messages,
-                        schema=ExperimentImplementationPlan,
                         temperature=0.2,
-                        # Reasoning profiles may spend several thousand tokens in an internal
-                        # thinking block before emitting the constrained JSON. A 3k cap repeatedly
-                        # truncated the answer before the implementation plan, causing formatter
-                        # defaults and low-quality repair code. Keep this below the global router
-                        # cap, but large enough for both diagnosis and the typed plan.
                         max_tokens=8192,
-                        allow_repair=True,
                     )
                     add(
-                        self.store.write_json(
-                            f"{step_dir}/implementation_plan.json", implementation_plan
+                        self.store.write_text(
+                            f"{step_dir}/implementation_plan.txt",
+                            implementation_plan.rstrip() + "\n",
                         )
                     )
                     messages = self._program_messages(
@@ -490,11 +487,10 @@ class ExperimentPipeline:
                 f"W{index:02d}": criterion
                 for index, criterion in enumerate(item.success_criteria, 1)
             }
-            missing = _criterion_id_errors(expected, evidence_review.criteria)
-            if evidence_review.usable == "full" and missing:
-                evidence_review.usable = "preliminary"
-                evidence_review.issues.extend(missing)
-                evidence_review.follow_up.append("Assess every work criterion by its exact id.")
+            assert execution.validated_output is not None
+            missing = _reconcile_evidence_review(
+                evidence_review, execution.validated_output, expected
+            )
             add(self.store.write_json(f"{step_dir}/review.json", evidence_review))
             rows = _criterion_results(expected, evidence_review.criteria)
             if evidence_review.usable == "unusable":
@@ -590,6 +586,13 @@ class ExperimentPipeline:
             self.MAX_IDENTICAL_REPAIRS,
             self.router.core.max_experiment_engineering_retries,
         )
+        total_revision_limit = self.router.core.max_experiment_engineering_retries
+        if state.program_revision >= total_revision_limit:
+            state.last_error = (
+                f"Program strategy exhausted {state.program_revision} complete revisions. "
+                f"Last defect: {state.last_error}"
+            )[-4000:]
+            force_block = True
         if force_block or state.repeated_defect_failures >= repair_limit:
             state.engineering_blocked = True
             persist(step_dir)
@@ -662,7 +665,7 @@ class ExperimentPipeline:
                         "previous_protocol": (
                             state.protocol.model_dump(mode="json") if state.protocol else None
                         ),
-                        "defect": state.last_error if revision else "",
+                        "defect": state.last_error[:2_500] if revision else "",
                         "research_objective": research_context.get("research_objective", ""),
                         "agenda_constraints": research_context.get("agenda_constraints", []),
                         "accepted_prior_evidence": research_context.get(
@@ -726,11 +729,12 @@ class ExperimentPipeline:
             {
                 "role": "system",
                 "content": (
-                    "Design a compact implementation plan for one frozen experiment. Diagnose the "
-                    "underlying algorithm or contract defect when revising. Plan independent tiny "
-                    "correctness oracles, shared condition inputs, bounded smoke/full branches, raw "
-                    "measurements, and the exact v2 return shape. Do not emit Python source and do not "
-                    "weaken a check to make it pass."
+                    "Write a concise, concrete implementation plan for one frozen experiment. Diagnose "
+                    "the exact underlying algorithm or contract defect when revising, name the affected "
+                    "function and replacement logic, and explain how the repair will be tested. Plan "
+                    "independent tiny correctness oracles, shared condition inputs, bounded smoke/full "
+                    "branches, raw measurements, and the exact v2 return shape. Do not emit Python "
+                    "source, generic component labels, or placeholder prose, and never weaken a check."
                 ),
             },
             {
@@ -740,11 +744,11 @@ class ExperimentPipeline:
                         "work_title": item.title,
                         "protocol": _program_protocol_context(state.protocol),
                         "previous_source": (
-                            state.program.python_code[:12_000]
+                            state.program.python_code[:10_000]
                             if revision and state.program is not None
                             else None
                         ),
-                        "defect": state.last_error if revision else "",
+                        "defect": state.last_error[:2_500] if revision else "",
                     },
                     ensure_ascii=False,
                 ),
@@ -758,7 +762,7 @@ class ExperimentPipeline:
         *,
         revision: bool,
         research_context: dict[str, Any],
-        implementation_plan: ExperimentImplementationPlan,
+        implementation_plan: str,
     ) -> list[dict[str, str]]:
         assert state.protocol is not None
         system = (
@@ -776,8 +780,9 @@ class ExperimentPipeline:
             "'parameters': {str: scalar}, 'aggregate_metrics': {str: scalar}, "
             "'observations': [{'condition': str, 'sample_size': int, 'metrics': {str: scalar}}], "
             "with one or more condition records. A record may summarize several units or represent one "
-            "replicate; sample_size states how many units it represents. Preserve raw replicate records "
-            "when they are needed for audit. "
+            "replicate; sample_size states how many independent units that row represents. For one row "
+            "per replicate, sample_size must be 1, never a cumulative index, list length, or parameter "
+            "value. Preserve raw replicate records when they are needed for audit. "
             "'checks': [{'name': str, 'passed': bool, 'detail': str}], "
             "'conclusion': {'hypothesis': str, 'outcome': "
             "'supports'|'contradicts'|'null'|'inconclusive'|'characterizes', "
@@ -843,18 +848,18 @@ class ExperimentPipeline:
                             else state.protocol.model_dump(mode="json")
                         ),
                         "protocol_sha256": state.protocol_sha256,
-                        "implementation_plan": implementation_plan.model_dump(mode="json"),
+                        "implementation_plan": implementation_plan[:4_000],
                         "previous_program": (
                             {
                                 "description": state.program.description,
-                                "source": state.program.python_code,
+                                "source": state.program.python_code[:14_000],
                                 "seeds": state.program.seeds,
                             }
                             if state.program
                             and not (revision and state.repeated_program_candidates > 0)
                             else None
                         ),
-                        "defect": state.last_error if revision else "",
+                        "defect": state.last_error[:2_500] if revision else "",
                         "agenda_constraints": research_context.get("agenda_constraints", []),
                         "reusable_code_from_prior_completed_experiment": (
                             []
@@ -889,8 +894,10 @@ class ExperimentPipeline:
                         "prefix; never call the implementation truncated merely because the excerpt ends. "
                         "The complete source is preserved in the listed execution artifacts and a successful "
                         "execution imported it. The trusted wrapper invoked the validated output in full "
-                        "mode; do not infer otherwise from an inert __main__ default in the "
-                        "source. Repeated or equal measurements across distinct conditions are not by "
+                        "mode; do not infer otherwise from an inert __main__ default in the source. A work "
+                        "strategy label such as bounded comparison or stress test never requests final "
+                        "smoke-mode evidence: smoke is an engineering gate and the frozen full run is the "
+                        "scientific evidence. Repeated or equal measurements across distinct conditions are not by "
                         "themselves evidence of a bug: require a failed oracle/check or a concrete code "
                         "defect. One observation may aggregate multiple units when sample_size records "
                         "that count, and significance tests are required only if the frozen protocol says "
@@ -934,6 +941,34 @@ class ExperimentPipeline:
             schema=ExperimentEvidenceReview,
             allow_repair=False,
         )
+
+
+def _protocol_semantic_errors(
+    item: WorkItem, protocol: ExperimentProtocol
+) -> list[str]:
+    """Enforce an independent correctness anchor when the work promises validation."""
+    requires_validation = bool(
+        re.search(
+            r"(?i)(?:correctness|validat(?:e|ion|ing)|known cases?|oracle)",
+            " ".join([item.instruction, *item.success_criteria]),
+        )
+    )
+    check_text = " ".join(check.description for check in protocol.correctness_checks)
+    independent = bool(
+        re.search(
+            r"(?i)(?:known|oracle|ground truth|expected (?:answer|output|value)|exhaustive|"
+            r"brute[- ]force|round[- ]?trip|invariant|analytical result|reference implementation|"
+            r"edge case)",
+            check_text,
+        )
+    )
+    if requires_validation and not independent:
+        return [
+            "P_CHECKS: Add at least one independent known-case, exhaustive-oracle, round-trip, "
+            "invariant, or ground-truth correctness check; cross-condition agreement alone can "
+            "allow every implementation to be wrong."
+        ]
+    return []
 
 
 def _protocol_criteria() -> dict[str, str]:
@@ -994,6 +1029,34 @@ def _criterion_id_errors(
     if unexpected:
         errors.append("Unexpected criterion IDs: " + ", ".join(unexpected))
     return errors
+
+
+def _reconcile_evidence_review(
+    review: ExperimentEvidenceReview,
+    output: ExperimentOutput,
+    expected: dict[str, str],
+) -> list[str]:
+    """Derive overall usability from stable criterion rows rather than a contradictory label."""
+    missing = _criterion_id_errors(expected, review.criteria)
+    unanimous = not missing and all(assessment.satisfied for assessment in review.criteria)
+    if unanimous and review.usable == "unusable":
+        # Unanimous criterion rows show that the measurements are interpretable, but they do not
+        # erase a separate fatal scientific issue (for example a conclusion whose direction is the
+        # opposite of its own aggregates). Preserve such runs as preliminary evidence, never as a
+        # requirement-closing result.
+        object.__setattr__(review, "usable", "preliminary")
+        if not review.follow_up:
+            object.__setattr__(
+                review,
+                "follow_up",
+                ["Resolve the review's overall scientific issue without discarding the measurements."],
+            )
+        ExperimentEvidenceReview.model_validate(review.model_dump())
+    elif review.usable == "full" and missing:
+        review.usable = "preliminary"
+        review.issues.extend(missing)
+        review.follow_up.append("Assess every work criterion by its exact id.")
+    return missing
 
 
 def _criterion_results(

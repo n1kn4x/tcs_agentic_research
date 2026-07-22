@@ -58,14 +58,25 @@ class ProofPipeline:
                 next_steps=["Install the configured Lean toolchain and retry."],
             )
         mock = LeanGoalDraft(name="dry_run_goal", statement="∀ n : Nat, n = n")
+        required_names = _required_lean_names(item)
+        prior_statements = " ".join(
+            str(row.get("statement") or "")
+            for row in prior_context.get("accepted_prior_evidence", [])
+            if isinstance(row, dict)
+        )
+        already_verified = [
+            name for name in required_names if _mentions_lean_name(prior_statements, name)
+        ]
+        missing_names = [name for name in required_names if name not in already_verified]
         messages = [
             {
                 "role": "system",
                 "content": (
                     "Formulate the smallest nontrivial Lean proposition directly advancing the "
-                    "evidence requirement. Return only a proposition type with explicit binders. Use "
-                    "TCSResearch.Basic and Lean core. Do not invent unavailable APIs or retreat to "
-                    "reflexivity, True, or an unrelated library fact."
+                    "evidence requirement. Build on the supplied verified prior evidence and prefer "
+                    "the smallest still-missing proposition. Return only a proposition type with "
+                    "explicit binders. Use TCSResearch.Basic and Lean core. Do not invent unavailable "
+                    "APIs or retreat to reflexivity, True, or an unrelated library fact."
                 ),
             },
             {
@@ -74,6 +85,9 @@ class ProofPipeline:
                     {
                         "work_item": item.model_dump(mode="json"),
                         "prior_context": prior_context,
+                        "required_lean_identifiers": required_names,
+                        "already_verified_identifiers": already_verified,
+                        "missing_identifiers": missing_names,
                     },
                     ensure_ascii=False,
                 ),
@@ -159,7 +173,10 @@ class ProofPipeline:
                     "content": (
                         "Review whether this exact proposition is nontrivial and lies on a concrete "
                         "dependency path to the evidence requirement. Reject generic library facts, "
-                        "reflexivity in disguise, omitted assumptions, and unusably weak facts."
+                        "reflexivity in disguise, omitted assumptions, and unusably weak facts. Set "
+                        "closes_requirement true only when proving this proposition, together with the "
+                        "listed prior verified evidence, covers the entire atomic requirement. A useful "
+                        "supporting lemma may be accepted while closes_requirement remains false."
                     ),
                 },
                 {
@@ -168,6 +185,12 @@ class ProofPipeline:
                         {
                             "work_item": item.model_dump(mode="json"),
                             "goal": goal.model_dump(mode="json"),
+                            "accepted_prior_evidence": prior_context.get(
+                                "accepted_prior_evidence", []
+                            ),
+                            "required_lean_identifiers": required_names,
+                            "already_verified_identifiers": already_verified,
+                            "missing_identifiers": missing_names,
                         },
                         ensure_ascii=False,
                     ),
@@ -247,12 +270,26 @@ class ProofPipeline:
                     )
                 )
         root_proved = proof_result.status == "proved"
+        cumulatively_verified = [
+            name
+            for name in required_names
+            if _mentions_lean_name(prior_statements, name)
+            or _mentions_lean_name(f"{goal.name} {goal.statement}", name)
+        ]
+        identifier_coverage = not required_names or set(cumulatively_verified) == set(
+            required_names
+        )
+        closes_requirement = (
+            root_proved and review.closes_requirement and identifier_coverage
+        )
         criteria = [
             CriterionResult(
                 criterion=criterion,
-                satisfied=root_proved or bool(findings),
+                satisfied=closes_requirement,
                 detail=(
-                    "The root is kernel checked."
+                    "The root is kernel checked and the relevance review says it closes the full gap."
+                    if closes_requirement
+                    else "The root is kernel checked but is only one supporting proposition for the gap."
                     if root_proved
                     else f"Produced {len(findings)} new verified supporting lemma(s)."
                     if findings
@@ -261,6 +298,15 @@ class ProofPipeline:
             )
             for criterion in item.success_criteria
         ]
+        next_steps = list(proof_result.recommended_next_steps)
+        if root_proved and not closes_requirement:
+            still_missing = [
+                name for name in required_names if name not in cumulatively_verified
+            ]
+            next_steps.append(
+                "Formulate the smallest proposition still missing from the full evidence requirement"
+                + (f": {', '.join(still_missing)}." if still_missing else ".")
+            )
         return WorkResult(
             work_id=item.work_id,
             outcome="done" if root_proved else "partial",
@@ -272,14 +318,34 @@ class ProofPipeline:
                 if findings
                 else "none"
             ),
-            requirement_satisfied=root_proved,
+            requirement_satisfied=closes_requirement,
             criteria=criteria,
             summary=f"Persistent LEAP search ended with `{proof_result.status}`.",
             findings=findings,
             artifact_refs=[*refs, *proof_result.artifact_refs],
             errors=[] if findings else [proof_result.proof_dag_summary],
-            next_steps=proof_result.recommended_next_steps,
+            next_steps=next_steps,
         )
+
+
+def _required_lean_names(item: WorkItem) -> list[str]:
+    text = " ".join([item.instruction, *item.success_criteria])
+    names: list[str] = []
+    for value in re.findall(r"`([^`]+)`", text):
+        candidate = value.strip()
+        if not re.fullmatch(
+            r"[A-Za-z_][A-Za-z0-9_']*(?:\.[A-Za-z_][A-Za-z0-9_']*)*",
+            candidate,
+        ):
+            continue
+        name = candidate.rsplit(".", 1)[-1]
+        if name not in names and name.lower() not in {"lean", "true", "false"}:
+            names.append(name)
+    return names
+
+
+def _mentions_lean_name(text: str, name: str) -> bool:
+    return bool(re.search(rf"(?<![A-Za-z0-9_']){re.escape(name)}(?![A-Za-z0-9_'])", text))
 
 
 def _obviously_trivial(statement: str) -> bool:

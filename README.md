@@ -222,8 +222,9 @@ produces evidence, reaches its model/resource budget, or encounters a repeated c
 Every transition persists `ExperimentStates/<work-id>.json`, so restarts resume accepted work instead
 of regenerating it. A repair first produces a bounded reasoning plan, then a non-thinking coding call
 emits one complete replacement file from the exact defect and prior source; fragile line-number patch
-chains are not used. Two repairs per outer cycle preserve fairness, and repair limits apply only to a
-repeated defect rather than harmless stage transitions or distinct later defects.
+chains are not used. Two repairs per outer cycle preserve fairness. Repeated/no-op defects stop
+quickly, and a configurable cumulative source-revision cap eventually retires an oscillating program
+strategy so that a fresh strategy or unrelated requirement can run.
 
 The model implements `run_experiment(mode: str) -> dict`. A trusted wrapper owns the entry point,
 writes `results.json`, and validates the v2 output contract. Smoke mode exercises every condition on

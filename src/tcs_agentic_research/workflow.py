@@ -209,7 +209,7 @@ def _work_for_requirement(
             "preprint/version and exact theorem-name search", "adjacent survey bibliography search",
         ],
         WorkKind.experiment: [
-            "minimal discriminating pilot", "corrected protocol replication",
+            "bounded direct comparison", "corrected protocol replication",
             "boundary-condition stress test", "independent baseline triangulation",
         ],
         WorkKind.proof: [
@@ -225,7 +225,12 @@ def _work_for_requirement(
     label_options = variant_labels[method]
     variant_label = label_options[min(variant, len(label_options) - 1)]
     strategy = f"{strategy}; variant {variant + 1}: {variant_label}"
-    instruction += f" Use the `{variant_label}` variant and distinguish it from prior attempts."
+    instruction += f" Use the `{variant_label}` strategy and distinguish it from prior attempts."
+    if method == WorkKind.experiment:
+        instruction += (
+            " This label selects the scientific design; it never requests smoke-mode evidence. "
+            "Smoke is only an engineering gate, and accepted evidence must come from the frozen full run."
+        )
     return WorkItemDraft(
         question_id=question.question_id,
         requirement_id=requirement.requirement_id,
@@ -331,8 +336,16 @@ def _finding_fingerprint(finding: Finding) -> str:
         "status": finding.status.value,
         "polarity": finding.polarity.value,
         "statement": _normalize_text(finding.statement),
-        "sources": sorted(finding.source_ids),
-        "evidence": sorted((ref.sha256 or ref.path) for ref in finding.evidence_refs),
+        "sources": (
+            sorted(finding.source_ids)
+            if finding.kind in {WorkKind.literature, WorkKind.experiment}
+            else []
+        ),
+        "evidence": (
+            sorted((ref.sha256 or ref.path) for ref in finding.evidence_refs)
+            if finding.kind in {WorkKind.literature, WorkKind.experiment}
+            else []
+        ),
     }
     return hashlib.sha256(
         json.dumps(identity, sort_keys=True, ensure_ascii=False).encode("utf-8")
@@ -435,8 +448,8 @@ def _deterministic_agenda(task: str) -> ResearchAgendaDraft:
                 f"The proposed relationship in `{title[:500]}` holds under explicitly stated assumptions."
             ],
             evidence_needed=[
-                "A direct result that resolves the question under explicit assumptions",
-                "A boundary case, counterexample search, or independent replication",
+                "A direct result that resolves the question under explicit assumptions, including "
+                "the relevant boundary cases or independent checks."
             ],
             preferred_methods=methods,
         )
@@ -464,7 +477,13 @@ def _deterministic_agenda(task: str) -> ResearchAgendaDraft:
 
 
 def _ensure_requested_methods(draft: ResearchAgendaDraft, task: str) -> ResearchAgendaDraft:
-    """Ensure explicit subsystems exist while distinguishing informal proof from Lean proof."""
+    """Add auditable gaps when a model omits an explicitly requested evidence product.
+
+    Merely adding a method to ``preferred_methods`` is insufficient: method routing is based on the
+    evidence description, so a model-generated list of literature-review questions could otherwise
+    erase every requested derivation and experiment. Explicit numbered theorems are retained as
+    separate derivation gaps. This is deterministic task coverage, not a scientific fallback.
+    """
     lowered = task.lower()
     requested: list[WorkKind] = []
     if re.search(r"\b(?:literature|literaturedb|primary sources?|citations?|papers?)\b", lowered):
@@ -475,23 +494,194 @@ def _ensure_requested_methods(draft: ResearchAgendaDraft, task: str) -> Research
         requested.append(WorkKind.proof)
     if re.search(r"\b(?:proof|prove|theorems?|derive|analysis|complexity)\b", lowered):
         requested.append(WorkKind.derivation)
+    requested = list(dict.fromkeys(requested))
+
     questions = [question.model_copy(deep=True) for question in draft.questions]
-    present = {method for question in questions for method in question.preferred_methods}
-    for method in list(dict.fromkeys(requested)):
-        if method in present:
-            continue
-        target = min(questions, key=lambda question: len(question.preferred_methods))
-        if len(target.preferred_methods) < 4:
-            target.preferred_methods.append(method)
-            present.add(method)
-    return draft.model_copy(update={"questions": questions})
+    injected: list[ResearchQuestionDraft] = []
+    theorem_titles = list(
+        dict.fromkeys(
+            match.group(1).strip()
+            for match in re.finditer(
+                r"(?im)^#{2,5}\s+((?:theorem|lemma|proposition)\s*\d*\s*:[^\n]+)$",
+                task,
+            )
+        )
+    )
+    if WorkKind.derivation in requested:
+        for title in theorem_titles:
+            title_terms = set(re.findall(r"[a-z0-9]{4,}", title.lower())) - {
+                "theorem", "lemma", "proposition",
+            }
+            already_covered = any(
+                WorkKind.derivation
+                in {
+                    method
+                    for description in question.evidence_needed
+                    for method in _evidence_method_hints(
+                        description, question.preferred_methods
+                    )
+                }
+                and len(
+                    title_terms
+                    & set(
+                        re.findall(
+                            r"[a-z0-9]{4,}",
+                            " ".join(
+                                [question.question, *question.evidence_needed]
+                            ).lower(),
+                        )
+                    )
+                )
+                >= max(1, len(title_terms) // 2)
+                for question in questions
+            )
+            if already_covered:
+                continue
+            injected.append(
+                ResearchQuestionDraft(
+                    question=f"Can the requested result `{title}` be derived or refuted under explicit assumptions?",
+                    hypotheses=[
+                        f"The claim named `{title}` holds under the assumptions stated in the task."
+                    ],
+                    evidence_needed=[
+                        "An explicit mathematical derivation, counterexample, or corrected theorem "
+                        f"resolving `{title}` through checkable assumption-to-conclusion steps."
+                    ],
+                    preferred_methods=[WorkKind.derivation],
+                )
+            )
+
+    present = {
+        method
+        for question in questions
+        for description in question.evidence_needed
+        for method in _evidence_method_hints(description, question.preferred_methods)
+    }
+    if theorem_titles:
+        present.add(WorkKind.derivation)
+    literature_topic = _first_literature_topic(task)
+    generic = {
+        WorkKind.literature: ResearchQuestionDraft(
+            question=(
+                f"What do primary sources establish about `{literature_topic}`?"
+                if literature_topic
+                else "Which primary-source statement addresses the task's central technical topic?"
+            ),
+            hypotheses=[
+                f"A primary source states a result about `{literature_topic}` with explicit scope."
+                if literature_topic
+                else "A relevant primary source states the technical claim with explicit scope."
+            ],
+            evidence_needed=[
+                "A relevant exact primary-source quote with stable span provenance and a relevance "
+                + (
+                    f"review specifically addressing `{literature_topic}`."
+                    if literature_topic
+                    else "review tied to the named technical topic."
+                )
+            ],
+            preferred_methods=[WorkKind.literature],
+        ),
+        WorkKind.experiment: ResearchQuestionDraft(
+            question="What happens in the reproducible empirical comparison explicitly requested by the task?",
+            hypotheses=["The requested treatments and baselines may differ on the registered measurements."],
+            evidence_needed=[
+                "A reproducible fixed-seed experiment implementing the requested treatments and baselines, "
+                "checking correctness, preserving condition-level measurements, and reporting positive, "
+                "negative, or null outcomes over the requested central regimes."
+            ],
+            preferred_methods=[WorkKind.experiment],
+        ),
+        WorkKind.proof: ResearchQuestionDraft(
+            question="Which explicitly requested formal proposition can be verified by the Lean kernel?",
+            hypotheses=["A task-relevant proposition is expressible and provable in the configured Lean environment."],
+            evidence_needed=[
+                "A task-relevant Lean kernel-checked theorem with compiler artifacts and no placeholders or new axioms."
+            ],
+            preferred_methods=[WorkKind.proof],
+        ),
+        WorkKind.derivation: ResearchQuestionDraft(
+            question="Which central mathematical claim requested by the task can be derived or refuted?",
+            hypotheses=["A central requested claim holds under explicit assumptions."],
+            evidence_needed=[
+                "An explicit mathematical derivation, counterexample, or corrected theorem with checkable steps."
+            ],
+            preferred_methods=[WorkKind.derivation],
+        ),
+    }
+    for method in requested:
+        if method not in present and not (
+            method == WorkKind.derivation and theorem_titles
+        ):
+            injected.append(generic[method])
+
+    # Preserve deterministic coverage even if a model fills the schema maximum with one method.
+    injected = injected[:24]
+    keep = max(0, 24 - len(injected))
+    return draft.model_copy(update={"questions": [*questions[:keep], *injected]})
+
+
+def _evidence_method_hints(
+    description: str, preferred: list[WorkKind]
+) -> list[WorkKind]:
+    lowered = description.lower()
+    methods: list[WorkKind] = []
+    explicit_proof = bool(
+        re.search(r"\b(?:lean|leap|kernel[- ]checked|compiler[- ]verified)\b", lowered)
+    )
+    if explicit_proof:
+        methods.append(WorkKind.proof)
+    if re.search(
+        r"\b(?:empirical|experiment(?:al)?|benchmark(?:ing)?|measurement|measured|"
+        r"fixed[- ]seed|condition[- ]level|dataset)\b",
+        lowered,
+    ):
+        methods.append(WorkKind.experiment)
+    explicit_literature = bool(
+        re.search(
+            r"\b(?:exact quote|primary[- ]source|literature review|citation|bibliograph|published result)\b",
+            lowered,
+        )
+    )
+    if explicit_literature:
+        methods.append(WorkKind.literature)
+    derivation_pattern = (
+        r"\b(?:derive|derivation|mathematical argument|counterexample|"
+        r"complexity analysis|lower bound|upper bound|inequality)\b"
+    )
+    if re.search(derivation_pattern, lowered) or (
+        not explicit_proof
+        and not explicit_literature
+        and re.search(r"\b(?:proof|theorem)\b", lowered)
+    ):
+        methods.append(WorkKind.derivation)
+    if methods:
+        return list(dict.fromkeys(methods))
+    return [method for method in preferred if method != WorkKind.synthesis]
+
+
+def _first_literature_topic(task: str) -> str:
+    heading = re.search(r"(?im)^(#{1,4})\s+[^\n]*literature review[^\n]*$", task)
+    if heading is None:
+        return ""
+    level = len(heading.group(1))
+    following = task[heading.end() :]
+    for match in re.finditer(r"(?m)^(#{1,5})\s+(.+?)\s*$", following):
+        if len(match.group(1)) <= level:
+            break
+        topic = re.sub(r"^\d+(?:\.\d+)*\s*[:.-]?\s*", "", match.group(2)).strip()
+        if topic:
+            return topic[:300]
+    return ""
 
 
 def _compact_query(text: str) -> str:
     stop = {
-        "a", "an", "and", "around", "audit", "based", "for", "from", "identify", "in",
-        "is", "literature", "of", "on", "precise", "problem", "research", "that", "the",
-        "this", "to", "what", "which", "with", "evidence", "question", "resolve",
+        "a", "an", "and", "around", "audit", "based", "central", "conditions", "determine",
+        "document", "evidence", "for", "from", "identify", "in", "is", "literature", "named",
+        "of", "on", "precise", "problem", "requested", "research", "result", "review", "scheme",
+        "specific", "that", "the", "theoretical", "this", "to", "under", "what", "which", "with",
+        "question", "resolve",
     }
     selected: list[str] = []
     seen: set[str] = set()

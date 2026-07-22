@@ -7,8 +7,8 @@ core:
   # This triggers method/question diversification. It does not stop while untried gaps remain.
   max_no_progress_steps: 4
   max_operational_retries: 2
-  # Consecutive retries per identical defect; the pipeline also rejects no-op repairs.
-  max_experiment_engineering_retries: 4
+  # Complete source revisions per experiment strategy; repeated/no-op defects stop sooner.
+  max_experiment_engineering_retries: 12
   max_strategy_revisions: 2
   max_method_attempts_per_requirement: 4
   literature_max_imports: 3
