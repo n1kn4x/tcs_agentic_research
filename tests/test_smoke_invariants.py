@@ -30,7 +30,10 @@ from tcs_agentic_research.workflow import (
     _strategy_fingerprint,
     _validate_experiment_program,
 )
-from tcs_agentic_research.experimenter.docker_project import _diagnostic
+from tcs_agentic_research.experimenter.docker_project import (
+    DockerProjectContainer,
+    _diagnostic,
+)
 from tcs_agentic_research.experimenter.runner import _normalize_output_payload
 from tcs_agentic_research.experimenter.errors import ExperimenterConfigurationError
 from tcs_agentic_research.leap.harness import FormalProofCandidate, LEAPHarness
@@ -54,6 +57,8 @@ from tcs_agentic_research.schemas import (
     ExperimentProtocol,
     ExperimentProtocolReview,
     ExperimentState,
+    ExperimentValidation,
+    ExperimenterSettings,
     Finding,
     FindingPolarity,
     FindingStatus,
@@ -281,7 +286,8 @@ def test_unanimous_evidence_criteria_do_not_erase_a_separate_fatal_issue() -> No
         aggregate_metrics={"matches": 10},
         observations=[
             ExperimentObservation(
-                condition="treatment", sample_size=10, metrics={"matches": 10}
+                condition="treatment", unit_id="aggregate", result="matched",
+                sample_size=10, metrics={"matches": 10}
             )
         ],
         checks=[{"name": "oracle", "passed": True, "detail": "All cases passed."}],
@@ -325,6 +331,8 @@ def test_protocol_requires_a_distinct_treatment_condition() -> None:
             hypothesis="The factor code expands uniform values.",
             null_outcome="No expansion is observed.",
             experimental_unit="one sampled integer",
+            result_semantics="The actual decoded integer returned for the sampled unit.",
+            unit_generation="Derive unique unit IDs and inputs from seed 1 plus the unit index.",
             conditions=conditions,
             baselines=conditions,
             metrics=[NamedDescription(id="bits", description="Encoded bits.")],
@@ -355,6 +363,8 @@ def test_protocol_rejects_hypothesis_direction_as_a_correctness_check() -> None:
         hypothesis="The treatment visits fewer nodes than the baseline.",
         null_outcome="The node counts do not differ.",
         experimental_unit="one generated instance",
+        result_semantics="The actual SAT/UNSAT decision returned by the condition.",
+        unit_generation="Derive each unique unit_id and input from seed 1 plus its unit index.",
         conditions=[
             NamedDescription(id="treatment", description="Treatment algorithm."),
             NamedDescription(id="baseline", description="Baseline algorithm."),
@@ -450,6 +460,8 @@ def test_protocol_requires_an_independent_correctness_anchor() -> None:
         hypothesis="The two implementations may have different measured costs.",
         null_outcome="No measured cost difference is observed.",
         experimental_unit="one generated instance",
+        result_semantics="The actual decision returned by the condition for the generated input.",
+        unit_generation="Derive each unique unit_id and input from seed 1 plus its unit index.",
         conditions=[
             NamedDescription(id="treatment", description="Treatment implementation."),
             NamedDescription(id="baseline", description="Baseline implementation."),
@@ -481,20 +493,32 @@ def test_protocol_requires_an_independent_correctness_anchor() -> None:
 
 
 def test_failed_protocol_assessment_detail_becomes_repair_input() -> None:
+    expected = {
+        name: name
+        for name in [
+            "P_ALIGNMENT", "P_NULL", "P_BASELINES", "P_CHECKS",
+            "P_CONDITIONS", "P_ANALYSIS", "P_SAMPLING", "P_COSTS",
+        ]
+    }
     review = ExperimentProtocolReview(
         criteria=[
             ExperimentCriterionAssessment(
-                criterion_id="P_BASELINES",
-                satisfied=False,
-                detail="Add binary_n8 as a separate baseline condition.",
+                criterion_id=name,
+                satisfied=name != "P_BASELINES",
+                detail=(
+                    "Repair: Add binary_n8 as a separate baseline condition."
+                    if name == "P_BASELINES"
+                    else "The criterion is satisfied."
+                ),
             )
+            for name in expected
         ]
     )
 
-    errors = _review_errors({"P_BASELINES": "Distinct baseline."}, review)
+    errors = _review_errors(expected, review)
 
     assert errors == [
-        "P_BASELINES: Add binary_n8 as a separate baseline condition."
+        "P_BASELINES: Repair: Add binary_n8 as a separate baseline condition."
     ]
 
 
@@ -1162,10 +1186,12 @@ def test_experiment_v2_contract_preserves_negative_condition_level_output() -> N
         aggregate_metrics={"difference": -0.25},
         observations=[
             ExperimentObservation(
-                condition="treatment", sample_size=20, metrics={"mean": 0.5}
+                condition="treatment", unit_id="aggregate", result="completed",
+                sample_size=20, metrics={"mean": 0.5}
             ),
             ExperimentObservation(
-                condition="baseline", sample_size=20, metrics={"mean": 0.75}
+                condition="baseline", unit_id="aggregate", result="completed",
+                sample_size=20, metrics={"mean": 0.75}
             ),
         ],
         checks=[{"name": "round trip", "passed": True, "detail": "all 40 cases"}],
@@ -1196,6 +1222,8 @@ def test_experiment_contract_normalizes_metadata_and_nested_metrics() -> None:
         "observations": [
             {
                 "condition": "treatment",
+                "unit_id": "unit-1",
+                "result": "SAT",
                 "sample_size": 1,
                 "metrics": {"cost": {"nodes": 2}},
             }
@@ -1220,7 +1248,7 @@ def test_experiment_contract_normalizes_metadata_and_nested_metrics() -> None:
     assert "protocol_sha256" not in normalized
     assert output.parameters == {"grid.n": 8, "seeds": [1, 2]}
     assert output.aggregate_metrics["treatment.mean"] == 1.5
-    assert output.aggregate_metrics["treatment.outcomes.1"] == 3
+    assert output.aggregate_metrics["treatment.outcomes"] == [2, 3]
     assert output.observations[0].metrics == {"cost.nodes": 2}
     assert len(output.checks) == 1
     assert not output.checks[0].passed
@@ -1236,7 +1264,7 @@ def test_empty_basis_metric_names_are_recovered_from_returned_aggregates() -> No
             "parameters": {"seed": 1},
             "aggregate_metrics": {"mean_difference": 0.0},
             "observations": [
-                {"condition": "baseline", "sample_size": 1, "metrics": {"cost": 1}}
+                {"condition": "baseline", "unit_id": "unit-1", "result": "SAT", "sample_size": 1, "metrics": {"cost": 1}}
             ],
             "checks": [{"name": "oracle", "passed": True, "detail": "matched"}],
             "conclusion": {
@@ -1259,6 +1287,10 @@ def test_raw_replicate_observations_are_valid_and_review_context_is_bounded() ->
         hypothesis="The treatment has lower measured cost than the baseline.",
         null_outcome="The paired measured costs do not differ.",
         experimental_unit="one generated instance",
+        result_semantics="The actual SAT/UNSAT result produced for one generated instance.",
+        unit_generation=(
+            "For each index i, derive a unique input from PRNG seed 1+i and use unique unit_id i."
+        ),
         conditions=[
             NamedDescription(id="treatment", description="Treatment algorithm."),
             NamedDescription(id="baseline", description="Baseline algorithm."),
@@ -1287,6 +1319,8 @@ def test_raw_replicate_observations_are_valid_and_review_context_is_bounded() ->
         observations=[
             ExperimentObservation(
                 condition=condition,
+                unit_id=index,
+                result="SAT",
                 sample_size=1,
                 metrics={"cost": index},
             )
@@ -1304,6 +1338,70 @@ def test_raw_replicate_observations_are_valid_and_review_context_is_bounded() ->
     )
 
     assert _protocol_output_errors(protocol, output, smoke=False) == []
+
+    full_validation_protocol = protocol.model_copy(
+        update={
+            "correctness_checks": [
+                NamedDescription(
+                    id="known_cases",
+                    description=(
+                        "For every sampled unit, compare every condition result against an "
+                        "independent exhaustive oracle."
+                    ),
+                )
+            ]
+        }
+    )
+    fully_validated = output.model_copy(
+        update={
+            "validations": [
+                ExperimentValidation(
+                    check_id="known_cases",
+                    condition=condition,
+                    unit_id=index,
+                    reference="SAT",
+                    observed="SAT",
+                )
+                for index in range(200)
+                for condition in ("treatment", "baseline")
+            ]
+        }
+    )
+    assert _protocol_output_errors(
+        full_validation_protocol, fully_validated, smoke=False
+    ) == []
+    missing_baseline_validation = fully_validated.model_copy(
+        update={
+            "validations": [
+                row for row in fully_validated.validations
+                if row.condition == "treatment"
+            ]
+        }
+    )
+    assert any(
+        "omitted 200 required" in error
+        for error in _protocol_output_errors(
+            full_validation_protocol, missing_baseline_validation, smoke=False
+        )
+    )
+    mismatched_validation = fully_validated.model_copy(deep=True)
+    mismatched_validation.validations[0].observed = "UNSAT"
+    assert any(
+        "1 reference/observed mismatches" in error
+        for error in _protocol_output_errors(
+            full_validation_protocol, mismatched_validation, smoke=False
+        )
+    )
+    completion_proxy = fully_validated.model_copy(deep=True)
+    completion_proxy.validations[0].reference = True
+    completion_proxy.validations[0].observed = True
+    assert any(
+        "completion flag or proxy" in error
+        for error in _protocol_output_errors(
+            full_validation_protocol, completion_proxy, smoke=False
+        )
+    )
+
     incomplete = output.model_copy(update={"observations": output.observations[:2]})
     count_errors = _protocol_output_errors(protocol, incomplete, smoke=False)
     assert len([error for error in count_errors if "sample_size" in error]) == 2
@@ -1346,6 +1444,23 @@ def test_experiment_agent_fails_fast_without_configuration(tmp_path: Path) -> No
     store.initialize_layout()
     with pytest.raises(ExperimenterConfigurationError):
         ExperimentAgent(store, None).status()
+
+
+def test_container_health_rejects_a_stale_same_path_bind_mount(tmp_path: Path) -> None:
+    store = ArtifactStore(tmp_path)
+    container = DockerProjectContainer(store, ExperimenterSettings())
+    container._ensure_workspace_dirs()
+    current_token = container.mount_sentinel_path.read_text().strip()
+
+    container._docker = lambda *args, **kwargs: subprocess.CompletedProcess(  # type: ignore[method-assign]
+        ["docker"], 0, stdout=current_token + "\n", stderr=""
+    )
+    assert container._container_healthy()
+
+    container._docker = lambda *args, **kwargs: subprocess.CompletedProcess(  # type: ignore[method-assign]
+        ["docker"], 0, stdout="token-from-renamed-old-directory\n", stderr=""
+    )
+    assert not container._container_healthy()
 
 
 def test_docker_diagnostic_preserves_failure_tail() -> None:

@@ -39,11 +39,17 @@ execution before a full run. This avoids subjective code-review loops.
 
 Every stage is persisted under `ExperimentStates/`. Repairs use one bounded reasoning plan followed
 by a complete replacement source from the coding profile, with the exact validator/reviewer/runtime
-defect and complete prior candidate. A 20,000-character source cap keeps accepted candidates fully
-repairable. Two repairs per outer cycle prevent one experiment from monopolizing a long run.
-Repeated identical defects stop after a small per-defect budget, while a larger cumulative
-source-revision cap retires strategies that oscillate among distinct defects without producing sound
-measurements.
+defect and the deepest retained runnable candidate. A regressing replacement cannot overwrite a
+source that passed a later gate. A 20,000-character source cap keeps retained candidates fully
+repairable. Two repairs per outer cycle preserve fairness; repeated defects and a cumulative revision
+cap bound oscillation.
+
+The output contract separates a condition's actual primary result from completion metadata and
+performance metrics. Observations carry exact unit IDs. Full-sample correctness checks carry one
+independent reference/observed record for every required condition/unit pair; deterministic gates
+check coverage, equality, and consistency with observation results. The runner derives generic CSV
+and report artifacts. After full execution, separate source audits inspect treatment mechanisms,
+validation data flow, and registered analysis formulas before the final scientific evidence review.
 
 ## Evidence policy
 

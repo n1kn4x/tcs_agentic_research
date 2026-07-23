@@ -32,6 +32,7 @@ class DockerProjectContainer:
         self.container_name = f"{self.settings.container_name_prefix}-{self.project_slug}"
         self.experimenter_dir = self.store.resolve(".experimenter")
         self.workspace_state_dir = self.store.resolve(".experimenter/workspace")
+        self.mount_sentinel_path = self.workspace_state_dir / ".mount-sentinel"
         self.manifest_path = self.store.resolve(".experimenter/manifest.json")
 
     def ensure_running(self) -> None:
@@ -187,6 +188,12 @@ class DockerProjectContainer:
                 directory.chmod(0o777)
             except PermissionError:
                 pass
+        # Docker inspect compares only source path strings. If a workspace directory is renamed
+        # and recreated at the same path, a running container keeps the old inode and inspect still
+        # looks correct. This token identifies the actual host directory currently at that path.
+        stat = self.workspace_state_dir.stat()
+        token = f"{stat.st_dev}:{stat.st_ino}\n"
+        self.mount_sentinel_path.write_text(token, encoding="utf-8")
 
     def _write_manifest(self, *, state: str) -> None:
         self.experimenter_dir.mkdir(parents=True, exist_ok=True)
@@ -277,12 +284,21 @@ class DockerProjectContainer:
                 self.container_name,
                 "sh",
                 "-c",
-                "test -d /workspace/runs && command -v python3 >/dev/null && python3 -c 'import json'",
+                (
+                    "test -d /workspace/runs && command -v python3 >/dev/null && "
+                    "python3 -c 'import json' && cat /workspace/.mount-sentinel"
+                ),
             ],
             timeout=30,
             check=False,
         )
-        return completed.returncode == 0
+        if completed.returncode != 0:
+            return False
+        try:
+            expected = self.mount_sentinel_path.read_text(encoding="utf-8").strip()
+        except OSError:
+            return False
+        return completed.stdout.strip() == expected
 
     def _container_has_expected_workspace_mount(self) -> bool:
         completed = self._docker(

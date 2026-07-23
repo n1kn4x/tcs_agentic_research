@@ -545,6 +545,22 @@ class ExperimentProtocol(StrictModel):
     hypothesis: str = Field(min_length=10, max_length=1200)
     null_outcome: str = Field(min_length=10, max_length=1200)
     experimental_unit: str = Field(min_length=3, max_length=600)
+    result_semantics: str = Field(
+        min_length=10,
+        max_length=800,
+        description=(
+            "Meaning and representation of the actual primary result returned by each condition "
+            "for one unit, distinct from completion/success metadata and performance metrics."
+        ),
+    )
+    unit_generation: str = Field(
+        min_length=10,
+        max_length=800,
+        description=(
+            "Exact deterministic mapping from seed anchors and unit index to each unique "
+            "experimental input and stable unit ID."
+        ),
+    )
     conditions: list[NamedDescription] = Field(min_length=2, max_length=12)
     baselines: list[NamedDescription] = Field(min_length=1, max_length=8)
     metrics: list[NamedDescription] = Field(min_length=1, max_length=12)
@@ -587,15 +603,20 @@ class ExperimentProtocol(StrictModel):
 class ExperimentCriterionAssessment(StrictModel):
     criterion_id: str = Field(pattern=r"^[A-Z][A-Z0-9_]{1,63}$")
     satisfied: bool
-    detail: str = Field(min_length=3, max_length=1600)
+    detail: str = Field(min_length=3, max_length=800)
 
 
 class ExperimentProtocolReview(StrictModel):
-    """Python computes acceptance from exact criterion-id coverage and these assessments."""
+    """One concise assessment for each of the eight fixed protocol gates."""
 
-    criteria: list[ExperimentCriterionAssessment] = Field(min_length=1, max_length=20)
-    issues: list[str] = Field(default_factory=list, max_length=10)
-    required_revisions: list[str] = Field(default_factory=list, max_length=10)
+    criteria: list[ExperimentCriterionAssessment] = Field(min_length=8, max_length=8)
+
+    @model_validator(mode="before")
+    @classmethod
+    def wrap_bare_criteria(cls, value: Any) -> Any:
+        # Some constrained providers return the sole list field without its object wrapper. This
+        # recovery changes no verdict and prevents a formatting fault from consuming a strategy.
+        return {"criteria": value} if isinstance(value, list) else value
 
 
 class ExperimentProgramReview(StrictModel):
@@ -608,6 +629,30 @@ class ExperimentProgramReview(StrictModel):
         if not self.accepted and not self.issues:
             self.issues = [self.objective_alignment]
         return self
+
+
+class ExperimentConditionAudit(StrictModel):
+    condition_id: str = Field(min_length=1, max_length=200)
+    implemented: bool
+    discriminating_check: bool
+    detail: str = Field(min_length=10, max_length=1200)
+
+
+class ExperimentImplementationAudit(StrictModel):
+    """Independent source audit of conditions, validation wiring, and analysis."""
+
+    conditions: list[ExperimentConditionAudit] = Field(min_length=2, max_length=12)
+    validation_provenance_sound: bool
+    analysis_implementation_sound: bool
+    issues: list[str] = Field(default_factory=list, max_length=12)
+
+
+class ExperimentProvenanceAudit(StrictModel):
+    validation_provenance_sound: bool
+    validation_detail: str = Field(min_length=20, max_length=2000)
+    analysis_implementation_sound: bool
+    analysis_detail: str = Field(min_length=20, max_length=2000)
+    fatal_issues: list[str] = Field(default_factory=list, max_length=12)
 
 
 class ExperimentEvidenceReview(StrictModel):
@@ -643,12 +688,27 @@ class ExperimentCheck(StrictModel):
 
 JSONScalar = str | int | float | bool | None
 JSONParameter = JSONScalar | list[JSONScalar]
+JSONResult = JSONParameter | dict[str, JSONParameter]
+JSONAggregate = JSONScalar | list[JSONScalar]
 
 
 class ExperimentObservation(StrictModel):
     condition: str = Field(min_length=1, max_length=200)
+    unit_id: str | int
+    result: JSONResult
     sample_size: int = Field(ge=1)
     metrics: dict[str, JSONScalar] = Field(min_length=1, max_length=40)
+
+
+class ExperimentValidation(StrictModel):
+    """One independently inspectable comparison for a condition/unit correctness gate."""
+
+    check_id: str = Field(min_length=2, max_length=200)
+    condition: str = Field(min_length=1, max_length=200)
+    unit_id: str | int
+    reference: JSONResult
+    observed: JSONResult
+    detail: str = Field(default="", max_length=500)
 
 
 class ExperimentConclusion(StrictModel):
@@ -665,8 +725,9 @@ class ExperimentOutput(StrictModel):
     experiment: str = Field(min_length=3, max_length=500)
     status: Literal["completed", "capped"] = "completed"
     parameters: dict[str, JSONParameter] = Field(min_length=1, max_length=50)
-    aggregate_metrics: dict[str, JSONScalar] = Field(min_length=1, max_length=200)
+    aggregate_metrics: dict[str, JSONAggregate] = Field(min_length=1, max_length=200)
     observations: list[ExperimentObservation] = Field(default_factory=list, max_length=3000)
+    validations: list[ExperimentValidation] = Field(default_factory=list, max_length=10000)
     checks: list[ExperimentCheck] = Field(min_length=1, max_length=200)
     conclusion: ExperimentConclusion
     limitations: list[str] = Field(min_length=1, max_length=20)
@@ -675,7 +736,16 @@ class ExperimentOutput(StrictModel):
     def finite_metrics_and_distinct_conditions(self) -> "ExperimentOutput":
         import math
 
-        values: list[JSONScalar] = [*self.aggregate_metrics.values()]
+        values: list[JSONScalar] = []
+        for value in self.aggregate_metrics.values():
+            if isinstance(value, list):
+                if not 1 <= len(value) <= 4:
+                    raise ValueError(
+                        "aggregate metric vectors must contain one to four scalar bounds/components"
+                    )
+                values.extend(value)
+            else:
+                values.append(value)
         for value in self.parameters.values():
             values.extend(value if isinstance(value, list) else [value])
         for observation in self.observations:
@@ -980,7 +1050,14 @@ class ExperimentState(StrictModel):
     protocol_sha256: str = ""
     protocol_review: ExperimentProtocolReview | None = None
     program: ExperimentProgram | None = None
+    # Repairs always restart from the deepest candidate that passed deterministic execution gates;
+    # a broken replacement must not erase a known-runnable implementation over a week-long run.
+    repair_base_program: ExperimentProgram | None = None
+    repair_base_error: str = ""
+    repair_base_score: int = 0
     program_review: ExperimentProgramReview | None = None
+    implementation_audit: ExperimentImplementationAudit | None = None
+    provenance_audit: ExperimentProvenanceAudit | None = None
     smoke_result: ExperimentResult | None = None
     execution_result: ExperimentResult | None = None
     final_result: WorkResult | None = None

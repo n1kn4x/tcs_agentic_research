@@ -216,22 +216,29 @@ Mathlib setup, persistence, and budget details.
 
 ## Experiment subsystem
 
-Experiment work uses a durable state machine: protocol design/review, program design/review, smoke
-execution, full execution, and evidence review. A single research cycle drives the machine until it
-produces evidence, reaches its model/resource budget, or encounters a repeated concrete blocker.
-Every transition persists `ExperimentStates/<work-id>.json`, so restarts resume accepted work instead
-of regenerating it. A repair first produces a bounded reasoning plan, then a non-thinking coding call
-emits one complete replacement file from the exact defect and prior source; fragile line-number patch
-chains are not used. Two repairs per outer cycle preserve fairness. Repeated/no-op defects stop
-quickly, and a configurable cumulative source-revision cap eventually retires an oscillating program
-strategy so that a fresh strategy or unrelated requirement can run. Repairable programs are capped
-at 20,000 characters so accepted prior source is supplied in full; oversize candidates are replaced
-rather than repaired from truncated context.
+Experiment work uses a durable state machine: protocol design/review, program design, smoke
+execution, full execution, mechanism/provenance audits, and evidence review. A single research cycle
+drives the machine until it produces evidence, reaches its model/resource budget, or encounters a
+repeated concrete blocker. Every transition persists `ExperimentStates/<work-id>.json`, so restarts
+resume accepted work instead of regenerating it. Repairs retain the deepest runnable source as their
+base: a replacement that fails an earlier gate cannot erase a source that already passed full
+execution. A repair first produces a bounded reasoning plan, then a non-thinking coding call emits one
+complete replacement file from the exact defect and retained source; fragile line-number patch chains
+are not used. Two repairs per outer cycle preserve fairness. Repeated/no-op defects stop quickly, and
+a configurable cumulative source-revision cap eventually retires an oscillating strategy. Repairable
+programs are capped at 20,000 characters so the retained source is always supplied in full.
 
 The model implements `run_experiment(mode: str) -> dict`. A trusted wrapper owns the entry point,
-writes `results.json`, and validates the v2 output contract. Smoke mode exercises every condition on
-tiny samples before the frozen full run. Both execute in the resource- and time-bounded Docker
-container; the research workspace is read-only and the default container network is disabled.
+writes `results.json`, and validates the v2 output contract. Every observation carries a stable unit
+ID and the actual primary condition result (distinct from completion metadata). Full-sample
+correctness claims preserve one independent `reference`/condition `observed` row per required
+condition and unit; Python checks exact coverage, equality, and agreement with observation results.
+The runner deterministically derives `observations.csv`, `validations.csv`, `comparison.csv`, and a
+scoped `report.md`. A separate source audit traces condition mechanisms, validation data flow, and
+analysis formulas before the final evidence audit. Smoke mode exercises every condition on tiny
+samples before the frozen full run. Both execute in the bounded Docker container; a mount-inode
+sentinel detects stale same-path bind mounts, the research workspace is read-only, and networking is
+disabled by default.
 
 You can also run a reviewed script directly:
 

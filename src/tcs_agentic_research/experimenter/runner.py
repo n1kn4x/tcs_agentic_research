@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import csv
 import json
 import re
 import shutil
@@ -138,6 +139,7 @@ class BoundedExperimentRunner:
                         raw_payload, fallback_experiment=program.description
                     )
                 )
+                _write_standard_artifacts(portable_dir, output_contract)
                 # A valid output is preserved even when a check is false. The evidence reviewer,
                 # which sees the protocol and measurements, decides whether this is a genuine
                 # implementation failure or a wrongly encoded hypothesis-direction check. Treating
@@ -250,6 +252,7 @@ def _normalize_output_payload(
         "parameters",
         "aggregate_metrics",
         "observations",
+        "validations",
         "checks",
         "conclusion",
         "limitations",
@@ -272,7 +275,7 @@ def _normalize_output_payload(
         normalized.get("parameters"), preserve_scalar_lists=True
     )
     normalized["aggregate_metrics"] = _flatten_mapping(
-        normalized.get("aggregate_metrics"), preserve_scalar_lists=False
+        normalized.get("aggregate_metrics"), preserve_scalar_lists=True
     )
     observations = normalized.get("observations")
     if isinstance(observations, list):
@@ -281,7 +284,7 @@ def _normalize_output_payload(
                 **{
                     key: value
                     for key, value in row.items()
-                    if key in {"condition", "sample_size", "metrics"}
+                    if key in {"condition", "unit_id", "result", "sample_size", "metrics"}
                 },
                 **(
                     {"condition": row["condition_id"]}
@@ -295,6 +298,20 @@ def _normalize_output_payload(
             if isinstance(row, dict)
             else row
             for row in observations
+        ]
+    validations = normalized.get("validations")
+    if isinstance(validations, list):
+        normalized["validations"] = [
+            {
+                key: value
+                for key, value in row.items()
+                if key in {
+                    "check_id", "condition", "unit_id", "reference", "observed", "detail"
+                }
+            }
+            if isinstance(row, dict)
+            else row
+            for row in validations
         ]
     checks = normalized.get("checks")
     if isinstance(checks, list):
@@ -376,6 +393,81 @@ def _flatten_mapping(value: Any, *, preserve_scalar_lists: bool) -> Any:
     for key, item in value.items():
         visit(str(key), item)
     return flat
+
+
+def _write_standard_artifacts(run_dir: Path, output: ExperimentOutput) -> None:
+    """Derive generic auditable tables and a scoped report from the validated raw payload."""
+    metric_names = sorted(
+        {name for observation in output.observations for name in observation.metrics}
+    )
+    with (run_dir / "observations.csv").open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=["unit_id", "condition", "result", "sample_size", *metric_names],
+        )
+        writer.writeheader()
+        for observation in output.observations:
+            writer.writerow(
+                {
+                    "unit_id": observation.unit_id,
+                    "condition": observation.condition,
+                    "result": json.dumps(observation.result, ensure_ascii=False, sort_keys=True),
+                    "sample_size": observation.sample_size,
+                    **{name: observation.metrics.get(name) for name in metric_names},
+                }
+            )
+    with (run_dir / "comparison.csv").open("w", encoding="utf-8", newline="") as handle:
+        comparison_writer = csv.writer(handle)
+        comparison_writer.writerow(["analysis_metric", "value"])
+        for name, value in output.aggregate_metrics.items():
+            comparison_writer.writerow(
+                [name, json.dumps(value, ensure_ascii=False, sort_keys=True)]
+            )
+    with (run_dir / "validations.csv").open("w", encoding="utf-8", newline="") as handle:
+        validation_writer = csv.DictWriter(
+            handle,
+            fieldnames=[
+                "check_id", "condition", "unit_id", "reference", "observed", "detail"
+            ],
+        )
+        validation_writer.writeheader()
+        for validation in output.validations:
+            validation_writer.writerow(validation.model_dump(mode="json"))
+    checks_passed = sum(check.passed for check in output.checks)
+    report = [
+        f"# {output.experiment}",
+        "",
+        "## Empirical conclusion",
+        "",
+        output.conclusion.statement,
+        "",
+        (
+            f"Outcome: **{output.conclusion.outcome}**. This is bounded empirical evidence, "
+            "not a mathematical proof or an asymptotic claim."
+        ),
+        "",
+        "## Validation",
+        "",
+        f"- Implementation checks passed: {checks_passed}/{len(output.checks)}",
+        f"- Status: {output.status}",
+        f"- Raw condition/unit records: {len(output.observations)}",
+        f"- Preserved reference/observed validation rows: {len(output.validations)}",
+        "",
+        "## Aggregate comparison",
+        "",
+        "| Analysis metric | Value |",
+        "|---|---|",
+        *[
+            f"| `{name}` | `{json.dumps(value, ensure_ascii=False, sort_keys=True)}` |"
+            for name, value in output.aggregate_metrics.items()
+        ],
+        "",
+        "## Limitations",
+        "",
+        *[f"- {limitation}" for limitation in output.limitations],
+        "",
+    ]
+    (run_dir / "report.md").write_text("\n".join(report), encoding="utf-8")
 
 
 def _short_value(value: Any, *, limit: int = 240) -> str:

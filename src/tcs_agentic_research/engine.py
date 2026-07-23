@@ -224,6 +224,14 @@ class ResearchEngine:
                     # Preserve the exhausted implementation for diagnosis. Replanning grants fresh
                     # root-strategy slots; it must not revive an oscillating source at its hard cap.
                     continue
+                if (
+                    experiment.stage == "protocol_revision"
+                    and experiment.protocol is not None
+                ):
+                    # Reassess preserved scientific work before asking for another rewrite. Human
+                    # replans often follow reviewer/provider or engine fixes, in which case the exact
+                    # protocol may already be sound under the repaired gate.
+                    experiment.stage = "protocol_review"
                 experiment.engineering_blocked = False
                 experiment.engineering_failures = 0
                 experiment.repeated_defect_failures = 0
@@ -805,6 +813,8 @@ class ResearchEngine:
         recovered = previous.model_copy(deep=True)
         recovered.work_id = recovery.work_id
         recovered.stage = "protocol_revision" if revise_protocol else "program_revision"
+        recovered.implementation_audit = None
+        recovered.provenance_audit = None
         recovered.smoke_result = None
         recovered.execution_result = None
         recovered.final_result = None
@@ -946,6 +956,9 @@ class ResearchEngine:
             "research_objective": agenda.objective[:1200] if agenda else "",
             "agenda_constraints": (
                 [value[:300] for value in agenda.constraints[:8]] if agenda else []
+            ),
+            "agenda_deliverables": (
+                [value[:300] for value in agenda.deliverables[:12]] if agenda else []
             ),
             "accepted_prior_evidence": evidence,
             "reusable_experiment_code": reusable_code,
