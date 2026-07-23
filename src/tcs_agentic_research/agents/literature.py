@@ -369,6 +369,7 @@ class LiteratureResearcher:
         max_papers: int = 8,
         only_missing: bool = True,
         use_llm: bool = False,
+        citation_keys: list[str] | None = None,
     ) -> dict[str, Any]:
         """Deterministically extract statements from imported papers with available text/PDF.
 
@@ -387,9 +388,14 @@ class LiteratureResearcher:
         skipped: list[dict[str, str]] = []
         errors: list[dict[str, str]] = []
         support_ids: list[str] = []
-        citation_keys: list[str] = []
+        processed_citation_keys: list[str] = []
 
-        for paper in latest_by_key.values():
+        selected_papers = (
+            [latest_by_key[key] for key in citation_keys or [] if key in latest_by_key]
+            if citation_keys
+            else list(latest_by_key.values())
+        )
+        for paper in selected_papers:
             if len(processed) >= max_papers:
                 skipped.append(
                     {"citation_key": paper.citation_key, "reason": "max_papers limit reached"}
@@ -425,7 +431,7 @@ class LiteratureResearcher:
                     statement.support_id for statement in statements if statement.support_id
                 ]
                 support_ids.extend(statement_support_ids)
-                citation_keys.append(extract.citation_key)
+                processed_citation_keys.append(extract.citation_key)
                 processed.append(
                     {
                         "citation_key": extract.citation_key,
@@ -453,7 +459,7 @@ class LiteratureResearcher:
             "processed_count": len(processed),
             "skipped_count": len(skipped),
             "error_count": len(errors),
-            "citation_keys": list(dict.fromkeys(citation_keys)),
+            "citation_keys": list(dict.fromkeys(processed_citation_keys)),
             "support_ids": list(dict.fromkeys(support_ids)),
             "processed": processed,
             "skipped": skipped[:20],

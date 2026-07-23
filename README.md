@@ -21,7 +21,7 @@ The replacement follows seven rules:
    evidence. Calls, files, imports, execution, and rewritten summaries do not count.
 4. **Negative results are results.** Counterexamples, contradictions, registered null outcomes, and
    scoped obstructions are stored and reported as first-class contributions.
-5. **Independent gates.** Mathematical derivations receive adversarial review; Lean goals receive
+5. **Independent gates.** Mathematical derivations require two fresh adversarial reviews; Lean goals receive
    relevance review; experiments freeze/review a protocol before code and audit evidence afterward;
    literature statements require exact spans plus requirement-level relevance review.
 6. **Persistent recovery without stage churn.** One research cycle drives an experiment through as
@@ -182,8 +182,8 @@ tcs-research literature rebuild-index --workspace workspaces/demo
 
 Not every theoretical result is practical to formalize in the minimal Lean environment. A
 `derivation` work item therefore produces a structured assumption-to-conclusion argument with
-labelled dependencies, an explicit falsification attempt, boundary conditions, and limitations. A
-fresh adversarial referee call recomputes transitions and actively searches for counterexamples.
+labelled dependencies, an explicit falsification attempt, boundary conditions, and limitations. Two
+fresh adversarial referee calls independently recompute transitions and search for counterexamples.
 Rejected derivations create targeted revisions; accepted counterexamples and obstructions are
 negative contributions, while accepted positive derivations are marked `derived` with an explicit
 caveat that they are not kernel-checked. This is distinct from synthesis, which never creates
@@ -224,7 +224,9 @@ of regenerating it. A repair first produces a bounded reasoning plan, then a non
 emits one complete replacement file from the exact defect and prior source; fragile line-number patch
 chains are not used. Two repairs per outer cycle preserve fairness. Repeated/no-op defects stop
 quickly, and a configurable cumulative source-revision cap eventually retires an oscillating program
-strategy so that a fresh strategy or unrelated requirement can run.
+strategy so that a fresh strategy or unrelated requirement can run. Repairable programs are capped
+at 14,000 characters so accepted prior source is supplied in full; oversize candidates are replaced
+rather than repaired from truncated context.
 
 The model implements `run_experiment(mode: str) -> dict`. A trusted wrapper owns the entry point,
 writes `results.json`, and validates the v2 output contract. Smoke mode exercises every condition on

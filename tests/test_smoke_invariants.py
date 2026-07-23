@@ -21,10 +21,13 @@ from tcs_agentic_research.pipelines.experiment import (
     _review_errors,
 )
 from tcs_agentic_research.pipelines.literature import _preserves_required_acronyms
+from tcs_agentic_research.pipelines.proof import _required_lean_names
 from tcs_agentic_research.workflow import (
+    _default_plan,
     _ensure_requested_methods,
     _new_contributions,
     _normalize_work_draft,
+    _strategy_fingerprint,
     _validate_experiment_program,
 )
 from tcs_agentic_research.experimenter.docker_project import _diagnostic
@@ -61,6 +64,7 @@ from tcs_agentic_research.schemas import (
     NamedDescription,
     PaperMetadata,
     PlanSubmission,
+    ResearchAgenda,
     ResearchAgendaDraft,
     ResearchPhase,
     ResearchQuestion,
@@ -69,6 +73,7 @@ from tcs_agentic_research.schemas import (
     WorkItem,
     WorkItemDraft,
     WorkKind,
+    WorkQueue,
     WorkStatus,
 )
 
@@ -335,6 +340,45 @@ def test_protocol_requires_a_distinct_treatment_condition() -> None:
             cpus=1,
             known_limitations=["Small pilot."],
         )
+
+
+def test_protocol_rejects_hypothesis_direction_as_a_correctness_check() -> None:
+    item = WorkItem.model_construct(
+        instruction="Compare two algorithms and validate them on known cases.",
+        success_criteria=["Correctness is independently checked."],
+    )
+    protocol = ExperimentProtocol(
+        title="Comparison with a directional pseudo-check",
+        hypothesis="The treatment visits fewer nodes than the baseline.",
+        null_outcome="The node counts do not differ.",
+        experimental_unit="one generated instance",
+        conditions=[
+            NamedDescription(id="treatment", description="Treatment algorithm."),
+            NamedDescription(id="baseline", description="Baseline algorithm."),
+        ],
+        baselines=[NamedDescription(id="baseline", description="Baseline algorithm.")],
+        metrics=[NamedDescription(id="nodes", description="Visited node count.")],
+        correctness_checks=[
+            NamedDescription(
+                id="known_cases", description="Compare outputs with exhaustive known answers."
+            ),
+            NamedDescription(
+                id="must_win", description="Verify treatment visits fewer nodes than baseline."
+            ),
+        ],
+        sample_sizes=[10],
+        seeds=[1],
+        analysis_plan="Compare paired node counts after validating outputs.",
+        decision_rule="Classify from the paired node-count difference.",
+        wall_seconds=30,
+        memory_mb=256,
+        cpus=1,
+        known_limitations=["Synthetic instances."],
+    )
+
+    errors = _protocol_semantic_errors(item, protocol)
+
+    assert any("must_win" in error and "result" in error for error in errors)
 
 
 def test_protocol_requires_an_independent_correctness_anchor() -> None:
@@ -698,6 +742,27 @@ def test_deterministic_literature_extraction_has_stable_exact_support(tmp_path: 
     assert answer.results[0].provenance[0].artifact_refs[0].path == text_ref.path
 
 
+def test_exact_indexed_passage_is_eligible_for_quote_evidence(tmp_path: Path) -> None:
+    store = ArtifactStore(tmp_path)
+    store.initialize_layout()
+    agent = LiteratureResearcher(store, _router(store))
+    text = (
+        "We split the variables into two equal parts. Each partial assignment becomes a Boolean "
+        "vector, and a satisfying pair exists exactly when the two vectors are orthogonal."
+    )
+    text_ref = store.write_text("LiteratureDB/papers/Reduction/paper.txt", text)
+    agent.import_paper(
+        PaperMetadata(citation_key="Reduction", title="Reduction", text_path=text_ref.path)
+    )
+
+    answer = agent.answer_query("variables Boolean vectors orthogonal", limit=3)
+
+    passage = next(result for result in answer.results if result.kind == "text_chunk")
+    assert passage.provenance[0].validated
+    assert passage.provenance[0].char_start == 0
+    assert passage.provenance[0].artifact_refs[0].path == text_ref.path
+
+
 def test_literature_index_rebuilds_from_three_canonical_ledgers(tmp_path: Path) -> None:
     store = ArtifactStore(tmp_path)
     store.initialize_layout()
@@ -716,6 +781,20 @@ def test_literature_index_rebuilds_from_three_canonical_ledgers(tmp_path: Path) 
     assert rebuilt.index.support_exists(support_id)
     assert store.exists("LiteratureDB/papers.jsonl")
     assert store.exists("LiteratureDB/statements.jsonl")
+
+
+def test_proof_identifier_coverage_ignores_tactics_and_placeholders() -> None:
+    item = WorkItem.model_construct(
+        instruction="Produce a `theorem` with no `sorry`, `admit`, or `axiom`.",
+        success_criteria=["Use a simple `simp`, `rw`, or `exact` proof."],
+    )
+    explicit = WorkItem.model_construct(
+        instruction="Verify the explicit dependency `List.count_add`.",
+        success_criteria=["Kernel check `count_add`."],
+    )
+
+    assert _required_lean_names(item) == []
+    assert _required_lean_names(explicit) == ["count_add"]
 
 
 def test_generated_code_and_proof_contracts_are_application_bound(tmp_path: Path) -> None:
@@ -836,6 +915,61 @@ def test_generated_code_and_proof_contracts_are_application_bound(tmp_path: Path
     LeanVerifier(store).ensure_project()
     assert (tmp_path / "LeanProject" / "TCSResearch.lean").read_text() == (
         "import TCSResearch.Basic\n"
+    )
+
+
+def test_planner_skips_sparse_historical_variant_fingerprint_collisions() -> None:
+    requirement = EvidenceRequirement(
+        requirement_id="q01-r01",
+        description="Run one bounded comparison.",
+        acceptance_criteria=["Preserve condition-level measurements."],
+        acceptable_methods=[WorkKind.experiment],
+    )
+    question = ResearchQuestion(
+        question_id="q01",
+        question="How do the treatment and baseline compare?",
+        hypotheses=["The measurements may differ."],
+        preferred_methods=[WorkKind.experiment],
+        requirements=[requirement],
+    )
+    agenda = ResearchAgenda(
+        task_sha256="a" * 64,
+        objective="Compare treatment and baseline.",
+        questions=[question],
+        deliverables=["Measurements."],
+    )
+    seed = _default_plan(agenda=agenda, queue=WorkQueue(), max_method_attempts=8)
+    first = seed.work_items[0]
+    old_third = first.model_copy(
+        update={
+            "strategy": first.strategy.replace(
+                "variant 1: bounded direct comparison",
+                "variant 3: boundary-condition stress test",
+            ),
+            "instruction": first.instruction.replace(
+                "`bounded direct comparison`", "`boundary-condition stress test`"
+            ),
+        }
+    )
+    queue = WorkQueue(
+        items=[
+            WorkItem(
+                **draft.model_dump(),
+                strategy_fingerprint=_strategy_fingerprint(draft),
+                status=WorkStatus.done,
+            )
+            for draft in [first, old_third]
+        ]
+    )
+
+    planned = _default_plan(
+        agenda=agenda, queue=queue, max_method_attempts=8
+    ).work_items[0]
+
+    assert "variant 4" in planned.strategy
+    assert all(
+        _strategy_fingerprint(planned) != item.strategy_fingerprint
+        for item in queue.items
     )
 
 
@@ -1018,6 +1152,31 @@ def test_experiment_contract_normalizes_metadata_and_nested_metrics() -> None:
     assert not output.checks[0].passed
     assert output.conclusion.outcome == "inconclusive"
     assert output.conclusion.basis_metrics == ["treatment.mean", "baseline.mean"]
+
+
+def test_empty_basis_metric_names_are_recovered_from_returned_aggregates() -> None:
+    normalized = _normalize_output_payload(
+        {
+            "schema_version": 2,
+            "experiment": "null comparison",
+            "parameters": {"seed": 1},
+            "aggregate_metrics": {"mean_difference": 0.0},
+            "observations": [
+                {"condition": "baseline", "sample_size": 1, "metrics": {"cost": 1}}
+            ],
+            "checks": [{"name": "oracle", "passed": True, "detail": "matched"}],
+            "conclusion": {
+                "hypothesis": "The costs differ on the bounded sample.",
+                "outcome": "null",
+                "basis_metrics": [],
+                "statement": "No difference was measured on the bounded sample.",
+            },
+            "limitations": ["One sample."],
+        }
+    )
+
+    assert normalized["conclusion"]["basis_metrics"] == ["mean_difference"]
+    assert ExperimentOutput.model_validate(normalized).conclusion.outcome == "null"
 
 
 def test_raw_replicate_observations_are_valid_and_review_context_is_bounded() -> None:

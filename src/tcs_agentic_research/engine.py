@@ -216,6 +216,14 @@ class ResearchEngine:
                 experiment = ExperimentState.model_validate(self.store.read_json(experiment_path))
                 if experiment.stage == "complete":
                     continue
+                revision_cap = self.router.core.max_experiment_engineering_retries
+                if (
+                    experiment.program_revision >= revision_cap
+                    or experiment.protocol_revision >= revision_cap
+                ):
+                    # Preserve the exhausted implementation for diagnosis. Replanning grants fresh
+                    # root-strategy slots; it must not revive an oscillating source at its hard cap.
+                    continue
                 experiment.engineering_blocked = False
                 experiment.engineering_failures = 0
                 experiment.repeated_defect_failures = 0
@@ -578,11 +586,12 @@ class ResearchEngine:
         novel_finding_ids = {
             finding_id for contribution in contributions for finding_id in contribution.finding_ids
         }
-        result.findings = [
+        novel_findings = [
             finding for finding in result.findings if finding.finding_id in novel_finding_ids
         ]
-        if result.requirement_satisfied and not result.findings:
-            result.requirement_satisfied = False
+        # A cumulative gate may legitimately close a requirement using already persisted evidence.
+        # Keep the evidence in this step-local result, but commit only novel findings to canonical
+        # ledgers so requirement completion and contribution novelty remain separate concepts.
         result.contribution_ids = [item.contribution_id for item in contributions]
         result.progress = "meaningful" if contributions else "none"
 
@@ -594,7 +603,7 @@ class ResearchEngine:
             requirement.attempt_count += 1
             if item.strategy_fingerprint not in requirement.attempted_strategy_fingerprints:
                 requirement.attempted_strategy_fingerprints.append(item.strategy_fingerprint)
-        for finding in result.findings:
+        for finding in novel_findings:
             if finding.finding_id not in requirement.finding_ids:
                 requirement.finding_ids.append(finding.finding_id)
             question = next(q for q in agenda.questions if q.question_id == item.question_id)
@@ -619,7 +628,7 @@ class ResearchEngine:
             requirement.blocker = "; ".join(result.errors)[-2000:]
         requirement.updated_at = utc_now()
 
-        self.store.append_findings(result.findings)
+        self.store.append_findings(novel_findings)
         self.store.append_contributions(contributions)
         self.store.save_agenda(agenda)
         result_ref = self.store.write_json(f"{run_dir}/result.json", result)
@@ -1010,7 +1019,7 @@ class ResearchEngine:
                     requirement.blocker = ""
                     requirement.updated_at = utc_now()
                 continue
-            counts = {
+            scientific_counts = {
                 method: sum(
                     item.requirement_id == requirement.requirement_id
                     and item.kind == method
@@ -1020,12 +1029,41 @@ class ResearchEngine:
                 )
                 for method in requirement.acceptable_methods
             }
-            if counts and all(count >= cap for count in counts.values()):
-                requirement.status = RequirementStatus.blocked
-                requirement.blocker = (
-                    "All configured methods reached their attempt caps: "
-                    + ", ".join(f"{method.value}={count}" for method, count in counts.items())
+            scheduled_counts = {
+                method: sum(
+                    item.requirement_id == requirement.requirement_id
+                    and item.kind == method
+                    and item.parent_work_id is None
+                    for item in queue.items
                 )
+                for method in requirement.acceptable_methods
+            }
+            if scientific_counts and all(
+                scientific_counts[method] >= cap or scheduled_counts[method] >= cap
+                for method in requirement.acceptable_methods
+            ):
+                requirement.status = RequirementStatus.blocked
+                if all(
+                    scientific_counts[method] >= cap
+                    for method in requirement.acceptable_methods
+                ):
+                    requirement.blocker = (
+                        "All configured methods reached their attempt caps: "
+                        + ", ".join(
+                            f"{method.value}={scientific_counts[method]}"
+                            for method in requirement.acceptable_methods
+                        )
+                    )
+                else:
+                    requirement.blocker = (
+                        "Configured strategy slots were exhausted before usable scientific evidence; "
+                        "engineering or operational failures were not counted as scientific attempts: "
+                        + ", ".join(
+                            f"{method.value}=scientific:{scientific_counts[method]},"
+                            f"scheduled:{scheduled_counts[method]}"
+                            for method in requirement.acceptable_methods
+                        )
+                    )
                 requirement.updated_at = utc_now()
 
     def _method_attempt_cap(self, state: WorkspaceState) -> int:

@@ -534,8 +534,11 @@ class LiteratureIndex:
             """,
             (match_query, max(limit * 2, 5)),
         ).fetchall()
+        query_terms = _terms(query)
         for row in stmt_rows:
-            rows.append(_row_to_dict(row, boost=3.0))
+            item = _row_to_dict(row, boost=0.25)
+            item["score"] += _like_score(query_terms, item.get("statement_text", ""))
+            rows.append(item)
         passage_rows = db.execute(
             """
             SELECT 'text_chunk' AS result_kind, p.passage_id, p.paper_id, p.citation_key,
@@ -550,7 +553,9 @@ class LiteratureIndex:
             (match_query, max(limit * 2, 5)),
         ).fetchall()
         for row in passage_rows:
-            rows.append(_row_to_dict(row, boost=1.0))
+            item = _row_to_dict(row, boost=0.0)
+            item["score"] += _like_score(query_terms, item.get("statement_text", ""))
+            rows.append(item)
         rows.sort(key=lambda item: item.get("score", 0.0), reverse=True)
         return rows
 

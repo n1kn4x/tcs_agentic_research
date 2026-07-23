@@ -135,6 +135,9 @@ class LiteraturePipeline:
                 max_papers=max(1, self.router.core.literature_max_imports),
                 only_missing=True,
                 use_llm=not self.router.dry_run,
+                citation_keys=(
+                    [paper.citation_key for paper in imported] if imported else None
+                ),
             )
         except Exception as exc:
             extraction = {"processed_count": 0, "errors": [str(exc)]}
@@ -195,8 +198,10 @@ class LiteraturePipeline:
                         "Review each exact primary-source statement against the atomic evidence "
                         "requirement. Return exactly one selection for every supplied support_id; "
                         "the selections list must not be empty when statements are supplied. Topical "
-                        "overlap is unrelated. Judge only the quoted statement: do not use an unstated "
-                        "equivalence, reduction, paper-level context, or outside knowledge."
+                        "overlap is unrelated. A statement is relevant only if its exact span alone "
+                        "covers every named assumption, direction, parameter regime, and result needed "
+                        "by the supplied acceptance criteria. Judge only the quoted statement: do not "
+                        "use an unstated equivalence, reduction, paper-level context, or outside knowledge."
                     ),
                 },
                 {
@@ -204,6 +209,7 @@ class LiteraturePipeline:
                     "content": json.dumps(
                         {
                             "requirement": item.instruction,
+                            "acceptance_criteria": item.success_criteria,
                             "hypothesis": item.hypothesis,
                             "statements": statement_payload,
                         },
@@ -239,6 +245,7 @@ class LiteraturePipeline:
                             "content": json.dumps(
                                 {
                                     "requirement": item.instruction,
+                                    "acceptance_criteria": item.success_criteria,
                                     "hypothesis": item.hypothesis,
                                     "statements": retry_payload,
                                 },
@@ -311,7 +318,11 @@ class LiteraturePipeline:
                         if row.support_id and row.support_level == "primary_exact"
                         else EvidenceStrength.substantive
                     ),
-                    scope="Exactly the assumptions and scope in the quoted primary source.",
+                    scope=(
+                        "Exactly the assumptions and scope in the quoted named statement."
+                        if row.support_level == "primary_exact"
+                        else "Exact span from an imported source; not necessarily a named theorem."
+                    ),
                     evidence_refs=quote.artifact_refs,
                     source_ids=[
                         value
@@ -373,14 +384,14 @@ class LiteraturePipeline:
 
 
 def _preserves_required_acronyms(item: WorkItem, statement: str) -> bool:
-    """Prevent a reviewer from supplying an unstated cross-problem relationship.
+    """Require every technical entity named by the atomic evidence description.
 
-    Acronyms are useful conservative entity anchors in technical requirements. The primary (first)
-    acronym must occur in the exact span, so a quote about SETH hardness for another problem cannot
-    be promoted as an OV result by claiming an outside equivalence. Later acronyms may denote examples
-    or alternatives and are left to semantic review. Ordinary title-case words are not anchors.
+    The generated instruction starts by quoting the requirement description. Restricting anchors to
+    that segment avoids turning examples in the broader question into mandatory entities while still
+    preventing an OVH statement with no mention of SETH from closing a SETH-to-OV requirement.
     """
-    requirement_text = f"{item.instruction} {item.hypothesis}"
+    quoted = re.search(r"`([^`]+)`", item.instruction)
+    requirement_text = quoted.group(1) if quoted else f"{item.instruction} {item.hypothesis}"
     anchors = list(
         dict.fromkeys(
             re.findall(
@@ -389,11 +400,7 @@ def _preserves_required_acronyms(item: WorkItem, statement: str) -> bool:
             )
         )
     )
-    # The first acronym is the primary technical entity in the normalized instruction. Requiring
-    # every later acronym made examples and alternative hypotheses impossible to document in one
-    # exact span (for example OV compared with several related problems). The semantic reviewer
-    # still decides whether the primary-entity quote actually resolves the full requirement.
-    return not anchors or _statement_contains_anchor(statement, anchors[0])
+    return all(_statement_contains_anchor(statement, anchor) for anchor in anchors)
 
 
 def _preserves_objective_anchor(objective: str, statement: str) -> bool:

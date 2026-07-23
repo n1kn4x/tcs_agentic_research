@@ -329,7 +329,20 @@ class ProofPipeline:
 
 
 def _required_lean_names(item: WorkItem) -> list[str]:
+    """Extract only explicit theorem-like identifiers, not arbitrary inline code.
+
+    Acceptance criteria naturally quote Lean commands, tactics, operators, and forbidden
+    placeholders.  Treating values such as ``sorry``, ``simp``, or ``theorem`` as required theorem
+    names made a kernel-checked result impossible to close.  Snake-case or qualified identifiers are
+    sufficiently explicit to use as a deterministic cumulative-coverage constraint; all other
+    relevance remains the independent reviewer's responsibility.
+    """
     text = " ".join([item.instruction, *item.success_criteria])
+    ignored = {
+        "admit", "and", "axiom", "by", "def", "exact", "false", "lake", "lean",
+        "lemma", "noncomputable", "not", "or", "rfl", "rw", "simp", "sorry", "theorem",
+        "true",
+    }
     names: list[str] = []
     for value in re.findall(r"`([^`]+)`", text):
         candidate = value.strip()
@@ -339,7 +352,9 @@ def _required_lean_names(item: WorkItem) -> list[str]:
         ):
             continue
         name = candidate.rsplit(".", 1)[-1]
-        if name not in names and name.lower() not in {"lean", "true", "false"}:
+        if "_" not in candidate and "." not in candidate:
+            continue
+        if name not in names and name.lower() not in ignored:
             names.append(name)
     return names
 

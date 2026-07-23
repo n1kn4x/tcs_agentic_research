@@ -1024,7 +1024,8 @@ class RouterSettings(StrictModel):
 
 
 class CoreSettings(StrictModel):
-    max_model_calls_per_step: int = Field(default=12, ge=1, le=32)
+    # Protocol/review/implementation and two independent derivation gates need a real bounded step.
+    max_model_calls_per_step: int = Field(default=12, ge=6, le=32)
     max_plan_items: int = Field(default=4, ge=1, le=6)
     # This threshold triggers diversification; it never halts while untried requirements remain.
     max_no_progress_steps: int = Field(default=4, ge=2, le=100)

@@ -34,6 +34,9 @@ from .schemas import (
 )
 
 
+MAX_EXPERIMENT_SOURCE_CHARS = 14_000
+
+
 def requirement_index(
     agenda: ResearchAgenda,
 ) -> dict[str, tuple[ResearchQuestion, EvidenceRequirement]]:
@@ -54,6 +57,7 @@ def _default_plan(
     """Schedule least-attempted gaps and methods without inventing a scientific claim."""
     scientific_attempts: dict[tuple[str, WorkKind], int] = {}
     scheduled_variants: dict[tuple[str, WorkKind], int] = {}
+    scheduled_roots: dict[tuple[str, WorkKind], int] = {}
     requirements = requirement_index(agenda)
     for item in queue.items:
         requirement_pair = requirements.get(item.requirement_id)
@@ -61,7 +65,12 @@ def _default_plan(
             continue
         _, requirement = requirement_pair
         key = (item.requirement_id, item.kind)
+        # Revisions repair one scientific strategy; they must not consume the distinct-strategy
+        # slots granted to a requirement. They do advance the generated variant number so a later
+        # clean root cannot collide with a historical fingerprint after sparse old numbering.
         scheduled_variants[key] = scheduled_variants.get(key, 0) + 1
+        if item.parent_work_id is None:
+            scheduled_roots[key] = scheduled_roots.get(key, 0) + 1
         if item.strategy_fingerprint in requirement.attempted_strategy_fingerprints:
             scientific_attempts[key] = scientific_attempts.get(key, 0) + 1
     drafts: list[WorkItemDraft] = []
@@ -85,8 +94,9 @@ def _default_plan(
                 key = (requirement.requirement_id, method)
                 attempt_count = scientific_attempts.get(key, 0)
                 variant = scheduled_variants.get(key, 0)
+                root_count = scheduled_roots.get(key, 0)
                 if attempt_count >= max_method_attempts or (
-                    attempt_count == 0 and variant >= max_method_attempts
+                    attempt_count == 0 and root_count >= max_method_attempts
                 ):
                     continue
                 candidates.append(
@@ -97,6 +107,7 @@ def _default_plan(
     ordered = sorted(candidates, key=lambda row: row[:2])
     used_pairs: set[tuple[str, WorkKind]] = set()
     used_methods: set[WorkKind] = set()
+    existing_fingerprints = {item.strategy_fingerprint for item in queue.items}
     for pass_number in range(3):
         for _, _, variant, question, requirement, method in ordered:
             pair = (requirement.requirement_id, method)
@@ -108,9 +119,16 @@ def _default_plan(
                 draft.requirement_id == requirement.requirement_id for draft in drafts
             ):
                 continue
-            drafts.append(
-                _work_for_requirement(question, requirement, method, variant=variant)
+            draft = _work_for_requirement(
+                question, requirement, method, variant=variant
             )
+            while _strategy_fingerprint(draft) in existing_fingerprints:
+                variant += 1
+                draft = _work_for_requirement(
+                    question, requirement, method, variant=variant
+                )
+            drafts.append(draft)
+            existing_fingerprints.add(_strategy_fingerprint(draft))
             used_pairs.add(pair)
             used_methods.add(method)
             if len(drafts) >= limit:
@@ -750,19 +768,28 @@ def _candidate_is_relevant_and_extractable(
 ) -> bool:
     if candidate.status != "queued" or not (candidate.arxiv_id or candidate.pdf_url):
         return False
-    source_terms = set(
-        re.findall(
+    discovery_stop = {
+        "algorithm", "analysis", "bound", "complexity", "exact", "lower", "paper",
+        "primary", "problem", "result", "review", "source", "theorem", "time", "upper",
+    }
+    source_terms = {
+        term
+        for term in re.findall(
             r"[a-z0-9]{3,}",
             (candidate.title + " " + (candidate.abstract or "")[:5000]).lower(),
         )
-    )
+        if term not in discovery_stop
+    }
     # Model-suggested titles can be hallucinated. They help rank a candidate but cannot, by
-    # themselves, establish relevance; at least one requirement-derived search query must overlap.
+    # themselves, establish relevance; at least two meaningful query terms must overlap.
     for target in relevance_queries:
-        terms = set(re.findall(r"[a-z0-9]{3,}", target.lower()))
-        if terms and (
-            len(source_terms & terms) >= 2
-            or len(source_terms & terms) / len(terms) >= 0.3
+        terms = {
+            term
+            for term in re.findall(r"[a-z0-9]{3,}", target.lower())
+            if term not in discovery_stop
+        }
+        if terms and len(source_terms & terms) >= 2 and (
+            len(source_terms & terms) / len(terms) >= 0.2 or len(source_terms & terms) >= 3
         ):
             return True
     return False
@@ -771,8 +798,12 @@ def _candidate_is_relevant_and_extractable(
 def _validate_experiment_program(program: Any) -> None:
     """Reject incomplete contracts and escape/network primitives before Docker."""
     code = program.python_code
-    if len(code) > 20_000:
-        raise ValueError("generated experiment exceeds the 20,000-character source budget")
+    if len(code) > MAX_EXPERIMENT_SOURCE_CHARS:
+        raise ValueError(
+            "generated experiment exceeds the "
+            f"{MAX_EXPERIMENT_SOURCE_CHARS:,}-character repairable source budget; "
+            "replace it with a smaller complete implementation"
+        )
     try:
         tree = ast.parse(code)
     except SyntaxError as exc:
@@ -817,10 +848,14 @@ def _validate_experiment_program(program: Any) -> None:
     ]
     if not meaningful_body:
         raise ValueError("run_experiment contains only an unfinished `pass` placeholder")
-    if any(not _safe_experiment_top_level(node) for node in tree.body):
+    unsafe_top_level = next(
+        (node for node in tree.body if not _safe_experiment_top_level(node)), None
+    )
+    if unsafe_top_level is not None:
         raise ValueError(
             "generated experiment may only define imports, constants, classes, and functions; "
-            "the trusted wrapper owns the entry point"
+            f"found executable {type(unsafe_top_level).__name__} at line "
+            f"{getattr(unsafe_top_level, 'lineno', '?')}; the trusted wrapper owns the entry point"
         )
     for top_node in tree.body:
         if not isinstance(top_node, (ast.Assign, ast.AnnAssign)):

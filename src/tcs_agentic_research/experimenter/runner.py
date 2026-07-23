@@ -335,6 +335,11 @@ def _normalize_output_payload(
             )[:12]
         elif isinstance(basis, str):
             conclusion["basis_metrics"] = [basis]
+        elif basis == [] and isinstance(normalized.get("aggregate_metrics"), dict):
+            # Metric names are provenance pointers, not new measurements. Recovering them from the
+            # already returned aggregate map preserves a negative/null outcome that would otherwise
+            # be discarded solely because generated code left this descriptive list empty.
+            conclusion["basis_metrics"] = list(normalized["aggregate_metrics"])[:12]
         valid_outcomes = {"supports", "contradicts", "null", "inconclusive", "characterizes"}
         if conclusion.get("outcome") not in valid_outcomes:
             conclusion["outcome"] = "inconclusive"

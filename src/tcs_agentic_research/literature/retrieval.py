@@ -61,6 +61,15 @@ class LiteratureRetriever:
             source_refs = []
             if paper is not None and paper.text_path and self.store.exists(paper.text_path):
                 source_refs.append(self.store.artifact_ref(paper.text_path))
+            validated = bool(row.get("quote_validated") or False)
+            if not validated and row.get("result_kind") == "text_chunk" and paper is not None:
+                validated = _validated_indexed_passage(
+                    self.store,
+                    paper.text_path,
+                    quote,
+                    row.get("char_start"),
+                    row.get("char_end"),
+                )
             quote_obj = LiteratureQuote(
                 citation_key=citation_key,
                 paper_id=paper_id,
@@ -69,7 +78,7 @@ class LiteratureRetriever:
                 char_start=row.get("char_start"),
                 char_end=row.get("char_end"),
                 source_sha256=str(row.get("text_sha256") or ""),
-                validated=bool(row.get("quote_validated") or False),
+                validated=validated,
                 artifact_refs=source_refs,
             )
             if row.get("quote_id"):
@@ -94,6 +103,24 @@ class LiteratureRetriever:
                 )
             )
         return results
+
+
+def _validated_indexed_passage(
+    store: ArtifactStore,
+    text_path: str,
+    quote: str,
+    start: Any,
+    end: Any,
+) -> bool:
+    """Revalidate deterministic text chunks before exposing them as exact-span evidence."""
+    if not text_path or not store.exists(text_path):
+        return False
+    if not isinstance(start, int) or not isinstance(end, int) or start < 0 or end < start:
+        return False
+    text = store.read_text(text_path)
+    if end > len(text):
+        return False
+    return re.sub(r"\s+", " ", text[start:end]).strip() == re.sub(r"\s+", " ", quote).strip()
 
 
 def detect_duplicate_results(

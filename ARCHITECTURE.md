@@ -39,15 +39,16 @@ execution before a full run. This avoids subjective code-review loops.
 
 Every stage is persisted under `ExperimentStates/`. Repairs use one bounded reasoning plan followed
 by a complete replacement source from the coding profile, with the exact validator/reviewer/runtime
-defect and prior candidate. Two repairs per outer cycle prevent one experiment from monopolizing a
-long run. Repeated identical defects stop after a small per-defect budget, while a larger cumulative
+defect and complete prior candidate. A 14,000-character source cap keeps accepted candidates fully
+repairable. Two repairs per outer cycle prevent one experiment from monopolizing a long run.
+Repeated identical defects stop after a small per-defect budget, while a larger cumulative
 source-revision cap retires strategies that oscillate among distinct defects without producing sound
 measurements.
 
 ## Evidence policy
 
-- Literature findings require validated exact source spans.
-- Derivations require an adversarial review; substantive requested revisions prevent acceptance.
+- Literature findings require validated exact named-statement or indexed-passage source spans.
+- Derivations require two independent adversarial reviews; either can prevent acceptance.
 - Proof findings require placeholder-free Lean verification.
 - Experiments require valid condition-level output and a final methodology audit.
 - Negative and null evidence follows the same acceptance path as positive evidence.

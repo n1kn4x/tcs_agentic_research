@@ -38,7 +38,7 @@ from ..schemas import (
     WorkResult,
     utc_now,
 )
-from ..workflow import _validate_experiment_program
+from ..workflow import MAX_EXPERIMENT_SOURCE_CHARS, _validate_experiment_program
 
 
 class ExperimentPipeline:
@@ -203,7 +203,7 @@ class ExperimentPipeline:
                     step_dir,
                     persist,
                     "Protocol repair made no semantic change. Correct the preserved defect: "
-                    + state.last_error,
+                    + _underlying_repair_defect(state.last_error),
                     force_block=(
                         state.repeated_protocol_candidates >= self.MAX_IDENTICAL_REPAIRS
                     ),
@@ -593,6 +593,12 @@ class ExperimentPipeline:
                 f"Last defect: {state.last_error}"
             )[-4000:]
             force_block = True
+        if state.stage == "protocol_revision" and state.protocol_revision >= total_revision_limit:
+            state.last_error = (
+                f"Protocol strategy exhausted {state.protocol_revision} complete revisions. "
+                f"Last defect: {_underlying_repair_defect(state.last_error)}"
+            )[-4000:]
+            force_block = True
         if force_block or state.repeated_defect_failures >= repair_limit:
             state.engineering_blocked = True
             persist(step_dir)
@@ -645,8 +651,11 @@ class ExperimentPipeline:
             "oracle on tiny known cases and cross-condition agreement over circular assertions or "
             "guessed search-tree sizes. A reproducibility check may "
             "require deterministic generated instances, decisions, and operation counts, but never "
-            "identical wall-clock timings. Use fixed seeds and a decision rule that is executable with "
-            "the stated samples. Preserve negative and null outcomes."
+            "identical wall-clock timings. `sample_sizes` means the number of independent experimental "
+            "units per condition, not input dimensions, bit widths, list lengths, or other parameter "
+            "values; put parameter regimes explicitly in condition descriptions and the analysis plan. "
+            "Use fixed seeds and a decision rule that is executable with the stated samples. Preserve "
+            "negative and null outcomes."
         )
         if revision:
             system += " Revise only the concrete preserved defect; do not return the same protocol."
@@ -697,7 +706,11 @@ class ExperimentPipeline:
                     "wall-clock measurements to be identical; timing is inherently noisy. Judge the "
                     "literal description, not implications guessed from an ID. Do not search for a flaw "
                     "when a criterion is satisfied and never mark it false while saying it is valid. A "
-                    "false detail must end with `Repair:` followed by one concrete imperative change."
+                    "false detail must end with `Repair:` followed by one concrete imperative change. "
+                    "Never infer that a determinism check includes runtime unless its literal description "
+                    "names timing. A specification baseline may intentionally compute the same predicate "
+                    "as the treatment through separate code; do not demand a different algorithm unless "
+                    "the frozen protocol requires one."
                 ),
             },
             {
@@ -744,9 +757,16 @@ class ExperimentPipeline:
                         "work_title": item.title,
                         "protocol": _program_protocol_context(state.protocol),
                         "previous_source": (
-                            state.program.python_code[:10_000]
-                            if revision and state.program is not None
+                            state.program.python_code
+                            if revision
+                            and state.program is not None
+                            and len(state.program.python_code) <= MAX_EXPERIMENT_SOURCE_CHARS
                             else None
+                        ),
+                        "previous_source_omitted_as_oversize": bool(
+                            revision
+                            and state.program is not None
+                            and len(state.program.python_code) > MAX_EXPERIMENT_SOURCE_CHARS
                         ),
                         "defect": state.last_error[:2_500] if revision else "",
                     },
@@ -767,7 +787,7 @@ class ExperimentPipeline:
         assert state.protocol is not None
         system = (
             "Return only compact raw Python source, with no Markdown fence, JSON wrapper, explanation, "
-            "unfinished comments, dead code, or placeholders. Keep the complete source under 12,000 "
+            "unfinished comments, dead code, or placeholders. Keep the complete source under 14,000 "
             "characters. Define run_experiment(mode: str) -> dict and implement the whole frozen protocol. "
             "Reserve the argument `mode` for the execution mode ('smoke' or 'full') and use names such "
             "as condition_id or solver_variant for experimental conditions. Near the start of that "
@@ -816,8 +836,10 @@ class ExperimentPipeline:
                 "Repair the exact preserved defect while retaining sound parts of the prior source. Do "
                 "not disable checks, discard measurements, hard-code outcomes, or change the frozen "
                 "protocol to make the run pass. Preserve run_experiment(mode: str) -> dict, the v2 "
-                "contract, tiny smoke behavior, negative/null outcomes, and requested artifacts. Keep "
-                "the complete replacement under 12,000 characters and verify its syntax before return. "
+                "contract, negative/null outcomes, and requested artifacts. In smoke mode, execute every "
+                "condition on at most ten independent units total and set each observation's sample_size "
+                "to the number of units represented, never an input dimension. Keep the complete "
+                "replacement under 14,000 characters and verify its syntax before return. "
                 "The returned dict must have exactly these top-level fields: schema_version=2, "
                 "experiment=str, status='completed'|'capped', parameters=dict, aggregate_metrics=dict "
                 "of scalar leaves, observations=list of {condition, sample_size, metrics}, checks=list "
@@ -852,12 +874,17 @@ class ExperimentPipeline:
                         "previous_program": (
                             {
                                 "description": state.program.description,
-                                "source": state.program.python_code[:14_000],
+                                "source": state.program.python_code,
                                 "seeds": state.program.seeds,
                             }
                             if state.program
+                            and len(state.program.python_code) <= MAX_EXPERIMENT_SOURCE_CHARS
                             and not (revision and state.repeated_program_candidates > 0)
                             else None
+                        ),
+                        "previous_program_omitted_as_oversize": bool(
+                            state.program
+                            and len(state.program.python_code) > MAX_EXPERIMENT_SOURCE_CHARS
                         ),
                         "defect": state.last_error[:2_500] if revision else "",
                         "agenda_constraints": research_context.get("agenda_constraints", []),
@@ -903,7 +930,12 @@ class ExperimentPipeline:
                         "that count, and significance tests are required only if the frozen protocol says "
                         "so. Full evidence requires every mandatory criterion; use preliminary for scoped "
                         "interpretable pilots and unusable for wrong metrics, invalid baselines, leakage, "
-                        "or failed implementation checks."
+                        "or failed implementation checks. An executable specification baseline is supposed "
+                        "to encode the same mathematical predicate as the treatment; separate implementation "
+                        "paths plus independent known-case checks are valid property-test evidence. Never "
+                        "demand Boyer-Moore, sorting, or another algorithm unless the literal frozen protocol "
+                        "requires it. Distinct condition IDs remain distinct observations even when their "
+                        "measured values are equal."
                     ),
                 },
                 {
@@ -946,7 +978,7 @@ class ExperimentPipeline:
 def _protocol_semantic_errors(
     item: WorkItem, protocol: ExperimentProtocol
 ) -> list[str]:
-    """Enforce an independent correctness anchor when the work promises validation."""
+    """Enforce independent anchors and keep result direction out of correctness checks."""
     requires_validation = bool(
         re.search(
             r"(?i)(?:correctness|validat(?:e|ion|ing)|known cases?|oracle)",
@@ -962,13 +994,41 @@ def _protocol_semantic_errors(
             check_text,
         )
     )
+    errors: list[str] = []
     if requires_validation and not independent:
-        return [
+        errors.append(
             "P_CHECKS: Add at least one independent known-case, exhaustive-oracle, round-trip, "
             "invariant, or ground-truth correctness check; cross-condition agreement alone can "
             "allow every implementation to be wrong."
-        ]
-    return []
+        )
+    directional_ids = [
+        check.id
+        for check in protocol.correctness_checks
+        if re.search(
+            r"(?i)(?:outperform|faster|slower|fewer|more nodes|lower (?:cost|runtime|time)|"
+            r"higher (?:accuracy|rate)|reduce[sd]? (?:cost|runtime|search|nodes)|"
+            r"improve[sd]?|statistically significant|better than|worse than)",
+            check.description,
+        )
+    ]
+    if directional_ids:
+        errors.append(
+            "P_CHECKS: Move expected performance direction out of correctness checks and into the "
+            "decision rule; negative and null results must still pass implementation validation: "
+            + ", ".join(directional_ids)
+        )
+    noisy_determinism_ids = [
+        check.id
+        for check in protocol.correctness_checks
+        if re.search(r"(?i)(?:determin|identical|repeat)", check.description)
+        and re.search(r"(?i)(?:wall[- ]?clock|runtime|timing|elapsed)", check.description)
+    ]
+    if noisy_determinism_ids:
+        errors.append(
+            "P_CHECKS: Determinism checks may compare generated inputs, outputs, and operation counts "
+            "but not wall-clock timings: " + ", ".join(noisy_determinism_ids)
+        )
+    return errors
 
 
 def _protocol_criteria() -> dict[str, str]:
@@ -1163,6 +1223,13 @@ def _underlying_program_defect(error: str) -> str:
     return error.rsplit(marker, 1)[-1].strip() if marker in error else error.strip()
 
 
+def _underlying_repair_defect(error: str) -> str:
+    marker = "Protocol repair made no semantic change. Correct the preserved defect:"
+    while marker in error:
+        error = error.split(marker, 1)[1]
+    return error.strip()
+
+
 def _defect_signature(error: str) -> str:
     """Return a stable category for bounded retries without conflating distinct defects."""
     import re
@@ -1253,16 +1320,23 @@ def _normalized_text(value: str) -> str:
 
 
 def _program_protocol_context(protocol: ExperimentProtocol) -> dict[str, Any]:
+    """Compact the protocol without discarding semantics needed by complete-file repairs."""
     return {
         "title": protocol.title,
         "hypothesis": protocol.hypothesis,
-        "condition_ids": [row.id for row in protocol.conditions],
-        "baseline_ids": [row.id for row in protocol.baselines],
-        "metric_ids": [row.id for row in protocol.metrics],
-        "correctness_check_ids": [row.id for row in protocol.correctness_checks],
+        "null_outcome": protocol.null_outcome,
+        "experimental_unit": protocol.experimental_unit,
+        "conditions": [row.model_dump(mode="json") for row in protocol.conditions],
+        "baselines": [row.model_dump(mode="json") for row in protocol.baselines],
+        "metrics": [row.model_dump(mode="json") for row in protocol.metrics],
+        "correctness_checks": [
+            row.model_dump(mode="json") for row in protocol.correctness_checks
+        ],
         "sample_sizes": protocol.sample_sizes,
         "seeds": protocol.seeds,
+        "analysis_plan": protocol.analysis_plan,
         "decision_rule": protocol.decision_rule,
+        "known_limitations": protocol.known_limitations,
     }
 
 

@@ -104,31 +104,86 @@ class DerivationPipeline:
             allow_repair=False,
         )
         review_ref = self.store.write_json(f"{run_dir}/derivation_review.json", review)
-        missing = _missing_criterion_reviews(item.success_criteria, review)
+        verification_review = self.router.complete_structured(
+            task_type="derivation_review",
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "Independently verify this mathematical derivation without trusting an earlier "
+                        "referee. Recompute the central transitions and actively seek one concrete "
+                        "counterexample. In particular check reduction direction, probability sample "
+                        "spaces, entropy versus cross-entropy, quantifier order, asymptotic error terms, "
+                        "and whether an if-and-only-if or necessity claim was only proved sufficient. "
+                        "Evaluate every work criterion. Reject exactly when a substantive validity or "
+                        "scope repair remains; do not reject cosmetic notation."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": json.dumps(
+                        {
+                            "work_item": item.model_dump(mode="json"),
+                            "derivation": derivation.model_dump(mode="json"),
+                        },
+                        ensure_ascii=False,
+                    ),
+                },
+            ],
+            schema=DerivationReview,
+            allow_repair=False,
+        )
+        verification_ref = self.store.write_json(
+            f"{run_dir}/derivation_verification_review.json", verification_review
+        )
+        reviews = [review, verification_review]
+        missing = [
+            missing_criterion
+            for current_review in reviews
+            for missing_criterion in _missing_criterion_reviews(
+                item.success_criteria, current_review
+            )
+        ]
         substantive_revisions = [
             revision
-            for revision in review.required_revisions
+            for current_review in reviews
+            for revision in current_review.required_revisions
             if not re.search(
                 r"(?i)(?:immutable|work[- ]item|hypothesis field|metadata)", revision
             )
         ]
-        metadata_only_rejection = (
-            not review.accepted
-            and bool(review.required_revisions)
-            and not substantive_revisions
-            and all(row.satisfied for row in review.criteria)
+        metadata_only_acceptance = all(
+            current_review.accepted
+            or (
+                bool(current_review.required_revisions)
+                and not [
+                    revision
+                    for revision in current_review.required_revisions
+                    if not re.search(
+                        r"(?i)(?:immutable|work[- ]item|hypothesis field|metadata)", revision
+                    )
+                ]
+                and all(row.satisfied for row in current_review.criteria)
+            )
+            for current_review in reviews
         )
         accepted = (
-            (review.accepted or metadata_only_rejection)
-            and review.confidence >= 0.65
+            metadata_only_acceptance
+            and all(current_review.confidence >= 0.65 for current_review in reviews)
             and not missing
-            and not review.fatal_issues
+            and not any(current_review.fatal_issues for current_review in reviews)
             and not substantive_revisions
         )
         if not accepted:
-            issues = [*review.fatal_issues, *substantive_revisions]
-            if review.accepted and review.confidence < 0.65:
-                issues.append(f"Referee confidence {review.confidence:.2f} is below 0.65.")
+            issues = [
+                *(issue for current_review in reviews for issue in current_review.fatal_issues),
+                *substantive_revisions,
+            ]
+            for index, current_review in enumerate(reviews, 1):
+                if current_review.accepted and current_review.confidence < 0.65:
+                    issues.append(
+                        f"Referee {index} confidence {current_review.confidence:.2f} is below 0.65."
+                    )
             if missing:
                 issues.append("Missing or failed criterion reviews: " + "; ".join(missing))
             return WorkResult(
@@ -137,7 +192,7 @@ class DerivationPipeline:
                 failure_class="method",
                 criteria=review.criteria,
                 summary="The derivation requires another targeted revision.",
-                artifact_refs=[input_ref, draft_ref, review_ref],
+                artifact_refs=[input_ref, draft_ref, review_ref, verification_ref],
                 errors=issues,
                 next_steps=substantive_revisions,
             )
@@ -162,7 +217,7 @@ class DerivationPipeline:
             polarity=polarity,
             strength=EvidenceStrength.substantive,
             scope="; ".join(derivation.assumptions),
-            evidence_refs=[draft_ref, review_ref],
+            evidence_refs=[draft_ref, review_ref, verification_ref],
             source_ids=[],
             caveats=[
                 "Accepted by an automated adversarial referee; not kernel checked.",
@@ -175,9 +230,9 @@ class DerivationPipeline:
             evidence_level="substantive",
             requirement_satisfied=True,
             criteria=review.criteria,
-            summary=review.summary,
+            summary=f"Two independent reviews accepted the derivation. {review.summary}",
             findings=[finding],
-            artifact_refs=[input_ref, draft_ref, review_ref],
+            artifact_refs=[input_ref, draft_ref, review_ref, verification_ref],
         )
 
 
