@@ -494,20 +494,27 @@ class ExperimentPipeline:
             add(self.store.write_json(f"{step_dir}/review.json", evidence_review))
             rows = _criterion_results(expected, evidence_review.criteria)
             if evidence_review.usable == "unusable":
-                final_result = WorkResult(
-                    work_id=item.work_id,
-                    outcome="partial",
-                    failure_class="method",
-                    attempt_class="scientific",
-                    criteria=rows,
-                    summary="Measurements were produced but failed scientific audit.",
-                    errors=evidence_review.issues,
-                    next_steps=evidence_review.follow_up,
+                # The audit sees the frozen protocol, complete execution summary, source digest,
+                # and a source excerpt.  Its concrete defect therefore belongs to this durable
+                # implementation strategy: repair the preserved complete source in place instead
+                # of throwing it away and asking a fresh strategy to rediscover the same fix.
+                # Repeated/no-op and cumulative revision limits still bound an irreparable design.
+                defects = list(
+                    dict.fromkeys(
+                        [*evidence_review.issues, *evidence_review.follow_up]
+                    )
                 )
-                state.final_result = final_result
-                state.stage = "complete"
-                persist(step_dir)
-                return final_result
+                state.final_result = None
+                state.stage = "program_revision"
+                return self._failure(
+                    item,
+                    state,
+                    step_dir,
+                    persist,
+                    "; ".join(defects)
+                    or "Scientific audit found unusable measurements: "
+                    + evidence_review.scientific_summary,
+                )
             full = evidence_review.usable == "full"
             finding = Finding(
                 work_id=item.work_id,
@@ -519,8 +526,8 @@ class ExperimentPipeline:
                 polarity=FindingPolarity(evidence_review.outcome),
                 strength=EvidenceStrength.strong if full else EvidenceStrength.preliminary,
                 scope=(
-                    f"Protocol `{state.protocol.title}`; sample sizes "
-                    f"{state.protocol.sample_sizes}; seeds {state.protocol.seeds}."
+                    f"Protocol `{state.protocol.title}`; {state.protocol.sample_size} "
+                    f"independent units per condition; seeds {state.protocol.seeds}."
                 ),
                 evidence_refs=execution.artifact_refs,
                 source_ids=[execution.run_id],
@@ -646,14 +653,24 @@ class ExperimentPipeline:
             "as comparators; overlap is required by the schema and is not a defect. Prefer the strongest "
             "scientifically valid requested comparator (often the simplest requested method). Never add "
             "a dummy, no-op, deliberately incorrect, or oracle condition merely to make a baseline look "
-            "separate. Include all dominant costs and requested parameter regimes. Correctness checks "
-            "test implementation validity, never the expected result. Prefer an independent exhaustive "
-            "oracle on tiny known cases and cross-condition agreement over circular assertions or "
-            "guessed search-tree sizes. A reproducibility check may "
+            "separate. Include all dominant costs and requested parameter regimes. Give every statistic "
+            "needed by the decision rule (p-values, intervals, effect sizes, or signed differences) a stable "
+            "ID in `analysis_metrics`; use the smallest sufficient set (at most eight), and return each in "
+            "aggregate_metrics. Correctness checks test implementation validity, never the expected result. "
+            "For every condition, add a computed integrity check whose description explicitly names that "
+            "condition ID and directly instruments its defining mechanism on a constructed fixture (for "
+            "example a feature counter, disabled-feature assertion, or exact branch trace). Never infer feature presence from "
+            "runtime, node-count improvement, or ordinary output differences. When implementation "
+            "correctness affects evidence, validate EVERY sampled unit against an independent exhaustive "
+            "oracle, reference implementation, round-trip, ground truth, or invariant; a few known fixtures "
+            "and cross-condition agreement are insufficient. Keep units small enough to make full-sample "
+            "validation feasible. A reproducibility check may "
             "require deterministic generated instances, decisions, and operation counts, but never "
-            "identical wall-clock timings. `sample_sizes` means the number of independent experimental "
-            "units per condition, not input dimensions, bit widths, list lengths, or other parameter "
-            "values; put parameter regimes explicitly in condition descriptions and the analysis plan. "
+            "identical wall-clock timings. `sample_size` is one scalar: the exact total number of "
+            "independent units that full mode must execute for EACH condition. It is not the number of "
+            "seeds, an input dimension, bit width, list length, or parameter value. Seeds are deterministic "
+            "entropy anchors; derive `sample_size` reproducible units from them rather than running one unit "
+            "per seed. Put parameter regimes explicitly in condition descriptions and the analysis plan. "
             "Use fixed seeds and a decision rule that is executable with the stated samples. Preserve "
             "negative and null outcomes."
         )
@@ -665,7 +682,7 @@ class ExperimentPipeline:
                 "role": "user",
                 "content": json.dumps(
                     {
-                        "work_item": item.model_dump(mode="json"),
+                        "work_item": _program_work_context(item),
                         "runtime_limits": {
                             "wall_seconds": max_wall,
                             "memory_mb": max_memory,
@@ -710,14 +727,20 @@ class ExperimentPipeline:
                     "Never infer that a determinism check includes runtime unless its literal description "
                     "names timing. A specification baseline may intentionally compute the same predicate "
                     "as the treatment through separate code; do not demand a different algorithm unless "
-                    "the frozen protocol requires one."
+                    "the frozen protocol requires one. P_CONDITIONS requires each condition ID to be explicitly "
+                    "named by its own direct instrumentation check on a constructed fixture, including assertions "
+                    "for features that must remain disabled. P_CHECKS requires an independent oracle, reference, "
+                    "round-trip, ground truth, or invariant on every sampled unit when correctness affects evidence; "
+                    "known-case output agreement alone is insufficient. A check must not infer feature presence from runtime or favorable/different "
+                    "node counts. P_ANALYSIS requires only the minimal stable named outputs sufficient for the "
+                    "decision rule."
                 ),
             },
             {
                 "role": "user",
                 "content": json.dumps(
                     {
-                        "work_item": item.model_dump(mode="json"),
+                        "work_item": _program_work_context(item),
                         "protocol": protocol.model_dump(mode="json"),
                         "agenda_constraints": research_context.get("agenda_constraints", []),
                         "criteria": [
@@ -787,22 +810,25 @@ class ExperimentPipeline:
         assert state.protocol is not None
         system = (
             "Return only compact raw Python source, with no Markdown fence, JSON wrapper, explanation, "
-            "unfinished comments, dead code, or placeholders. Keep the complete source under 14,000 "
+            "unfinished comments, dead code, or placeholders. Keep the complete source under 20,000 "
             "characters. Define run_experiment(mode: str) -> dict and implement the whole frozen protocol. "
             "Reserve the argument `mode` for the execution mode ('smoke' or 'full') and use names such "
             "as condition_id or solver_variant for experimental conditions. Near the start of that "
             "function, branch explicitly on mode (for example "
             "`sample_count = 1 if mode == 'smoke' else full_sample_count`) and actually use the selected "
             "bound. Smoke must run every condition on at most ten tiny units and finish well under 60 "
-            "seconds; full mode uses the frozen seeds and sample sizes. The function must return "
+            "seconds; full mode must execute exactly protocol.sample_size independent units for each "
+            "condition. The fixed seeds are entropy anchors: deterministically derive enough UNIQUE replicate "
+            "IDs/seeds to reach that count instead of cycling through the seed list. Return those exact unique "
+            "identifiers as the flat `parameters.unit_ids` list. The function must return "
             "this v2 shape: "
             "{'schema_version': 2, 'experiment': str, 'status': 'completed'|'capped', "
-            "'parameters': {str: scalar}, 'aggregate_metrics': {str: scalar}, "
+            "'parameters': {str: scalar}, 'aggregate_metrics': {str: scalar} containing every frozen "
+            "protocol analysis_metrics ID, "
             "'observations': [{'condition': str, 'sample_size': int, 'metrics': {str: scalar}}], "
-            "with one or more condition records. A record may summarize several units or represent one "
-            "replicate; sample_size states how many independent units that row represents. For one row "
-            "per replicate, sample_size must be 1, never a cumulative index, list length, or parameter "
-            "value. Preserve raw replicate records when they are needed for audit. "
+            "with exactly one record per condition/unit pair. Every observation sample_size must be 1; "
+            "never aggregate replicates, use a cumulative index, list length, or parameter value there. "
+            "The application deterministically checks record counts and unit identity provenance. "
             "'checks': [{'name': str, 'passed': bool, 'detail': str}], "
             "'conclusion': {'hypothesis': str, 'outcome': "
             "'supports'|'contradicts'|'null'|'inconclusive'|'characterizes', "
@@ -836,13 +862,15 @@ class ExperimentPipeline:
                 "Repair the exact preserved defect while retaining sound parts of the prior source. Do "
                 "not disable checks, discard measurements, hard-code outcomes, or change the frozen "
                 "protocol to make the run pass. Preserve run_experiment(mode: str) -> dict, the v2 "
-                "contract, negative/null outcomes, and requested artifacts. In smoke mode, execute every "
-                "condition on at most ten independent units total and set each observation's sample_size "
-                "to the number of units represented, never an input dimension. Keep the complete "
-                "replacement under 14,000 characters and verify its syntax before return. "
+                "contract, negative/null outcomes, and requested artifacts. Emit one observation per "
+                "condition/unit pair with sample_size=1 in both modes. In smoke mode, execute every "
+                "condition on at most ten unique units total. Return the exact unique IDs for executed "
+                "units in parameters.unit_ids. Keep the complete "
+                "replacement under 20,000 characters and verify its syntax before return. "
                 "The returned dict must have exactly these top-level fields: schema_version=2, "
                 "experiment=str, status='completed'|'capped', parameters=dict, aggregate_metrics=dict "
-                "of scalar leaves, observations=list of {condition, sample_size, metrics}, checks=list "
+                "of scalar leaves containing every frozen analysis_metrics ID, observations=list of "
+                "{condition, sample_size, metrics}, checks=list "
                 "of {name, passed, detail}, conclusion={hypothesis, outcome, basis_metrics, statement}, "
                 "and limitations=list[str]. Valid outcomes are supports, contradicts, null, "
                 "inconclusive, and characterizes. Reserve the run_experiment argument `mode` for only "
@@ -910,24 +938,24 @@ class ExperimentPipeline:
     ) -> ExperimentEvidenceReview:
         output = execution.validated_output
         return self.router.complete_structured(
-            task_type="experiment_review",
+            task_type="experiment_evidence_review",
             messages=[
                 {
                     "role": "system",
                     "content": (
                         "Audit measurements against the frozen protocol. Assess every supplied work "
                         "criterion ID exactly once and recompute conclusions from observations. Preserve "
-                        "sound negative and null outcomes. `source_excerpt` is intentionally only a "
-                        "prefix; never call the implementation truncated merely because the excerpt ends. "
-                        "The complete source is preserved in the listed execution artifacts and a successful "
-                        "execution imported it. The trusted wrapper invoked the validated output in full "
+                        "sound negative and null outcomes. The complete bounded source is supplied for direct "
+                        "audit. The trusted wrapper invoked the validated output in full "
                         "mode; do not infer otherwise from an inert __main__ default in the source. A work "
                         "strategy label such as bounded comparison or stress test never requests final "
                         "smoke-mode evidence: smoke is an engineering gate and the frozen full run is the "
-                        "scientific evidence. Repeated or equal measurements across distinct conditions are not by "
-                        "themselves evidence of a bug: require a failed oracle/check or a concrete code "
-                        "defect. One observation may aggregate multiple units when sample_size records "
-                        "that count, and significance tests are required only if the frozen protocol says "
+                        "scientific evidence. Inspect the actual condition dispatch, correctness checks, analysis, "
+                        "and conclusion. Repeated or equal measurements across distinct conditions are not by "
+                        "themselves evidence of a bug, but conditions that omit a defining frozen feature are "
+                        "invalid even if ordinary known cases pass. Require a failed oracle/check or a concrete "
+                        "code defect. The deterministic gate has already required one observation per "
+                        "condition/unit pair and exact unique unit IDs. Significance tests are required only if the frozen protocol says "
                         "so. Full evidence requires every mandatory criterion; use preliminary for scoped "
                         "interpretable pilots and unusable for wrong metrics, invalid baselines, leakage, "
                         "or failed implementation checks. An executable specification baseline is supposed "
@@ -942,7 +970,10 @@ class ExperimentPipeline:
                     "role": "user",
                     "content": json.dumps(
                         {
-                            "work_item": item.model_dump(mode="json"),
+                            "work_item": {
+                                "title": item.title,
+                                "hypothesis": item.hypothesis,
+                            },
                             "work_criteria": [
                                 {"criterion_id": f"W{index:02d}", "text": criterion}
                                 for index, criterion in enumerate(item.success_criteria, 1)
@@ -957,7 +988,7 @@ class ExperimentPipeline:
                                 "source_sha256": hashlib.sha256(
                                     program.python_code.encode("utf-8")
                                 ).hexdigest(),
-                                "source_excerpt": program.python_code[:4_000],
+                                "source": program.python_code,
                             },
                             "execution_artifacts": [
                                 ref.path for ref in execution.artifact_refs[:30]
@@ -995,11 +1026,49 @@ def _protocol_semantic_errors(
         )
     )
     errors: list[str] = []
+    missing_condition_integrity: list[str] = []
+    for condition in protocol.conditions:
+        direct_checks = [
+            check.description
+            for check in protocol.correctness_checks
+            if condition.id.lower() in check.description.lower()
+            and re.search(
+                r"(?i)(?:instrument|counter|trace|dispatch|feature flag|branch(?:ing)? (?:path|choice)|"
+                r"invok(?:e|ed|ation)|call(?:ed| count)|mechanism|must (?:remain|be) (?:zero|disabled))",
+                check.description,
+            )
+        ]
+        if not direct_checks:
+            missing_condition_integrity.append(condition.id)
+    if missing_condition_integrity:
+        errors.append(
+            "P_CONDITIONS: Add a direct computed counter, trace, dispatch, or feature-flag check "
+            "that explicitly names each condition (including features that must remain disabled): "
+            + ", ".join(missing_condition_integrity)
+        )
     if requires_validation and not independent:
         errors.append(
             "P_CHECKS: Add at least one independent known-case, exhaustive-oracle, round-trip, "
             "invariant, or ground-truth correctness check; cross-condition agreement alone can "
             "allow every implementation to be wrong."
+        )
+    full_sample_validation = bool(
+        re.search(
+            r"(?i)(?:every|each|all) (?:sampled |generated |experimental )?"
+            r"(?:unit|instance|sample|observation|input|record)s?",
+            check_text,
+        )
+        and re.search(
+            r"(?i)(?:oracle|reference implementation|round[- ]?trip|ground truth|invariant|"
+            r"exhaustive)",
+            check_text,
+        )
+    )
+    if requires_validation and not full_sample_validation:
+        errors.append(
+            "P_CHECKS: Validate every sampled unit against an independent oracle, reference, "
+            "round-trip, ground truth, or invariant; known fixtures alone do not validate the "
+            "scientific measurements."
         )
     directional_ids = [
         check.id
@@ -1020,15 +1089,46 @@ def _protocol_semantic_errors(
     noisy_determinism_ids = [
         check.id
         for check in protocol.correctness_checks
-        if re.search(r"(?i)(?:determin|identical|repeat)", check.description)
-        and re.search(r"(?i)(?:wall[- ]?clock|runtime|timing|elapsed)", check.description)
+        if _requires_repeated_timing(check.description)
     ]
     if noisy_determinism_ids:
         errors.append(
             "P_CHECKS: Determinism checks may compare generated inputs, outputs, and operation counts "
             "but not wall-clock timings: " + ", ".join(noisy_determinism_ids)
         )
+    analysis_text = " ".join(
+        f"{metric.id} {metric.description}" for metric in protocol.analysis_metrics
+    )
+    required_analysis_concepts = [
+        (r"(?i)\b(?:confidence interval|\d+%\s*ci|ci\b)", r"(?i)\b(?:confidence interval|ci\b)", "confidence interval"),
+        (r"(?i)\bp[- ]?values?\b", r"(?i)\bp[- ]?values?\b", "p-value"),
+        (r"(?i)\beffect sizes?\b", r"(?i)\beffect sizes?\b", "effect size"),
+    ]
+    for decision_pattern, metric_pattern, label in required_analysis_concepts:
+        if re.search(decision_pattern, protocol.decision_rule) and not re.search(
+            metric_pattern, analysis_text
+        ):
+            errors.append(
+                f"P_ANALYSIS: The decision rule requires a {label}, but no analysis_metrics ID "
+                "names that required statistic."
+            )
     return errors
+
+
+def _requires_repeated_timing(description: str) -> bool:
+    """Detect noisy timing equality checks without rejecting explicit timing exclusions."""
+    if not re.search(r"(?i)(?:determin|identical|repeat)", description):
+        return False
+    if not re.search(r"(?i)(?:wall[- ]?clock|runtime|timing|elapsed)", description):
+        return False
+    if re.search(
+        r"(?i)(?:exclude[sd]?|omit(?:ted)?|do not (?:compare|check|require)|not (?:used|included|"
+        r"compared|required)|may vary|allowed? to vary|descriptive (?:use|purposes?) only|"
+        r"not for determinism)",
+        description,
+    ):
+        return False
+    return True
 
 
 def _protocol_criteria() -> dict[str, str]:
@@ -1040,7 +1140,14 @@ def _protocol_criteria() -> dict[str, str]:
             "conditions; no dummy, knowingly incorrect, or irrelevant control is introduced."
         ),
         "P_CHECKS": "Correctness checks test implementation validity, not result direction.",
-        "P_SAMPLING": "Seeds, sample sizes, and analysis are reproducible and feasible.",
+        "P_CONDITIONS": (
+            "When conditions differ by implementation features, direct counters or traces on constructed "
+            "fixtures validate each defining feature; output agreement and performance differences do not."
+        ),
+        "P_ANALYSIS": (
+            "Stable analysis-metric IDs name every statistic needed to execute the decision rule."
+        ),
+        "P_SAMPLING": "Seeds, sample size, and analysis are reproducible and feasible.",
         "P_COSTS": "Dominant scientific costs and executable resource limits are represented.",
     }
 
@@ -1191,18 +1298,79 @@ def _protocol_output_errors(
                 f"Observation `{observation.condition}` omitted protocol metrics: "
                 + ", ".join(missing_metrics)
             )
-    if smoke:
-        for condition in observed_conditions:
-            represented = sum(
-                observation.sample_size
-                for observation in output.observations
-                if observation.condition == condition
+    missing_analysis = sorted(
+        {metric.id for metric in protocol.analysis_metrics}
+        - set(output.aggregate_metrics)
+    )
+    if missing_analysis:
+        errors.append(
+            "Output omitted frozen analysis metrics: " + ", ".join(missing_analysis)
+        )
+    completion_metrics = {
+        metric.id
+        for metric in protocol.metrics
+        if re.search(
+            r"(?i)boolean.*true if.*(?:completed|valid result|within (?:the )?(?:time|resource)|"
+            r"found .* or proved)",
+            metric.description,
+        )
+    }
+    for metric_id in sorted(completion_metrics):
+        failed_units = sum(
+            observation.sample_size
+            for observation in output.observations
+            if observation.metrics.get(metric_id) is False
+        )
+        if failed_units:
+            errors.append(
+                f"Declared completion metric `{metric_id}` was false for {failed_units} represented "
+                "units; do not treat SAT/UNSAT truth as run completion or accept timed-out units as "
+                "valid completed measurements."
             )
-            if represented > 10:
-                errors.append(
-                    f"Smoke condition `{condition}` represented {represented} units; "
-                    "the smoke limit is 10."
-                )
+    represented_by_condition: dict[str, int] = {}
+    for condition in expected_conditions & observed_conditions:
+        rows = [
+            observation
+            for observation in output.observations
+            if observation.condition == condition
+        ]
+        aggregated = sum(observation.sample_size != 1 for observation in rows)
+        if aggregated:
+            errors.append(
+                f"Condition `{condition}` has {aggregated} aggregated observation rows; emit one "
+                "sample_size=1 record per independent unit."
+            )
+        represented = sum(observation.sample_size for observation in rows)
+        represented_by_condition[condition] = represented
+        if smoke and represented > 10:
+            errors.append(
+                f"Smoke condition `{condition}` represented {represented} units; "
+                "the smoke limit is 10."
+            )
+        if not smoke and represented != protocol.sample_size:
+            errors.append(
+                f"Full condition `{condition}` represented {represented} units; the frozen "
+                f"sample_size requires exactly {protocol.sample_size}."
+            )
+    expected_units = (
+        protocol.sample_size
+        if not smoke
+        else (max(represented_by_condition.values()) if represented_by_condition else 0)
+    )
+    unit_ids = output.parameters.get("unit_ids")
+    if not isinstance(unit_ids, list):
+        errors.append("Output parameters must contain the exact flat `unit_ids` list.")
+    else:
+        stable_ids = [json.dumps(value, sort_keys=True) for value in unit_ids]
+        if len(unit_ids) != expected_units:
+            errors.append(
+                f"Output unit_ids has {len(unit_ids)} entries; execution represents "
+                f"{expected_units} independent units per condition."
+            )
+        if len(stable_ids) != len(set(stable_ids)):
+            errors.append(
+                "Output unit_ids contains duplicates; repeated copies are not independent units."
+            )
 
     expected_checks = {check.id for check in protocol.correctness_checks}
     check_names = [check.name for check in output.checks]
@@ -1329,10 +1497,13 @@ def _program_protocol_context(protocol: ExperimentProtocol) -> dict[str, Any]:
         "conditions": [row.model_dump(mode="json") for row in protocol.conditions],
         "baselines": [row.model_dump(mode="json") for row in protocol.baselines],
         "metrics": [row.model_dump(mode="json") for row in protocol.metrics],
+        "analysis_metrics": [
+            row.model_dump(mode="json") for row in protocol.analysis_metrics
+        ],
         "correctness_checks": [
             row.model_dump(mode="json") for row in protocol.correctness_checks
         ],
-        "sample_sizes": protocol.sample_sizes,
+        "sample_size": protocol.sample_size,
         "seeds": protocol.seeds,
         "analysis_plan": protocol.analysis_plan,
         "decision_rule": protocol.decision_rule,
@@ -1378,10 +1549,24 @@ def _dry_protocol(
             NamedDescription(id="baseline", description="Strong baseline implementation.")
         ],
         metrics=[NamedDescription(id="measured_value", description="Primary measured value.")],
-        correctness_checks=[
-            NamedDescription(id="roundtrip", description="Round-trip reconstruction succeeds.")
+        analysis_metrics=[
+            NamedDescription(id="signed_difference", description="Signed condition difference.")
         ],
-        sample_sizes=[10],
+        correctness_checks=[
+            NamedDescription(
+                id="roundtrip",
+                description="Round-trip reconstruction succeeds for every sampled experimental unit.",
+            ),
+            NamedDescription(
+                id="treatment_dispatch",
+                description="Instrument treatment dispatch and verify its feature flag is invoked.",
+            ),
+            NamedDescription(
+                id="baseline_dispatch",
+                description="Instrument baseline dispatch and verify its feature flag remains disabled.",
+            ),
+        ],
+        sample_size=10,
         seeds=[0],
         analysis_plan="Compare condition measurements and preserve every observation.",
         decision_rule="Classify supports, contradicts, or null from the signed difference.",
@@ -1397,7 +1582,7 @@ def _dry_program(item: WorkItem, protocol: ExperimentProtocol) -> ExperimentProg
     output = ExperimentOutput(
         experiment="dry-run protocol implementation",
         parameters={"seed": protocol.seeds[0], "dry_run": True},
-        aggregate_metrics={"difference": 0.0},
+        aggregate_metrics={"signed_difference": 0.0},
         observations=[
             ExperimentObservation(
                 condition=condition.id,

@@ -114,7 +114,7 @@ same OpenAI-compatible endpoint; profiles differ only in sampling, output budget
 thinking is enabled. This avoids loading separate extraction and proof models.
 
 The server defaults to `Qwen/Qwen3.6-35B-A3B`, tensor parallel size 4, and a 32,768-token model limit.
-The application separately limits request input to 30,000 characters and output to at most 12,288
+The application separately limits request input to 50,000 characters and output to at most 12,288
 tokens. Reasoning and proof calls enable thinking; control, coding, and formatting calls disable it.
 Historical thinking is never preserved because calls are fresh.
 
@@ -225,7 +225,7 @@ emits one complete replacement file from the exact defect and prior source; frag
 chains are not used. Two repairs per outer cycle preserve fairness. Repeated/no-op defects stop
 quickly, and a configurable cumulative source-revision cap eventually retires an oscillating program
 strategy so that a fresh strategy or unrelated requirement can run. Repairable programs are capped
-at 14,000 characters so accepted prior source is supplied in full; oversize candidates are replaced
+at 20,000 characters so accepted prior source is supplied in full; oversize candidates are replaced
 rather than repaired from truncated context.
 
 The model implements `run_experiment(mode: str) -> dict`. A trusted wrapper owns the entry point,

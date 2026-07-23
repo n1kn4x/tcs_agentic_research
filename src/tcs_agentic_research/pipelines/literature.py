@@ -63,7 +63,12 @@ class LiteraturePipeline:
                 "role": "user",
                 "content": json.dumps(
                     {
-                        "work_item": item.model_dump(mode="json"),
+                        "work_item": {
+                            "title": item.title,
+                            "instruction": item.instruction,
+                            "hypothesis": item.hypothesis,
+                            "success_criteria": item.success_criteria,
+                        },
                         "research_objective": (research_context or {}).get(
                             "research_objective", ""
                         ),
@@ -112,12 +117,15 @@ class LiteraturePipeline:
             for candidate in _rank_candidates(
                 candidates,
                 preferred_titles=plan.known_source_titles,
-                relevance_queries=plan.search_queries,
+                relevance_queries=[fallback_query, *plan.search_queries],
             )
             if _candidate_is_relevant_and_extractable(
                 candidate,
                 preferred_titles=plan.known_source_titles,
-                relevance_queries=plan.search_queries,
+                relevance_queries=[fallback_query, *plan.search_queries],
+            )
+            and _preserves_required_acronyms(
+                item, f"{candidate.title} {candidate.abstract or ''}"
             )
         ]
         imported: list[Any] = []
@@ -221,7 +229,7 @@ class LiteraturePipeline:
                 task_type="literature_review",
                 messages=review_messages,
                 schema=LiteratureEvidenceReview,
-                allow_repair=False,
+                allow_repair=True,
             )
             refs.append(self.store.write_json(f"{run_dir}/evidence_review.json", review))
             if not review.selections:
@@ -254,7 +262,7 @@ class LiteraturePipeline:
                         },
                     ],
                     schema=LiteratureEvidenceReview,
-                    allow_repair=False,
+                    allow_repair=True,
                 )
                 refs.append(
                     self.store.write_json(f"{run_dir}/evidence_review_retry.json", review)

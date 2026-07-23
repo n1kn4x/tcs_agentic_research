@@ -928,7 +928,7 @@ class ResearchEngine:
                     {
                         "work_id": experiment.work_id,
                         "description": experiment.program.description,
-                        "source": experiment.program.python_code[:6_000],
+                        "source": experiment.program.python_code,
                         "audit_defects": (
                             [
                                 *experiment.final_result.errors,

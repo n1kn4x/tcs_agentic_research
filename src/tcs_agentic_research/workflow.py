@@ -34,7 +34,7 @@ from .schemas import (
 )
 
 
-MAX_EXPERIMENT_SOURCE_CHARS = 14_000
+MAX_EXPERIMENT_SOURCE_CHARS = 20_000
 
 
 def requirement_index(
@@ -848,6 +848,20 @@ def _validate_experiment_program(program: Any) -> None:
     ]
     if not meaningful_body:
         raise ValueError("run_experiment contains only an unfinished `pass` placeholder")
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Dict):
+            continue
+        for key, value in zip(node.keys, node.values):
+            if (
+                isinstance(key, ast.Constant)
+                and key.value == "passed"
+                and isinstance(value, ast.Constant)
+                and isinstance(value.value, bool)
+            ):
+                raise ValueError(
+                    "experiment checks may not hard-code a literal passed value; compute each "
+                    "protocol check from executed validation"
+                )
     unsafe_top_level = next(
         (node for node in tree.body if not _safe_experiment_top_level(node)), None
     )

@@ -328,10 +328,13 @@ def test_protocol_requires_a_distinct_treatment_condition() -> None:
             conditions=conditions,
             baselines=conditions,
             metrics=[NamedDescription(id="bits", description="Encoded bits.")],
+            analysis_metrics=[
+                NamedDescription(id="mean_difference", description="Mean encoded-bit difference.")
+            ],
             correctness_checks=[
                 NamedDescription(id="roundtrip", description="Decode equals input.")
             ],
-            sample_sizes=[10],
+            sample_size=10,
             seeds=[1],
             analysis_plan="Compare mean encoded bits to literal coding.",
             decision_rule="Classify from the signed paired difference.",
@@ -358,6 +361,9 @@ def test_protocol_rejects_hypothesis_direction_as_a_correctness_check() -> None:
         ],
         baselines=[NamedDescription(id="baseline", description="Baseline algorithm.")],
         metrics=[NamedDescription(id="nodes", description="Visited node count.")],
+        analysis_metrics=[
+            NamedDescription(id="paired_difference", description="Paired node-count difference.")
+        ],
         correctness_checks=[
             NamedDescription(
                 id="known_cases", description="Compare outputs with exhaustive known answers."
@@ -366,7 +372,7 @@ def test_protocol_rejects_hypothesis_direction_as_a_correctness_check() -> None:
                 id="must_win", description="Verify treatment visits fewer nodes than baseline."
             ),
         ],
-        sample_sizes=[10],
+        sample_size=10,
         seeds=[1],
         analysis_plan="Compare paired node counts after validating outputs.",
         decision_rule="Classify from the paired node-count difference.",
@@ -379,6 +385,59 @@ def test_protocol_rejects_hypothesis_direction_as_a_correctness_check() -> None:
     errors = _protocol_semantic_errors(item, protocol)
 
     assert any("must_win" in error and "result" in error for error in errors)
+    assert any("P_CONDITIONS" in error for error in errors)
+
+    excluded_timing = protocol.model_copy(
+        update={
+            "correctness_checks": [
+                NamedDescription(
+                    id="known_cases", description="Compare outputs with exhaustive known answers."
+                ),
+                NamedDescription(
+                    id="determinism",
+                    description=(
+                        "Repeat generated inputs and operation counts. Runtime is excluded from this "
+                        "check because wall-clock timing may vary."
+                    ),
+                ),
+            ]
+        }
+    )
+    assert not any(
+        "wall-clock" in error
+        for error in _protocol_semantic_errors(item, excluded_timing)
+    )
+
+    invalid_timing = excluded_timing.model_copy(
+        update={
+            "correctness_checks": [
+                NamedDescription(
+                    id="known_cases", description="Compare outputs with exhaustive known answers."
+                ),
+                NamedDescription(
+                    id="determinism",
+                    description="Repeat each run and require identical wall-clock runtime.",
+                ),
+            ]
+        }
+    )
+    assert any(
+        "wall-clock" in error
+        for error in _protocol_semantic_errors(item, invalid_timing)
+    )
+
+    missing_ci = excluded_timing.model_copy(
+        update={
+            "decision_rule": (
+                "Support the claim only when the signed difference is negative and its 95% "
+                "confidence interval excludes zero."
+            )
+        }
+    )
+    assert any(
+        "confidence interval" in error
+        for error in _protocol_semantic_errors(item, missing_ci)
+    )
 
 
 def test_protocol_requires_an_independent_correctness_anchor() -> None:
@@ -397,12 +456,15 @@ def test_protocol_requires_an_independent_correctness_anchor() -> None:
         ],
         baselines=[NamedDescription(id="baseline", description="Baseline implementation.")],
         metrics=[NamedDescription(id="cost", description="Measured operation count.")],
+        analysis_metrics=[
+            NamedDescription(id="signed_difference", description="Signed operation-count difference.")
+        ],
         correctness_checks=[
             NamedDescription(
                 id="agreement", description="Verify both implementations return the same answer."
             )
         ],
-        sample_sizes=[10],
+        sample_size=10,
         seeds=[1],
         analysis_plan="Compare paired operation counts and preserve every result.",
         decision_rule="Classify from the signed paired operation-count difference.",
@@ -414,7 +476,8 @@ def test_protocol_requires_an_independent_correctness_anchor() -> None:
 
     errors = _protocol_semantic_errors(item, protocol)
 
-    assert errors and "independent" in errors[0]
+    assert any("independent" in error for error in errors)
+    assert any("every sampled unit" in error for error in errors)
 
 
 def test_failed_protocol_assessment_detail_becomes_repair_input() -> None:
@@ -824,6 +887,17 @@ def test_generated_code_and_proof_contracts_are_application_bound(tmp_path: Path
                 source="def helper(mode: str) -> dict:\n    return {}",
             )
         )
+    with pytest.raises(ValueError, match="hard-code a literal passed value"):
+        _validate_experiment_program(
+            ExperimentProgram(
+                description="Check outcomes must be computed from executed validation.",
+                source=(
+                    "def run_experiment(mode: str) -> dict:\n"
+                    "    count = 1 if mode == 'smoke' else 2\n"
+                    "    return {'count': count, 'checks': [{'name': 'oracle', 'passed': True}]}\n"
+                ),
+            )
+        )
     with pytest.raises(ValueError, match="trusted wrapper owns the entry point"):
         _validate_experiment_program(
             ExperimentProgram(
@@ -1191,10 +1265,13 @@ def test_raw_replicate_observations_are_valid_and_review_context_is_bounded() ->
         ],
         baselines=[NamedDescription(id="baseline", description="Baseline algorithm.")],
         metrics=[NamedDescription(id="cost", description="Measured operation count.")],
+        analysis_metrics=[
+            NamedDescription(id="mean_difference", description="Paired mean cost difference.")
+        ],
         correctness_checks=[
             NamedDescription(id="known_cases", description="Known outputs are correct.")
         ],
-        sample_sizes=[200],
+        sample_size=200,
         seeds=[1, 2],
         analysis_plan="Compare paired operation counts over all preserved instances.",
         decision_rule="Classify from the signed paired mean difference.",
@@ -1205,7 +1282,7 @@ def test_raw_replicate_observations_are_valid_and_review_context_is_bounded() ->
     )
     output = ExperimentOutput(
         experiment="raw replicate comparison",
-        parameters={"seeds": [1, 2]},
+        parameters={"seeds": [1, 2], "unit_ids": list(range(200))},
         aggregate_metrics={"mean_difference": -1.0},
         observations=[
             ExperimentObservation(
@@ -1227,6 +1304,37 @@ def test_raw_replicate_observations_are_valid_and_review_context_is_bounded() ->
     )
 
     assert _protocol_output_errors(protocol, output, smoke=False) == []
+    incomplete = output.model_copy(update={"observations": output.observations[:2]})
+    count_errors = _protocol_output_errors(protocol, incomplete, smoke=False)
+    assert len([error for error in count_errors if "sample_size" in error]) == 2
+
+    completion_protocol = protocol.model_copy(
+        update={
+            "metrics": [
+                *protocol.metrics,
+                NamedDescription(
+                    id="completed",
+                    description=(
+                        "Boolean: True if the algorithm produced a valid result within the time limit."
+                    ),
+                ),
+            ]
+        }
+    )
+    incomplete_runs = output.model_copy(
+        update={
+            "observations": [
+                row.model_copy(update={"metrics": {**row.metrics, "completed": False}})
+                for row in output.observations
+            ]
+        }
+    )
+    assert any(
+        "completion metric" in error
+        for error in _protocol_output_errors(
+            completion_protocol, incomplete_runs, smoke=False
+        )
+    )
     context = _evidence_output_context(output)
     assert context["raw_observation_count"] == 400
     assert len(context["observation_examples"]) == 2

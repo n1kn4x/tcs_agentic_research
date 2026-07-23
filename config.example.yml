@@ -35,7 +35,7 @@ router:
   default_profile: reasoning
   repair_profile: format
   timeout_seconds: 600
-  max_input_chars: 30000
+  max_input_chars: 50000
   max_output_tokens: 12288
   repair_attempts: 1
   profiles:
@@ -56,6 +56,7 @@ router:
         - proof_formulation_review
         - experiment_implementation
         - experiment_debug
+        - experiment_evidence_review
       extra_body:
         top_p: 0.95
         top_k: 20

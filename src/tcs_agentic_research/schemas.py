@@ -548,8 +548,9 @@ class ExperimentProtocol(StrictModel):
     conditions: list[NamedDescription] = Field(min_length=2, max_length=12)
     baselines: list[NamedDescription] = Field(min_length=1, max_length=8)
     metrics: list[NamedDescription] = Field(min_length=1, max_length=12)
+    analysis_metrics: list[NamedDescription] = Field(min_length=1, max_length=8)
     correctness_checks: list[NamedDescription] = Field(min_length=1, max_length=10)
-    sample_sizes: list[int] = Field(min_length=1, max_length=10)
+    sample_size: int = Field(ge=1, le=200)
     seeds: list[int] = Field(min_length=1, max_length=20)
     analysis_plan: str = Field(min_length=10, max_length=2000)
     decision_rule: str = Field(min_length=10, max_length=1200)
@@ -564,6 +565,7 @@ class ExperimentProtocol(StrictModel):
             ("conditions", self.conditions),
             ("baselines", self.baselines),
             ("metrics", self.metrics),
+            ("analysis_metrics", self.analysis_metrics),
             ("correctness_checks", self.correctness_checks),
         ]:
             ids = [value.id for value in values]
@@ -664,7 +666,7 @@ class ExperimentOutput(StrictModel):
     status: Literal["completed", "capped"] = "completed"
     parameters: dict[str, JSONParameter] = Field(min_length=1, max_length=50)
     aggregate_metrics: dict[str, JSONScalar] = Field(min_length=1, max_length=200)
-    observations: list[ExperimentObservation] = Field(default_factory=list, max_length=1000)
+    observations: list[ExperimentObservation] = Field(default_factory=list, max_length=3000)
     checks: list[ExperimentCheck] = Field(min_length=1, max_length=200)
     conclusion: ExperimentConclusion
     limitations: list[str] = Field(min_length=1, max_length=20)
@@ -1017,7 +1019,7 @@ class RouterSettings(StrictModel):
     default_profile: str = "reasoning"
     repair_profile: str = "format"
     timeout_seconds: float = 600.0
-    max_input_chars: int = 30000
+    max_input_chars: int = 50000
     max_output_tokens: int = 8192
     repair_attempts: int = Field(default=1, ge=0, le=1)
     profiles: dict[str, ModelProfile]
