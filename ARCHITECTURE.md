@@ -10,10 +10,6 @@ The kernel does **not**:
 - ask a model whether another model's prose is true;
 - infer that a project is scientifically complete.
 
-Those responsibilities caused the previous system's worst failures. A bad initial decomposition
-became permanent, generic experiment schemas leaked concepts between domains, and correlated model
-reviews promoted false derivations.
-
 ## One abstraction: an autonomous subsystem
 
 A subsystem implements two methods:
@@ -49,7 +45,7 @@ InitialResearchTask.md
  subsystem proposes one action                       |
          |                                           |
          v                                           |
- Actions.jsonl: proposed -> running                   |
+ Actions.jsonl: proposed -> running                  |
          |                                           |
          v                                           |
  subsystem executes domain-specific work             |
@@ -74,17 +70,8 @@ A record has one of three statuses, assigned only by deterministic policy:
 - `observed`: exact validated source span, hashed source metadata, or exactly replicated execution;
 - `verified`: placeholder-free Lean theorem accepted by the configured compiler.
 
-There is deliberately no generic `accepted`, `supported`, or `conclusive` status. In particular:
-
-- model confidence does nothing;
-- a second model review does nothing;
-- a generated report does nothing;
-- an experiment program's interpretation remains unverified prose;
-- a source quote establishes what the source says, not that the source is correct;
-- a Lean parent link expresses intended relevance, while only the proposition is verified.
-
 Contradictions are represented by immutable challenge/counterexample records linked to earlier
-records. The kernel does not silently mutate history into a single current truth value.
+records.
 
 ## Persistence and interruption
 
@@ -119,8 +106,7 @@ subsystems again, potentially after task edits, new records, imported sources, o
 
 ## Experiments
 
-The universal SAT-shaped experiment blueprint and multi-stage repair machine were removed.
-An experiment subsystem now emits a direct, domain-specific `run_experiment(mode)` program. The
+An experiment subsystem emits a direct, domain-specific `run_experiment(mode)` program. The
 networkless runner owns process limits and `results.json`; the output contract contains only:
 
 - protocol;
@@ -139,11 +125,9 @@ execution, not sound methodology or causality.
 - Records are immutable and content-deduplicated.
 - Actions are fingerprinted and exact repeats are skipped.
 - Every actor receives prior cross-subsystem records.
-- Each actor owns a small persistent state rather than forcing its stages into a global schema.
+- Each actor owns a small persistent state.
 - Failed work becomes a tentative obstruction record, so another actor can respond to it.
-- No arbitrary attempt cap erases a promising line, and no global completion bit stops inquiry.
-- Only external receipts raise epistemic status, preventing prose volume from masquerading as
-  progress.
+- Only external receipts raise epistemic status progress.
 
 ## Testing
 
@@ -151,5 +135,4 @@ Kernel tests use tiny scripted subsystems. They test fairness, crash recovery, d
 revision, shared-memory flow, and idle semantics without a model, network, Docker, or Lean.
 
 Evidence-policy tests independently test each trust boundary. Literature, experiment containment,
-and LEAP retain their own focused service tests. There is no end-to-end test that hopes a planner
-happens to invent the right decomposition.
+and LEAP retain their own focused service tests.

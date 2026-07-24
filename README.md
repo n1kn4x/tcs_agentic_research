@@ -1,10 +1,9 @@
 # Cumulative Agentic TCS Research
 
 A small runtime for long-running research in which **subsystems choose the research actions** and a
-non-semantic kernel provides durable shared memory, fair scheduling, crash recovery, and strict
+non-semantic kernel provides durable shared memory, round-robin subsytem scheduling, crash recovery, and strict
 evidence labels.
 
-The kernel never decomposes the project, builds deliverables, or decides that research is complete.
 See [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
 ## Design rules
@@ -15,7 +14,6 @@ See [`ARCHITECTURE.md`](ARCHITECTURE.md).
 4. Model prose is always `tentative`, even after model review.
 5. Exact source spans and exactly replicated execution are `observed`.
 6. Only placeholder-free, compiler-accepted Lean propositions are `verified`.
-7. Runtime idleness is not scientific completion.
 
 ## Installation
 
@@ -52,9 +50,6 @@ LeanProject/                  only when proof is used
 ExperimentRuns/               only when experiments are used
 ```
 
-There is no Agenda, Queue, requirement board, contribution counter, deliverable planner, or global
-`complete` flag.
-
 ## Running
 
 ```bash
@@ -66,7 +61,7 @@ tcs-research status --workspace workspaces/demo --config config.yml
 tcs-research records --workspace workspaces/demo --config config.yml --limit 20
 ```
 
-`--max-steps` is the number of subsystem action opportunities, not a promise of scientific progress.
+`--max-steps` is the number of subsystem action opportunities.
 Actions are offered round-robin. A run stops early after every enabled subsystem yields once.
 
 Run a module in isolation:
@@ -80,7 +75,7 @@ tcs-research run --workspace workspaces/demo --config config.yml \
 ```
 
 Repeat `--subsystem` to enable a selected set. This is the preferred way to diagnose and acceptance-
-test one capability; no orchestrator decomposition is involved.
+test one capability;
 
 A deterministic control-flow dry run exercises only the tentative notebook path and performs no
 network, Docker, or proof work:
@@ -90,6 +85,8 @@ tcs-research run --workspace workspaces/demo --dry-run --subsystem theory --max-
 ```
 
 ## Evidence semantics
+
+A record has one of three statuses, assigned only by deterministic policy:
 
 ### Tentative
 
@@ -168,8 +165,8 @@ memory, file, output, and wall-time limits.
 
 ## Model serving
 
-The supplied configuration routes fresh OpenAI-compatible requests to one Qwen endpoint. No actor
-receives a general tool loop. Start the example vLLM service with:
+The supplied configuration routes fresh OpenAI-compatible requests to one Qwen endpoint.
+Start the example vLLM service with:
 
 ```bash
 docker compose -f docker-compose.vllm.yml up
