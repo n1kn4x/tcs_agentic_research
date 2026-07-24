@@ -268,6 +268,7 @@ class WorkResult(StrictModel):
     ] = "none"
     attempt_class: Literal["engineering", "scientific"] = "scientific"
     continue_work: bool = False
+    recovery_scope: Literal["strategy", "design", "implementation"] = "strategy"
     evidence_level: Literal["none", "preliminary", "substantive", "conclusive"] = "none"
     requirement_satisfied: bool = False
     criteria: list[CriterionResult] = Field(default_factory=list)
@@ -538,8 +539,273 @@ class NamedDescription(StrictModel):
     description: str = Field(min_length=3, max_length=1200)
 
 
+class ExperimentConditionSpec(StrictModel):
+    """One implementation under comparison, with an explicit scientific role."""
+
+    id: str = Field(pattern=r"^[A-Za-z][A-Za-z0-9_.-]{0,63}$")
+    role: Literal["treatment", "baseline"]
+    description: str = Field(min_length=10, max_length=1200)
+    implementation_requirements: list[str] = Field(min_length=1, max_length=8)
+
+
+class ExperimentMetricSpec(StrictModel):
+    """A deterministic raw per-unit measurement produced by the study implementation.
+
+    Wall time is always owned by the trusted harness (reserved ID ``harness_wall_seconds`` or an
+    explicitly registered ``source=harness_wall_seconds`` alias). Generated code owns only metrics
+    whose source is ``implementation``.
+    """
+
+    id: str = Field(pattern=r"^[A-Za-z][A-Za-z0-9_.-]{0,63}$")
+    description: str = Field(min_length=5, max_length=800)
+    value_type: Literal["integer", "real", "boolean"]
+    role: Literal["performance", "mechanism", "quality"]
+    source: Literal["implementation", "harness_wall_seconds"] = "implementation"
+    deterministic: bool = True
+
+
+class ExperimentAnalysisSpec(StrictModel):
+    """A machine-executable aggregate; prose is never parsed to select an operation."""
+
+    id: str = Field(pattern=r"^[A-Za-z][A-Za-z0-9_.-]{0,63}$")
+    description: str = Field(min_length=5, max_length=800)
+    operation: Literal[
+        "mean",
+        "median",
+        "minimum",
+        "maximum",
+        "sum",
+        "true_rate",
+        "paired_mean_difference",
+        "paired_median_difference",
+        "ratio_of_means",
+    ]
+    metric_id: str = Field(min_length=1, max_length=64)
+    condition_id: str = Field(min_length=1, max_length=64)
+    baseline_condition_id: str | None = Field(default=None, max_length=64)
+
+    @model_validator(mode="after")
+    def normalize_unused_baseline(self) -> "ExperimentAnalysisSpec":
+        paired = self.operation in {
+            "paired_mean_difference", "paired_median_difference", "ratio_of_means"
+        }
+        # Constrained-output providers do not see cross-field validators in JSON Schema and often
+        # populate every optional field. For unary operations this field has no semantics, so
+        # discard it deterministically instead of wasting a model repair.
+        if not paired and self.baseline_condition_id is not None:
+            object.__setattr__(self, "baseline_condition_id", None)
+        return self
+
+
+class ExperimentReferenceSpec(StrictModel):
+    """The trusted harness owns validation coverage; generated code supplies the oracle logic."""
+
+    id: str = Field(pattern=r"^[A-Za-z][A-Za-z0-9_.-]{0,63}$")
+    kind: Literal["exact_reference", "result_validator"]
+    scope: Literal["every_sample_and_fixture"] = "every_sample_and_fixture"
+    description: str = Field(min_length=10, max_length=1200)
+
+
+class ExperimentMechanismCheckSpec(StrictModel):
+    """Executable assertion over a fixture run by the trusted harness."""
+
+    id: str = Field(pattern=r"^[A-Za-z][A-Za-z0-9_.-]{0,63}$")
+    description: str = Field(min_length=10, max_length=1000)
+    condition_id: str = Field(min_length=1, max_length=64)
+    metric_id: str = Field(min_length=1, max_length=64)
+    comparison: Literal[
+        "equal", "greater_than", "less_than", "greater_than_baseline", "less_than_baseline"
+    ]
+    threshold: float
+    baseline_condition_id: str | None = Field(default=None, max_length=64)
+    fixture_description: str = Field(min_length=10, max_length=1200)
+
+
+class ExperimentDecisionClause(StrictModel):
+    analysis_id: str = Field(min_length=1, max_length=64)
+    comparison: Literal[
+        "less_than", "greater_than", "absolute_greater_than", "absolute_at_most"
+    ]
+    threshold: float
+
+
+class ExperimentDecisionSpec(StrictModel):
+    """Machine-executable interpretation; unsupported prose statistics cannot enter the design."""
+
+    clauses: list[ExperimentDecisionClause] = Field(min_length=1, max_length=12)
+    combine: Literal["all", "any"]
+    outcome_when_met: Literal["supports", "contradicts", "characterizes"]
+    outcome_otherwise: Literal["contradicts", "null", "inconclusive", "characterizes"]
+    interpretation: str = Field(min_length=10, max_length=1200)
+
+
+class ExperimentBlueprint(StrictModel):
+    """Typed executable design used by the new experiment campaign.
+
+    IDs and enums carry control semantics. Human-language descriptions are reviewed by a model but
+    are never regex-parsed by the orchestrator.
+    """
+
+    schema_version: Literal[3] = 3
+    title: str = Field(min_length=5, max_length=200)
+    hypothesis: str = Field(min_length=10, max_length=1200)
+    null_outcome: str = Field(min_length=10, max_length=1200)
+    experimental_unit: str = Field(min_length=5, max_length=600)
+    result_type: Literal["boolean", "integer", "real", "string", "json"]
+    result_description: str = Field(min_length=10, max_length=800)
+    conditions: list[ExperimentConditionSpec] = Field(min_length=2, max_length=8)
+    metrics: list[ExperimentMetricSpec] = Field(min_length=1, max_length=12)
+    analyses: list[ExperimentAnalysisSpec] = Field(min_length=1, max_length=16)
+    reference: ExperimentReferenceSpec
+    mechanism_checks: list[ExperimentMechanismCheckSpec] = Field(min_length=1, max_length=16)
+    sample_size: int = Field(ge=2, le=500)
+    seeds: list[int] = Field(min_length=1, max_length=20)
+    generation_plan: str = Field(min_length=10, max_length=1000)
+    decision_rule: ExperimentDecisionSpec
+    mechanism_checks_required: bool = True
+    wall_seconds: int = Field(ge=1, le=604800)
+    memory_mb: int = Field(ge=64, le=262144)
+    cpus: float = Field(gt=0, le=256)
+    limitations: list[str] = Field(min_length=1, max_length=12)
+
+    @model_validator(mode="after")
+    def references_are_explicit_and_valid(self) -> "ExperimentBlueprint":
+        condition_ids = [row.id for row in self.conditions]
+        # Wall timing is a reserved harness measurement. Constrained models sometimes repeat it in
+        # the implementation-metric list despite the schema description; remove that redundant row
+        # deterministically so generated code can never own or forge timing.
+        implementation_metrics = [
+            row for row in self.metrics if row.id != "harness_wall_seconds"
+        ]
+        if len(implementation_metrics) != len(self.metrics):
+            object.__setattr__(self, "metrics", implementation_metrics)
+        metric_ids = [row.id for row in self.metrics]
+        analysis_ids = [row.id for row in self.analyses]
+        for label, ids in [
+            ("condition", condition_ids), ("metric", metric_ids), ("analysis", analysis_ids)
+        ]:
+            if len(ids) != len(set(ids)):
+                raise ValueError(f"{label} IDs must be unique")
+        if not any(row.role == "baseline" for row in self.conditions):
+            raise ValueError("at least one condition must have role=baseline")
+        if not any(row.role == "treatment" for row in self.conditions):
+            raise ValueError("at least one condition must have role=treatment")
+        known_conditions = set(condition_ids)
+        known_metrics = {*metric_ids, "harness_wall_seconds"}
+        default_baseline = next(row.id for row in self.conditions if row.role == "baseline")
+        for metric in self.metrics:
+            if metric.source == "harness_wall_seconds":
+                object.__setattr__(metric, "deterministic", False)
+        for analysis in self.analyses:
+            if analysis.operation in {
+                "paired_mean_difference", "paired_median_difference", "ratio_of_means"
+            } and analysis.baseline_condition_id is None:
+                # The baseline role is explicit typed data, so this recovery is unambiguous and
+                # does not parse descriptions.
+                object.__setattr__(analysis, "baseline_condition_id", default_baseline)
+            if analysis.condition_id not in known_conditions:
+                raise ValueError(f"analysis references unknown condition {analysis.condition_id!r}")
+            if (
+                analysis.baseline_condition_id is not None
+                and analysis.baseline_condition_id not in known_conditions
+            ):
+                raise ValueError(
+                    f"analysis references unknown baseline {analysis.baseline_condition_id!r}"
+                )
+            if analysis.metric_id not in known_metrics:
+                raise ValueError(f"analysis references unknown metric {analysis.metric_id!r}")
+        mechanism_ids = [row.id for row in self.mechanism_checks]
+        if len(mechanism_ids) != len(set(mechanism_ids)):
+            raise ValueError("mechanism check IDs must be unique")
+        for check in self.mechanism_checks:
+            if check.condition_id not in known_conditions:
+                raise ValueError(
+                    f"mechanism check references unknown condition {check.condition_id!r}"
+                )
+            if check.metric_id not in known_metrics:
+                raise ValueError(
+                    f"mechanism check references unknown metric {check.metric_id!r}"
+                )
+            if check.baseline_condition_id is not None and check.comparison in {
+                "greater_than", "less_than"
+            }:
+                # Providers often fill the optional comparator but choose the unary spelling. The
+                # explicit comparator makes the intended registered operation unambiguous.
+                object.__setattr__(
+                    check,
+                    "comparison",
+                    f"{check.comparison}_baseline",
+                )
+            paired = check.comparison in {"greater_than_baseline", "less_than_baseline"}
+            if paired and check.baseline_condition_id is None:
+                object.__setattr__(check, "baseline_condition_id", default_baseline)
+            if check.baseline_condition_id not in {None, *known_conditions}:
+                raise ValueError(
+                    f"mechanism check references unknown baseline {check.baseline_condition_id!r}"
+                )
+        known_analyses = set(analysis_ids)
+        for clause in self.decision_rule.clauses:
+            if clause.analysis_id not in known_analyses:
+                raise ValueError(
+                    f"decision clause references unknown analysis {clause.analysis_id!r}"
+                )
+        return self
+
+
+class ExperimentDefect(StrictModel):
+    """Stable repair input; retry control uses IDs, never regexes over prose."""
+
+    defect_id: Literal[
+        "alignment", "comparators", "sampling", "reference", "conditions", "metrics",
+        "analysis", "feasibility", "source_contract", "implementation", "runtime",
+        "reproducibility", "evidence",
+    ]
+    summary: str = Field(min_length=5, max_length=1200)
+    repair: str = Field(min_length=5, max_length=1200)
+
+
+class ExperimentDesignAssessment(StrictModel):
+    criterion_id: Literal[
+        "alignment", "comparators", "sampling", "reference", "analysis", "feasibility"
+    ]
+    satisfied: bool
+    detail: str = Field(min_length=5, max_length=1000)
+
+
+class ExperimentDesignReview(StrictModel):
+    assessments: list[ExperimentDesignAssessment] = Field(min_length=6, max_length=6)
+    defects: list[ExperimentDefect] = Field(default_factory=list, max_length=12)
+
+    @model_validator(mode="before")
+    @classmethod
+    def wrap_bare_assessments(cls, value: Any) -> Any:
+        return {"assessments": value, "defects": []} if isinstance(value, list) else value
+
+
+class ExperimentCodeAudit(StrictModel):
+    accepted: bool
+    condition_implementation: dict[str, bool] = Field(min_length=2, max_length=8)
+    generator_valid: bool
+    reference_independent: bool
+    metrics_valid: bool
+    defects: list[ExperimentDefect] = Field(default_factory=list, max_length=12)
+    summary: str = Field(min_length=10, max_length=2000)
+
+    @model_validator(mode="after")
+    def verdict_matches_defects(self) -> "ExperimentCodeAudit":
+        gates = [
+            *self.condition_implementation.values(), self.generator_valid,
+            self.reference_independent, self.metrics_valid,
+        ]
+        if self.accepted and (not all(gates) or self.defects):
+            raise ValueError("an accepted source audit must pass every gate and have no defects")
+        if not self.accepted and not self.defects:
+            raise ValueError("a rejected source audit requires a concrete structured defect")
+        return self
+
+
 class ExperimentProtocol(StrictModel):
-    """The scientific design is frozen and reviewed before code is generated."""
+    """Legacy v2 protocol retained only for loading old artifacts and API callers."""
 
     title: str = Field(min_length=5, max_length=200)
     hypothesis: str = Field(min_length=10, max_length=1200)
@@ -766,12 +1032,13 @@ class ExperimentImplementationPlan(StrictModel):
 
 
 class ExperimentProgram(StrictModel):
-    """Model-generated scientific implementation; trusted code owns execution and output writing."""
+    """Model-generated implementation executed only through a trusted harness."""
 
     description: str = Field(min_length=10, max_length=1500)
+    interface: Literal["legacy_v2", "study_v1"] = "legacy_v2"
     source: str = Field(
         min_length=20,
-        max_length=20_000,
+        max_length=30_000,
         description=(
             "Python source defining run_experiment(mode: str) -> dict. The function returns the "
             "ExperimentOutput v2 payload; a trusted wrapper writes results.json."
@@ -1031,10 +1298,20 @@ class ExperimentResult(StrictModel):
 
 
 class ExperimentState(StrictModel):
-    """Durable state machine for one cumulative experimental research strategy."""
+    """Durable state machine for one cumulative experimental research campaign."""
 
     work_id: str
     stage: Literal[
+        "design",
+        "design_review",
+        "implementation",
+        "source_audit",
+        "smoke",
+        "full",
+        "replication",
+        "evidence_audit",
+        "repair_design",
+        "repair_implementation",
         "protocol_design",
         "protocol_review",
         "protocol_revision",
@@ -1045,7 +1322,15 @@ class ExperimentState(StrictModel):
         "full_execution",
         "evidence_review",
         "complete",
-    ] = "protocol_design"
+    ] = "design"
+    blueprint: ExperimentBlueprint | None = None
+    design_review: ExperimentDesignReview | None = None
+    code_audit: ExperimentCodeAudit | None = None
+    replication_result: ExperimentResult | None = None
+    active_defects: list[ExperimentDefect] = Field(default_factory=list, max_length=12)
+    candidate_hashes: list[str] = Field(default_factory=list, max_length=40)
+    infrastructure_failures: int = 0
+    source_audit_failures: int = 0
     protocol: ExperimentProtocol | None = None
     protocol_sha256: str = ""
     protocol_review: ExperimentProtocolReview | None = None

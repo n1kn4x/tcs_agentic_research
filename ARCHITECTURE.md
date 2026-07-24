@@ -31,25 +31,24 @@ or stop the workspace.
 
 One outer research cycle advances multiple durable stages:
 
-`protocol -> protocol review -> code -> smoke -> full run -> evidence review`
+`blueprint -> review -> module -> smoke -> source audit -> full -> replication -> evidence audit`
 
-Only the protocol and final evidence receive semantic model reviews. Generated code is checked
-syntactically and for unsafe operations, must explicitly use `mode`, and must pass tiny smoke
-execution before a full run. This avoids subjective code-review loops.
+The blueprint encodes conditions, result type, metrics and their owners, executable aggregate
+operations, mechanism fixtures, and the decision rule as typed data. Prose is semantic context only;
+Python never regex-parses it to choose a gate.
 
-Every stage is persisted under `ExperimentStates/`. Repairs use one bounded reasoning plan followed
-by a complete replacement source from the coding profile, with the exact validator/reviewer/runtime
-defect and the deepest retained runnable candidate. A regressing replacement cannot overwrite a
-source that passed a later gate. A 20,000-character source cap keeps retained candidates fully
-repairable. Two repairs per outer cycle preserve fairness; repeated defects and a cumulative revision
-cap bound oscillation.
+Generated code supplies scientific primitives. The trusted harness owns unit/condition loops,
+coverage, timing, validation rows, typed mechanism comparisons, aggregate calculations, and decision
+execution. Therefore a study cannot pass by omitting a condition, inventing validation coverage,
+self-reporting a mechanism pass bit, or forging a harness-owned runtime. Full execution is repeated;
+scientific results and deterministic metrics must match exactly.
 
-The output contract separates a condition's actual primary result from completion metadata and
-performance metrics. Observations carry exact unit IDs. Full-sample correctness checks carry one
-independent reference/observed record for every required condition/unit pair; deterministic gates
-check coverage, equality, and consistency with observation results. The runner derives generic CSV
-and report artifacts. After full execution, separate source audits inspect treatment mechanisms,
-validation data flow, and registered analysis formulas before the final scientific evidence review.
+Every stage is persisted under `ExperimentStates/`. Repairs receive the complete source, a structured
+defect, and a separately generated typed repair plan before the coding profile emits a complete
+replacement. Two repairs per outer cycle preserve scheduler fairness and a cumulative cap bounds a
+bad strategy. Preliminary evidence preserves its design, source, measurements, and exact audit
+defects in the follow-up campaign. Requirement closure additionally requires an accepted source
+audit and an essential design review, so an evidence summarizer cannot waive an implementation flaw.
 
 ## Evidence policy
 

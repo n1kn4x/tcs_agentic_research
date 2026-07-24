@@ -22,6 +22,7 @@ from .pipelines import (
 )
 from .schemas import (
     EvidenceRequirement,
+    ExperimentDefect,
     ExperimentState,
     FindingStatus,
     RequirementStatus,
@@ -224,14 +225,10 @@ class ResearchEngine:
                     # Preserve the exhausted implementation for diagnosis. Replanning grants fresh
                     # root-strategy slots; it must not revive an oscillating source at its hard cap.
                     continue
-                if (
-                    experiment.stage == "protocol_revision"
-                    and experiment.protocol is not None
-                ):
-                    # Reassess preserved scientific work before asking for another rewrite. Human
-                    # replans often follow reviewer/provider or engine fixes, in which case the exact
-                    # protocol may already be sound under the repaired gate.
-                    experiment.stage = "protocol_review"
+                if experiment.stage == "repair_design" and experiment.blueprint is not None:
+                    # A human replan may follow an auditor/provider fix. Reassess the frozen typed
+                    # design before spending another generation call.
+                    experiment.stage = "design_review"
                 experiment.engineering_blocked = False
                 experiment.engineering_failures = 0
                 experiment.repeated_defect_failures = 0
@@ -647,9 +644,26 @@ class ResearchEngine:
             item.operational_failures += 1
         else:
             item.operational_failures = 0
+        durable_experiment_stage = False
+        if result.failure_class == "operational" and item.kind == WorkKind.experiment:
+            experiment_path = f"ExperimentStates/{item.work_id}.json"
+            if self.store.exists(experiment_path):
+                try:
+                    experiment_state = ExperimentState.model_validate(
+                        self.store.read_json(experiment_path)
+                    )
+                    durable_experiment_stage = (
+                        not experiment_state.engineering_blocked
+                        and experiment_state.stage != "complete"
+                    )
+                except Exception:
+                    durable_experiment_stage = False
         operational_retry = (
             result.failure_class == "operational"
-            and item.operational_failures <= self.router.core.max_operational_retries
+            and (
+                durable_experiment_stage
+                or item.operational_failures <= self.router.core.max_operational_retries
+            )
         )
         resume_same_work = result.continue_work or operational_retry
         item.status = WorkStatus.open if resume_same_work else WorkStatus(result.outcome)
@@ -778,16 +792,7 @@ class ResearchEngine:
                 item,
                 recovery,
                 defect_text,
-                revise_protocol=(
-                    result.evidence_level == "preliminary"
-                    or any(
-                        marker in defect_text.lower()
-                        for marker in [
-                            "revise the protocol",
-                            "protocol design",
-                        ]
-                    )
-                ),
+                revise_protocol=result.recovery_scope == "design",
             )
 
     def _seed_experiment_recovery(
@@ -808,11 +813,37 @@ class ResearchEngine:
         if not self.store.exists(parent_path):
             return
         previous = ExperimentState.model_validate(self.store.read_json(parent_path))
-        if previous.protocol is None or previous.program is None:
+        if previous.program is None or (previous.blueprint is None and previous.protocol is None):
             return
         recovered = previous.model_copy(deep=True)
         recovered.work_id = recovery.work_id
-        recovered.stage = "protocol_revision" if revise_protocol else "program_revision"
+        if previous.blueprint is not None:
+            recovered.stage = "repair_design" if revise_protocol else "repair_implementation"
+            recovered.design_review = None if revise_protocol else recovered.design_review
+            if revise_protocol:
+                recovered.protocol_revision = 0
+            recovered.code_audit = None
+            recovered.replication_result = None
+            if (
+                not revise_protocol
+                and previous.code_audit is not None
+                and previous.code_audit.defects
+            ):
+                recovered.active_defects = [
+                    row.model_copy(deep=True) for row in previous.code_audit.defects
+                ]
+            else:
+                recovered.active_defects = [
+                    ExperimentDefect(
+                        defect_id="evidence" if revise_protocol else "implementation",
+                        summary=defect[:1200],
+                        repair=(
+                            "Revise the preserved design or implementation to address this follow-up."
+                        ),
+                    )
+                ]
+        else:
+            recovered.stage = "protocol_revision" if revise_protocol else "program_revision"
         recovered.implementation_audit = None
         recovered.provenance_audit = None
         recovered.smoke_result = None

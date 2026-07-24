@@ -34,7 +34,7 @@ from .schemas import (
 )
 
 
-MAX_EXPERIMENT_SOURCE_CHARS = 20_000
+MAX_EXPERIMENT_SOURCE_CHARS = 30_000
 
 
 def requirement_index(
@@ -810,58 +810,93 @@ def _validate_experiment_program(program: Any) -> None:
         raise ValueError(f"generated experiment is not valid Python: {exc}") from exc
     if not tree.body:
         raise ValueError("generated experiment contains no Python statements")
-    run_function = next(
-        (
-            node
-            for node in tree.body
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-            and node.name == "run_experiment"
-        ),
-        None,
-    )
-    if run_function is None:
-        raise ValueError("generated experiment must define run_experiment(mode)")
-    if isinstance(run_function, ast.AsyncFunctionDef):
-        raise ValueError("run_experiment must be synchronous")
-    positional = [*run_function.args.posonlyargs, *run_function.args.args]
-    if len(positional) != 1 or run_function.args.vararg or run_function.args.kwarg:
-        raise ValueError("run_experiment must accept exactly one positional mode argument")
-    mode_used = any(
-        isinstance(node, ast.Name)
-        and node.id == positional[0].arg
-        and isinstance(node.ctx, ast.Load)
-        for node in ast.walk(run_function)
-    )
-    if not mode_used:
-        raise ValueError(
-            "run_experiment must branch on mode so smoke uses tiny per-condition samples"
-        )
-    meaningful_body = [
-        node
-        for node in run_function.body
-        if not isinstance(node, ast.Pass)
-        and not (
-            isinstance(node, ast.Expr)
-            and isinstance(node.value, ast.Constant)
-            and isinstance(node.value.value, str)
-        )
-    ]
-    if not meaningful_body:
-        raise ValueError("run_experiment contains only an unfinished `pass` placeholder")
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Dict):
-            continue
-        for key, value in zip(node.keys, node.values):
-            if (
-                isinstance(key, ast.Constant)
-                and key.value == "passed"
-                and isinstance(value, ast.Constant)
-                and isinstance(value.value, bool)
-            ):
-                raise ValueError(
-                    "experiment checks may not hard-code a literal passed value; compute each "
-                    "protocol check from executed validation"
+    functions = {
+        node.name: node
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    if getattr(program, "interface", "legacy_v2") == "study_v1":
+        required_arities = {"make_unit": 2, "run_condition": 2}
+        # Exactly one validation interface is selected by the frozen blueprint at execution. Source
+        # validation allows either here because this function deliberately does not inspect prose or
+        # duplicate the blueprint's semantic review.
+        if "reference_result" in functions:
+            required_arities["reference_result"] = 1
+        elif "validate_result" in functions:
+            required_arities["validate_result"] = 3
+        else:
+            raise ValueError(
+                "study implementation must define reference_result(unit) or "
+                "validate_result(unit, condition_id, result)"
+            )
+        if "check_condition" in functions:
+            required_arities["check_condition"] = 1
+        for name, arity in required_arities.items():
+            function = functions.get(name)
+            if function is None:
+                raise ValueError(f"study implementation must define {name}")
+            if isinstance(function, ast.AsyncFunctionDef):
+                raise ValueError(f"{name} must be synchronous")
+            positional = [*function.args.posonlyargs, *function.args.args]
+            if len(positional) != arity or function.args.vararg or function.args.kwarg:
+                raise ValueError(f"{name} must accept exactly {arity} positional argument(s)")
+            meaningful = [
+                node for node in function.body
+                if not isinstance(node, ast.Pass)
+                and not (
+                    isinstance(node, ast.Expr)
+                    and isinstance(node.value, ast.Constant)
+                    and isinstance(node.value.value, str)
                 )
+            ]
+            if not meaningful:
+                raise ValueError(f"{name} contains only an unfinished placeholder")
+    else:
+        run_function = functions.get("run_experiment")
+        if run_function is None:
+            raise ValueError("generated experiment must define run_experiment(mode)")
+        if isinstance(run_function, ast.AsyncFunctionDef):
+            raise ValueError("run_experiment must be synchronous")
+        positional = [*run_function.args.posonlyargs, *run_function.args.args]
+        if len(positional) != 1 or run_function.args.vararg or run_function.args.kwarg:
+            raise ValueError("run_experiment must accept exactly one positional mode argument")
+        mode_used = any(
+            isinstance(node, ast.Name)
+            and node.id == positional[0].arg
+            and isinstance(node.ctx, ast.Load)
+            for node in ast.walk(run_function)
+        )
+        if not mode_used:
+            raise ValueError(
+                "run_experiment must branch on mode so smoke uses tiny per-condition samples"
+            )
+        meaningful_body = [
+            node
+            for node in run_function.body
+            if not isinstance(node, ast.Pass)
+            and not (
+                isinstance(node, ast.Expr)
+                and isinstance(node.value, ast.Constant)
+                and isinstance(node.value.value, str)
+            )
+        ]
+        if not meaningful_body:
+            raise ValueError("run_experiment contains only an unfinished `pass` placeholder")
+    if getattr(program, "interface", "legacy_v2") != "study_v1":
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Dict):
+                continue
+            for key, value in zip(node.keys, node.values):
+                if (
+                    isinstance(key, ast.Constant)
+                    and key.value == "passed"
+                    and isinstance(value, ast.Constant)
+                    and isinstance(value.value, bool)
+                ):
+                    raise ValueError(
+                        "experiment checks may not hard-code a literal passed value; compute each "
+                        "protocol check from executed validation"
+                    )
     unsafe_top_level = next(
         (node for node in tree.body if not _safe_experiment_top_level(node)), None
     )

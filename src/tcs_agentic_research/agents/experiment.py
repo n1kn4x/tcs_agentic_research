@@ -6,7 +6,12 @@ from typing import Literal
 
 from ..artifact_store import ArtifactStore
 from ..experimenter.runner import BoundedExperimentRunner
-from ..schemas import ExperimentProgram, ExperimentResult, ExperimenterSettings
+from ..schemas import (
+    ExperimentBlueprint,
+    ExperimentProgram,
+    ExperimentResult,
+    ExperimenterSettings,
+)
 
 
 class ExperimentAgent:
@@ -37,10 +42,12 @@ class ExperimentAgent:
         name: str = "experiment",
         mode: Literal["smoke", "full"] = "full",
         timeout_seconds: int | None = None,
+        blueprint: ExperimentBlueprint | None = None,
     ) -> ExperimentResult:
         return self.runner.run(
             program=program,
             name=name,
             mode=mode,
             timeout_seconds=timeout_seconds,
+            blueprint=blueprint,
         )

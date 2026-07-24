@@ -12,6 +12,7 @@ from typing import Any, Literal
 from ..artifact_store import ArtifactStore
 from ..schemas import (
     ArtifactRef,
+    ExperimentBlueprint,
     ExperimentOutput,
     ExperimentProgram,
     ExperimentResult,
@@ -50,6 +51,7 @@ class BoundedExperimentRunner:
         name: str = "experiment",
         mode: Literal["smoke", "full"] = "full",
         timeout_seconds: int | None = None,
+        blueprint: ExperimentBlueprint | None = None,
     ) -> ExperimentResult:
         assert self.settings is not None  # DockerProjectContainer already validates this.
         self.container.ensure_running()
@@ -79,29 +81,45 @@ class BoundedExperimentRunner:
                 "expected_outputs": ["results.json"],
                 "created_at": utc_now(),
                 "execution_contract": {
+                    "interface": program.interface,
                     "command": ["python3", "experiment.py"],
                     "network": self.settings.network,
                     "timeout_seconds": effective_timeout,
                     "research_workspace": "/research (read-only)",
+                    "coverage_owner": (
+                        "trusted study harness" if program.interface == "study_v1" else "legacy program"
+                    ),
                 },
             },
         )
         implementation_path = portable_dir / "implementation.py"
         implementation_path.write_text(program.python_code.rstrip() + "\n", encoding="utf-8")
-        # The model supplies only the scientific implementation. This trusted wrapper owns the
-        # entry point and output path, eliminating a fragile generated-code contract.
+        # New studies expose small scientific primitives. The trusted harness owns loops,
+        # condition/unit coverage, validation rows, timings, aggregates, and results.json. Legacy
+        # direct CLI programs retain their old wrapper until that public command is removed.
         script_path = portable_dir / "experiment.py"
-        script_path.write_text(
-            "import json\n"
-            "import os\n"
-            "from implementation import run_experiment\n\n"
-            "payload = run_experiment(os.environ.get('TCS_EXPERIMENT_MODE', 'full'))\n"
-            "if not isinstance(payload, dict):\n"
-            "    raise TypeError('run_experiment must return a dict')\n"
-            "with open('results.json', 'w', encoding='utf-8') as handle:\n"
-            "    json.dump(payload, handle, ensure_ascii=False, sort_keys=True)\n",
-            encoding="utf-8",
-        )
+        if program.interface == "study_v1":
+            if blueprint is None:
+                raise ValueError("study_v1 execution requires a frozen ExperimentBlueprint")
+            (portable_dir / "blueprint.json").write_text(
+                blueprint.model_dump_json(indent=2), encoding="utf-8"
+            )
+            harness_source = Path(__file__).with_name("study_harness.py").read_text(
+                encoding="utf-8"
+            )
+            script_path.write_text(harness_source, encoding="utf-8")
+        else:
+            script_path.write_text(
+                "import json\n"
+                "import os\n"
+                "from implementation import run_experiment\n\n"
+                "payload = run_experiment(os.environ.get('TCS_EXPERIMENT_MODE', 'full'))\n"
+                "if not isinstance(payload, dict):\n"
+                "    raise TypeError('run_experiment must return a dict')\n"
+                "with open('results.json', 'w', encoding='utf-8') as handle:\n"
+                "    json.dump(payload, handle, ensure_ascii=False, sort_keys=True)\n",
+                encoding="utf-8",
+            )
         # Redirect inside the bounded mount so a print loop cannot accumulate unbounded output in
         # the host-side docker client. `ulimit -f` caps each generated regular file (roughly 16 MiB).
         shell_command = (

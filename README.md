@@ -216,29 +216,30 @@ Mathlib setup, persistence, and budget details.
 
 ## Experiment subsystem
 
-Experiment work uses a durable state machine: protocol design/review, program design, smoke
-execution, full execution, mechanism/provenance audits, and evidence review. A single research cycle
-drives the machine until it produces evidence, reaches its model/resource budget, or encounters a
-repeated concrete blocker. Every transition persists `ExperimentStates/<work-id>.json`, so restarts
-resume accepted work instead of regenerating it. Repairs retain the deepest runnable source as their
-base: a replacement that fails an earlier gate cannot erase a source that already passed full
-execution. A repair first produces a bounded reasoning plan, then a non-thinking coding call emits one
-complete replacement file from the exact defect and retained source; fragile line-number patch chains
-are not used. Two repairs per outer cycle preserve fairness. Repeated/no-op defects stop quickly, and
-a configurable cumulative source-revision cap eventually retires an oscillating strategy. Repairable
-programs are capped at 20,000 characters so the retained source is always supplied in full.
+Experiment work is a durable campaign:
 
-The model implements `run_experiment(mode: str) -> dict`. A trusted wrapper owns the entry point,
-writes `results.json`, and validates the v2 output contract. Every observation carries a stable unit
-ID and the actual primary condition result (distinct from completion metadata). Full-sample
-correctness claims preserve one independent `reference`/condition `observed` row per required
-condition and unit; Python checks exact coverage, equality, and agreement with observation results.
-The runner deterministically derives `observations.csv`, `validations.csv`, `comparison.csv`, and a
-scoped `report.md`. A separate source audit traces condition mechanisms, validation data flow, and
-analysis formulas before the final evidence audit. Smoke mode exercises every condition on tiny
-samples before the frozen full run. Both execute in the bounded Docker container; a mount-inode
-sentinel detects stale same-path bind mounts, the research workspace is read-only, and networking is
-disabled by default.
+`typed blueprint -> review -> study module -> smoke -> source audit -> full run -> replication -> evidence audit`
+
+The generated module cannot choose coverage or construct evidence rows. It implements only
+`make_unit`, `run_condition`, an independent reference/validator, and mechanism fixtures. A trusted
+harness calls every condition on every unit, records wall time, enforces the primary-result type,
+builds reference/observed rows, evaluates typed mechanism assertions, computes registered aggregate
+operations, and applies the typed decision rule. Control semantics live in IDs and enums; the v3
+pipeline never regex-parses protocol prose.
+
+Every transition persists in `ExperimentStates/<work-id>.json`. A repair receives the complete
+preserved source, structured defect, and a separately generated typed repair plan. It emits a complete
+replacement rather than a regex/line-number patch. At most two repairs run in one outer cycle, while a
+cumulative cap bounds a bad strategy. Smoke runs precede semantic source audit; accepted full runs are
+repeated independently, and all results plus deterministic metrics must match. Preliminary evidence
+carries exact source-audit defects into a child campaign so follow-up work repairs the measured
+implementation instead of starting over. Only a sound design, accepted source audit, passing trusted
+checks, matching replication, and full evidence review can close a requirement.
+
+The runner derives `observations.csv`, `validations.csv`, `comparison.csv`, and a scoped `report.md`.
+Both executions run in the bounded Docker container with a read-only research workspace and disabled
+networking. The older explicit `experiment run` CLI remains a low-level direct-run utility; core
+research campaigns use the trusted study interface.
 
 You can also run a reviewed script directly:
 
