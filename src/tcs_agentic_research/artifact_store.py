@@ -1,7 +1,8 @@
-"""Atomic, filesystem-backed research artifacts.
+"""Atomic filesystem storage for the research kernel and independent subsystems.
 
-The store is intentionally boring.  It does not infer scientific truth and it does not create
-subsystem artifacts until that subsystem is used.
+The canonical research state is four small files: ``KernelState.json``, ``Records.jsonl``,
+``Actions.jsonl``, and ``Events.jsonl``.  Subsystem-specific databases and run artifacts are opaque
+to the kernel.
 """
 
 from __future__ import annotations
@@ -13,35 +14,34 @@ import os
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Iterable, Iterator
+from typing import TYPE_CHECKING, Any, Iterable, Iterator
 
 import yaml
 from pydantic import BaseModel
 
-from .schemas import (
-    ArtifactKind,
-    ArtifactRef,
-    Contribution,
-    Finding,
-    ResearchAgenda,
-    WorkQueue,
-    WorkspaceState,
-    utc_now,
-)
+from .schemas import ArtifactKind, ArtifactRef, utc_now
+
+if TYPE_CHECKING:
+    from .core.models import ActionRecord, KernelState, ResearchRecord
 
 
 class ArtifactStore:
     RESEARCH_TASK = "InitialResearchTask.md"
-    RESEARCH_STATE = "State.json"
-    WORK_QUEUE = "Queue.json"
+    KERNEL_STATE = "KernelState.json"
+    RECORD_LEDGER = "Records.jsonl"
+    ACTION_LEDGER = "Actions.jsonl"
     EVENT_LEDGER = "Events.jsonl"
-    FINDING_LEDGER = "Findings.jsonl"
-    CONTRIBUTION_LEDGER = "Contributions.jsonl"
     MODEL_LEDGER = "ModelCalls.jsonl"
-    RESEARCH_AGENDA = "Agenda.json"
+    TASK_VERSION_LEDGER = "TaskVersions.jsonl"
 
-    CORE_DIRECTORIES = ("Runs", "Reports")
-    CORE_JSONL = (EVENT_LEDGER, FINDING_LEDGER, CONTRIBUTION_LEDGER, MODEL_LEDGER)
+    CORE_DIRECTORIES = ("Runs", "Reports", "Subsystems")
+    CORE_JSONL = (
+        RECORD_LEDGER,
+        ACTION_LEDGER,
+        EVENT_LEDGER,
+        MODEL_LEDGER,
+        TASK_VERSION_LEDGER,
+    )
 
     def __init__(self, workspace: str | Path):
         self.root = Path(workspace).expanduser().resolve()
@@ -54,21 +54,16 @@ class ArtifactStore:
             path = self.resolve(rel_path)
             if not path.exists():
                 path.write_text("", encoding="utf-8")
-        if not self.exists(self.WORK_QUEUE):
-            self.write_json(self.WORK_QUEUE, WorkQueue())
 
     @contextmanager
     def exclusive_lock(self) -> Iterator[None]:
-        """Prevent two engine processes from mutating one workspace concurrently."""
         self.root.mkdir(parents=True, exist_ok=True)
-        lock_path = self.root / ".engine.lock"
+        lock_path = self.root / ".research.lock"
         with lock_path.open("a+", encoding="utf-8") as handle:
             try:
                 fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError as exc:
-                raise RuntimeError(
-                    f"another research engine process holds the workspace lock: {lock_path}"
-                ) from exc
+                raise RuntimeError(f"workspace is already active: {lock_path}") from exc
             try:
                 yield
             finally:
@@ -135,7 +130,6 @@ class ArtifactStore:
         target = self.resolve(path)
         target.parent.mkdir(parents=True, exist_ok=True)
         line = json.dumps(to_plain(payload), ensure_ascii=False, sort_keys=True) + "\n"
-        # One append is atomic for the small records used here on normal local filesystems.
         with target.open("a", encoding="utf-8") as handle:
             handle.write(line)
             handle.flush()
@@ -156,40 +150,46 @@ class ArtifactStore:
             try:
                 value = json.loads(line)
             except json.JSONDecodeError as exc:
-                raise ValueError(f"Malformed JSONL in {self.relpath(target)} at selected line {index}") from exc
+                raise ValueError(f"Malformed JSONL in {self.relpath(target)} at line {index}") from exc
             if not isinstance(value, dict):
                 raise ValueError(f"JSONL row in {self.relpath(target)} is not an object")
             records.append(value)
         return records
 
-    def load_state(self) -> WorkspaceState | None:
-        if not self.exists(self.RESEARCH_STATE):
-            return None
-        return WorkspaceState.model_validate(self.read_json(self.RESEARCH_STATE))
+    def load_kernel_state(self) -> "KernelState | None":
+        from .core.models import KernelState
 
-    def save_state(self, state: WorkspaceState) -> ArtifactRef:
+        if not self.exists(self.KERNEL_STATE):
+            return None
+        return KernelState.model_validate(self.read_json(self.KERNEL_STATE))
+
+    def save_kernel_state(self, state: "KernelState") -> ArtifactRef:
         state.updated_at = utc_now()
-        return self.write_json(self.RESEARCH_STATE, state)
+        return self.write_json(self.KERNEL_STATE, state)
 
-    def load_agenda(self) -> ResearchAgenda | None:
-        if not self.exists(self.RESEARCH_AGENDA):
-            return None
-        return ResearchAgenda.model_validate(self.read_json(self.RESEARCH_AGENDA))
+    def append_records(self, records: Iterable["ResearchRecord"]) -> None:
+        for record in records:
+            self.append_jsonl(self.RECORD_LEDGER, record)
 
-    def save_agenda(self, agenda: ResearchAgenda) -> ArtifactRef:
-        agenda.updated_at = utc_now()
-        return self.write_json(self.RESEARCH_AGENDA, agenda)
+    def read_records(self) -> list["ResearchRecord"]:
+        from .core.models import ResearchRecord
 
-    def load_queue(self) -> WorkQueue:
-        if not self.exists(self.WORK_QUEUE):
-            queue = WorkQueue()
-            self.save_queue(queue)
-            return queue
-        return WorkQueue.model_validate(self.read_json(self.WORK_QUEUE))
+        return [ResearchRecord.model_validate(row) for row in self.read_jsonl(self.RECORD_LEDGER)]
 
-    def save_queue(self, queue: WorkQueue) -> ArtifactRef:
-        queue.updated_at = utc_now()
-        return self.write_json(self.WORK_QUEUE, queue)
+    def append_action(self, action: "ActionRecord") -> None:
+        action.updated_at = utc_now()
+        self.append_jsonl(self.ACTION_LEDGER, action)
+
+    def read_action_events(self) -> list["ActionRecord"]:
+        from .core.models import ActionRecord
+
+        return [ActionRecord.model_validate(row) for row in self.read_jsonl(self.ACTION_LEDGER)]
+
+    def latest_actions(self) -> dict[str, "ActionRecord"]:
+        latest: dict[str, ActionRecord] = {}
+        for action in self.read_action_events():
+            latest[action.action_id] = action
+        return latest
 
     def append_event(self, event_type: str, payload: dict[str, Any] | None = None) -> ArtifactRef:
         return self.append_jsonl(
@@ -197,29 +197,24 @@ class ArtifactStore:
             {"event_type": event_type, "created_at": utc_now(), **(payload or {})},
         )
 
-    def append_findings(self, findings: Iterable[Finding]) -> None:
-        for finding in findings:
-            self.append_jsonl(self.FINDING_LEDGER, finding)
-
-    def read_findings(self) -> list[Finding]:
-        return [Finding.model_validate(row) for row in self.read_jsonl(self.FINDING_LEDGER)]
-
-    def append_contributions(self, contributions: Iterable[Contribution]) -> None:
-        for contribution in contributions:
-            self.append_jsonl(self.CONTRIBUTION_LEDGER, contribution)
-
-    def read_contributions(self) -> list[Contribution]:
-        return [
-            Contribution.model_validate(row)
-            for row in self.read_jsonl(self.CONTRIBUTION_LEDGER)
-        ]
-
     def append_model_call(self, payload: Any) -> None:
         self.append_jsonl(self.MODEL_LEDGER, payload)
 
-    def create_run_dir(self, cycle: int, label: str) -> str:
-        safe = "".join(ch if ch.isalnum() or ch in "_-" else "_" for ch in label)[:80]
-        rel = f"Runs/{cycle:04d}_{safe or 'step'}"
+    def load_subsystem_state(self, name: str) -> dict[str, Any]:
+        path = f"Subsystems/{name}.json"
+        if not self.exists(path):
+            return {}
+        value = self.read_json(path)
+        if not isinstance(value, dict):
+            raise ValueError(f"subsystem state is not an object: {path}")
+        return value
+
+    def save_subsystem_state(self, name: str, state: dict[str, Any]) -> ArtifactRef:
+        return self.write_json(f"Subsystems/{name}.json", state)
+
+    def create_action_dir(self, cycle: int, action_id: str, subsystem: str) -> str:
+        safe = "".join(ch if ch.isalnum() or ch in "_-" else "_" for ch in subsystem)[:40]
+        rel = f"Runs/{cycle:06d}_{safe}_{action_id}"
         self.resolve(rel).mkdir(parents=True, exist_ok=True)
         return rel
 
@@ -234,16 +229,10 @@ class ArtifactStore:
         inferred = kind or infer_kind(target)
         digest = sha256_file(target) if target.is_file() else None
         return ArtifactRef(
-            path=self.relpath(target),
-            kind=inferred,
-            sha256=digest,
-            summary=summary,
+            path=self.relpath(target), kind=inferred, sha256=digest, summary=summary
         )
 
     def manifest(self, *, max_items: int = 100) -> list[dict[str, Any]]:
-        """Metadata-only artifact inventory for humans and bounded planner context."""
-        if not self.root.exists():
-            return []
         entries: list[dict[str, Any]] = []
         for path in sorted(item for item in self.root.rglob("*") if item.is_file()):
             rel = self.relpath(path)
@@ -261,6 +250,17 @@ class ArtifactStore:
             if len(entries) >= max_items:
                 break
         return entries
+
+
+def merge_state(original: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
+    """Recursively merge a subsystem-owned state patch without interpreting its fields."""
+    merged = dict(original)
+    for key, value in patch.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = merge_state(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
 
 
 def to_plain(payload: Any) -> Any:
@@ -295,4 +295,5 @@ def infer_kind(path: Path) -> ArtifactKind:
         ".py": ArtifactKind.python,
         ".sqlite": ArtifactKind.sqlite,
         ".log": ArtifactKind.log,
+        ".csv": ArtifactKind.other,
     }.get(path.suffix.lower(), ArtifactKind.other)

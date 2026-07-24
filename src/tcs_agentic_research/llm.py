@@ -136,7 +136,7 @@ class LLMRouter:
         if self._remaining_calls is not None:
             raise RuntimeError("model call budgets may not be nested")
         self._step_id = step_id
-        self._remaining_calls = max_calls or self.core.max_model_calls_per_step
+        self._remaining_calls = max_calls or self.core.max_model_calls_per_action
         try:
             yield
         finally:

@@ -17,11 +17,23 @@ workspaces/test-integration-factorization-compression/*
 !workspaces/test-lit-orthogonal-vectors-lower-bounds/InitialResearchTask.md
 !workspaces/test-exp-dpll-sat-benchmark/InitialResearchTask.md
 !workspaces/test-leap-boolean-algebra-lemmas/InitialResearchTask.md
-State.json
-Queue.json
+# v0.4 kernel journals
+KernelState.json
+TaskVersions.jsonl
+Actions.jsonl
+Records.jsonl
 Events.jsonl
-Findings.jsonl
 ModelCalls.jsonl
+Subsystems/
+.research.lock
+
+# v0.3 orchestrator journals
+State.json
+Agenda.json
+Queue.json
+Findings.jsonl
+Contributions.jsonl
+
 Runs/
 LiteratureDB/
 LeanProject/

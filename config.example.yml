@@ -1,19 +1,10 @@
 # One shared Qwen3.6 endpoint serves every agent profile on GPUs 0-3.
 # Profiles differ only in sampling, output budget, and thinking mode.
 core:
-  # Protocol/design/review/code/evidence are separate calls; all are still fresh and bounded.
-  max_model_calls_per_step: 12
-  max_plan_items: 4
-  # This triggers method/question diversification. It does not stop while untried gaps remain.
-  max_no_progress_steps: 4
-  max_operational_retries: 2
-  # Complete source revisions per experiment strategy; repeated/no-op defects stop sooner.
-  max_experiment_engineering_retries: 12
-  max_strategy_revisions: 2
-  max_method_attempts_per_requirement: 4
-  literature_max_imports: 3
-  literature_import_attempts: 8
-  literature_results_per_query: 5
+  # The kernel only bounds one subsystem-owned atomic action and the shared memory view.
+  max_model_calls_per_action: 128
+  record_context_limit: 80
+  literature_max_imports: 2
 
 # One invocation may run for hours; every accepted node and failed attempt is persisted and the
 # same theorem resumes from LeanProject/LEAP/state.sqlite on the next invocation.
@@ -46,17 +37,12 @@ router:
       temperature: 0.6
       max_tokens: 12288
       task_types:
-        - derivation
-        - derivation_review
-        - analysis
+        - theory_decision
+        - theory_investigation
+        - literature_decision
         - proof_planning
         - blueprint_generation
         - decomposition_review
-        - literature_review
-        - proof_formulation_review
-        - experiment_implementation
-        - experiment_debug
-        - experiment_evidence_review
       extra_body:
         top_p: 0.95
         top_k: 20
@@ -74,12 +60,8 @@ router:
       temperature: 0.1
       max_tokens: 4096
       task_types:
-        - planning
-        - task_analysis
-        - literature_planning
         - proof_formulation
-        - experiment_review
-        - experiment_protocol
+        - experiment_design
       extra_body:
         top_p: 0.95
         top_k: 20
@@ -97,8 +79,7 @@ router:
       temperature: 0.1
       max_tokens: 12288
       task_types:
-        - experiment_design
-        - experiment_revision
+        - experiment_implementation
       extra_body:
         top_p: 0.95
         top_k: 20

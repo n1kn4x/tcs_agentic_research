@@ -1,60 +1,155 @@
-# Research engine architecture
+# Research kernel architecture
 
-The engine is deliberately a small deterministic shell around four evidence pipelines.
+## Non-goals
 
-## One research cycle
+The kernel does **not**:
 
-1. Load the persisted agenda and evidence ledger.
-2. Refill a bounded portfolio deterministically from the least-attempted open requirements.
-3. Select the least-attempted runnable item, so a resumable pipeline cannot starve other gaps.
-4. Give the pipeline a bounded context containing accepted prior findings and one reusable previously
-   executed experiment implementation (including explicit audit defects when it needs repair).
-5. Run one of `pipelines/{literature,derivation,proof,experiment}.py`.
-6. Commit findings, novelty-deduplicated contributions, requirement state, events, and reports
-   atomically at the operation boundary.
+- decompose a task into questions or deliverables;
+- maintain an agenda, requirement board, or work queue;
+- decide which scientific method is appropriate;
+- ask a model whether another model's prose is true;
+- infer that a project is scientifically complete.
 
-There is no model call for queue scheduling. A model cannot set requirement status, count progress,
-or stop the workspace.
+Those responsibilities caused the previous system's worst failures. A bad initial decomposition
+became permanent, generic experiment schemas leaked concepts between domains, and correlated model
+reviews promoted false derivations.
 
-## Long-running behavior
+## One abstraction: an autonomous subsystem
 
-- Process interruption reopens the exact persisted work item.
-- Operational/model-budget failures do not consume scientific attempts.
-- A blocked experiment marks only its own requirement; unrelated work continues.
-- The scheduler refills the portfolio even while another work item is resumable.
-- Accepted findings are included in later research prompts, so later work builds on earlier work.
-- A previously executed experiment implementation is offered to follow-up work as reusable code.
-- The workspace stops only when all mandatory requirements are satisfied or every remaining gap is
-  explicitly blocked/exhausted.
+A subsystem implements two methods:
 
-## Experiment pipeline
+```python
+propose(shared_view) -> ActionProposal | None
+execute(persisted_proposal, shared_view, run_dir) -> ActionOutcome
+```
 
-One outer research cycle advances multiple durable stages:
+`propose` chooses the subsystem's next atomic move. `execute` owns all domain-specific sequencing.
+The kernel only persists the proposal before execution, catches interruption, admits evidence, and
+schedules the next subsystem fairly.
 
-`blueprint -> review -> module -> smoke -> source audit -> full -> replication -> evidence audit`
+Built-in subsystems are independent:
 
-The blueprint encodes conditions, result type, metrics and their owners, executable aggregate
-operations, mechanism fixtures, and the decision rule as typed data. Prose is semantic context only;
-Python never regex-parses it to choose a gate.
+- **literature** chooses searches or local exact-span queries;
+- **theory** chooses investigations, challenges, or syntheses;
+- **proof** chooses a concrete Lean proposition and invokes LEAP;
+- **experiment** chooses a domain-specific protocol, writes one direct program, and replicates it.
 
-Generated code supplies scientific primitives. The trusted harness owns unit/condition loops,
-coverage, timing, validation rows, typed mechanism comparisons, aggregate calculations, and decision
-execution. Therefore a study cannot pass by omitting a condition, inventing validation coverage,
-self-reporting a mechanism pass bit, or forging a harness-owned runtime. Full execution is repeated;
-scientific results and deterministic metrics must match exactly.
+A subsystem can be run and tested alone with `--subsystem`. Adding a subsystem requires no changes
+to the kernel or to any other subsystem.
 
-Every stage is persisted under `ExperimentStates/`. Repairs receive the complete source, a structured
-defect, and a separately generated typed repair plan before the coding profile emits a complete
-replacement. Two repairs per outer cycle preserve scheduler fairness and a cumulative cap bounds a
-bad strategy. Preliminary evidence preserves its design, source, measurements, and exact audit
-defects in the follow-up campaign. Requirement closure additionally requires an accepted source
-audit and an essential design review, so an evidence summarizer cannot waive an implementation flaw.
+## Information flow
 
-## Evidence policy
+```text
+InitialResearchTask.md
+         |
+         v
+  bounded shared view <-----------------------------+
+         |                                           |
+         v                                           |
+ subsystem proposes one action                       |
+         |                                           |
+         v                                           |
+ Actions.jsonl: proposed -> running                   |
+         |                                           |
+         v                                           |
+ subsystem executes domain-specific work             |
+         |                                           |
+         v                                           |
+ deterministic evidence admission                    |
+         |                                           |
+         +--> Records.jsonl (immutable) --------------+
+         +--> Subsystems/<name>.json (opaque private state)
+         +--> Runs/<cycle>_<subsystem>_<action>/
+```
 
-- Literature findings require validated exact named-statement or indexed-passage source spans.
-- Derivations require two independent adversarial reviews; either can prevent acceptance.
-- Proof findings require placeholder-free Lean verification.
-- Experiments require valid condition-level output and a final methodology audit.
-- Negative and null evidence follows the same acceptance path as positive evidence.
-- Artifact creation and token use are never counted as research progress.
+Every subsystem sees compact cards for prior records, including records produced by other
+subsystems. Parent record IDs make dependencies explicit. Task edits create a new task revision but
+do not erase prior memory, because a workspace represents one continuing research project.
+
+## Epistemic boundary
+
+A record has one of three statuses, assigned only by deterministic policy:
+
+- `tentative`: model-authored question, analysis, synthesis, challenge, or failure diagnosis;
+- `observed`: exact validated source span, hashed source metadata, or exactly replicated execution;
+- `verified`: placeholder-free Lean theorem accepted by the configured compiler.
+
+There is deliberately no generic `accepted`, `supported`, or `conclusive` status. In particular:
+
+- model confidence does nothing;
+- a second model review does nothing;
+- a generated report does nothing;
+- an experiment program's interpretation remains unverified prose;
+- a source quote establishes what the source says, not that the source is correct;
+- a Lean parent link expresses intended relevance, while only the proposition is verified.
+
+Contradictions are represented by immutable challenge/counterexample records linked to earlier
+records. The kernel does not silently mutate history into a single current truth value.
+
+## Persistence and interruption
+
+Canonical files:
+
+```text
+InitialResearchTask.md        current project brief
+KernelState.json              scheduler cursor and active action only
+TaskVersions.jsonl            append-only task revisions
+Actions.jsonl                 append-only action state transitions
+Records.jsonl                 append-only cumulative research memory
+Events.jsonl                  runtime diagnostics
+ModelCalls.jsonl              model telemetry
+Subsystems/<name>.json        opaque subsystem-owned continuation state
+Runs/...                      exact action inputs and outputs
+Reports/{Status,Research}.md  deterministic journal views
+```
+
+A proposal is persisted before side effects. If the process dies, the active action is marked
+`interrupted` on restart; no claim is inferred from partial artifacts. Identical committed action
+fingerprints are not re-executed. Atomic file replacement and a workspace lock protect materialized
+state.
+
+## Scheduling and stopping
+
+Scheduling is round-robin. The kernel has no semantic priority function. One actor cannot starve
+another by remaining in a resumable internal stage.
+
+`--max-steps` counts subsystem action opportunities. A run returns early when every enabled
+subsystem yields once. This is runtime `idle`, not scientific completion. A later invocation asks the
+subsystems again, potentially after task edits, new records, imported sources, or human work.
+
+## Experiments
+
+The universal SAT-shaped experiment blueprint and multi-stage repair machine were removed.
+An experiment subsystem now emits a direct, domain-specific `run_experiment(mode)` program. The
+networkless runner owns process limits and `results.json`; the output contract contains only:
+
+- protocol;
+- parameters;
+- raw `{unit_id, condition, values}` observations;
+- summaries;
+- an explicitly unverified interpretation;
+- limitations.
+
+There is no generic pass bit or expected-effect assertion. The exact program and fixed seeds run
+twice. Only byte-equivalent structured results receive `observed` status. This proves reproducible
+execution, not sound methodology or causality.
+
+## Why long runs build rather than churn
+
+- Records are immutable and content-deduplicated.
+- Actions are fingerprinted and exact repeats are skipped.
+- Every actor receives prior cross-subsystem records.
+- Each actor owns a small persistent state rather than forcing its stages into a global schema.
+- Failed work becomes a tentative obstruction record, so another actor can respond to it.
+- No arbitrary attempt cap erases a promising line, and no global completion bit stops inquiry.
+- Only external receipts raise epistemic status, preventing prose volume from masquerading as
+  progress.
+
+## Testing
+
+Kernel tests use tiny scripted subsystems. They test fairness, crash recovery, deduplication, task
+revision, shared-memory flow, and idle semantics without a model, network, Docker, or Lean.
+
+Evidence-policy tests independently test each trust boundary. Literature, experiment containment,
+and LEAP retain their own focused service tests. There is no end-to-end test that hopes a planner
+happens to invent the right decomposition.

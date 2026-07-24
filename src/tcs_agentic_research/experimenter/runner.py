@@ -1,31 +1,20 @@
-"""Execute one model-generated Python program in the bounded Docker experimenter."""
+"""Execute one self-contained experiment in a bounded, networkless container."""
 
 from __future__ import annotations
 
 import csv
 import json
-import re
 import shutil
 from pathlib import Path
 from typing import Any, Literal
 
 from ..artifact_store import ArtifactStore
-from ..schemas import (
-    ArtifactRef,
-    ExperimentBlueprint,
-    ExperimentOutput,
-    ExperimentProgram,
-    ExperimentResult,
-    ExperimenterSettings,
-    new_id,
-    utc_now,
-)
+from ..schemas import ExperimentOutput, ExperimentProgram, ExperimentResult, ExperimenterSettings, new_id, utc_now
 from .docker_project import DockerProjectContainer
+from .validation import validate_experiment_program
 
 
 class BoundedExperimentRunner:
-    """Run exactly one Python process; there is no nested coding-agent tool loop."""
-
     def __init__(self, store: ArtifactStore, settings: ExperimenterSettings | None):
         self.store = store
         self.settings = settings
@@ -51,85 +40,58 @@ class BoundedExperimentRunner:
         name: str = "experiment",
         mode: Literal["smoke", "full"] = "full",
         timeout_seconds: int | None = None,
-        blueprint: ExperimentBlueprint | None = None,
     ) -> ExperimentResult:
-        assert self.settings is not None  # DockerProjectContainer already validates this.
+        validate_experiment_program(program)
+        if self.settings is None:
+            raise RuntimeError("experimenter is not configured")
         self.container.ensure_running()
-        effective_timeout = min(
-            timeout_seconds or self.settings.timeout_seconds,
-            self.settings.timeout_seconds,
-        )
+        timeout = min(timeout_seconds or self.settings.timeout_seconds, self.settings.timeout_seconds)
         run_id = new_id("experiment")
-        safe_name = _safe_name(name)
-        rel_dir = f"ExperimentRuns/{safe_name}_{run_id}"
-        canonical_dir = self.store.resolve(rel_dir)
-        canonical_dir.mkdir(parents=True, exist_ok=True)
-        portable_dir = self.container.workspace_state_dir / "runs" / run_id
-        portable_dir.mkdir(parents=True, exist_ok=True)
+        rel_dir = f"ExperimentRuns/{_safe_name(name)}_{run_id}"
+        canonical = self.store.resolve(rel_dir)
+        canonical.mkdir(parents=True, exist_ok=True)
+        portable = self.container.workspace_state_dir / "runs" / run_id
+        portable.mkdir(parents=True, exist_ok=True)
         try:
-            portable_dir.chmod(0o777)
+            portable.chmod(0o777)
         except PermissionError:
             pass
 
-        request_ref = self.store.write_json(
+        self.store.write_json(
             Path(rel_dir) / "request.json",
             {
                 "run_id": run_id,
                 "description": program.description,
                 "seeds": program.seeds,
                 "mode": mode,
-                "expected_outputs": ["results.json"],
+                "timeout_seconds": timeout,
+                "network": self.settings.network,
                 "created_at": utc_now(),
-                "execution_contract": {
-                    "interface": program.interface,
-                    "command": ["python3", "experiment.py"],
-                    "network": self.settings.network,
-                    "timeout_seconds": effective_timeout,
-                    "research_workspace": "/research (read-only)",
-                    "coverage_owner": (
-                        "trusted study harness" if program.interface == "study_v1" else "legacy program"
-                    ),
-                },
             },
         )
-        implementation_path = portable_dir / "implementation.py"
-        implementation_path.write_text(program.python_code.rstrip() + "\n", encoding="utf-8")
-        # New studies expose small scientific primitives. The trusted harness owns loops,
-        # condition/unit coverage, validation rows, timings, aggregates, and results.json. Legacy
-        # direct CLI programs retain their old wrapper until that public command is removed.
-        script_path = portable_dir / "experiment.py"
-        if program.interface == "study_v1":
-            if blueprint is None:
-                raise ValueError("study_v1 execution requires a frozen ExperimentBlueprint")
-            (portable_dir / "blueprint.json").write_text(
-                blueprint.model_dump_json(indent=2), encoding="utf-8"
-            )
-            harness_source = Path(__file__).with_name("study_harness.py").read_text(
-                encoding="utf-8"
-            )
-            script_path.write_text(harness_source, encoding="utf-8")
-        else:
-            script_path.write_text(
-                "import json\n"
-                "import os\n"
-                "from implementation import run_experiment\n\n"
-                "payload = run_experiment(os.environ.get('TCS_EXPERIMENT_MODE', 'full'))\n"
-                "if not isinstance(payload, dict):\n"
-                "    raise TypeError('run_experiment must return a dict')\n"
-                "with open('results.json', 'w', encoding='utf-8') as handle:\n"
-                "    json.dump(payload, handle, ensure_ascii=False, sort_keys=True)\n",
-                encoding="utf-8",
-            )
-        # Redirect inside the bounded mount so a print loop cannot accumulate unbounded output in
-        # the host-side docker client. `ulimit -f` caps each generated regular file (roughly 16 MiB).
-        shell_command = (
-            f"ulimit -f 32768; exec timeout {effective_timeout} "
-            "python3 experiment.py > execution.stdout 2> execution.stderr"
+        (portable / "implementation.py").write_text(
+            program.python_code.rstrip() + "\n", encoding="utf-8"
+        )
+        (portable / "experiment.py").write_text(
+            "import json\n"
+            "import os\n"
+            "from implementation import run_experiment\n\n"
+            "payload = run_experiment(os.environ.get('TCS_EXPERIMENT_MODE', 'full'))\n"
+            "if not isinstance(payload, dict):\n"
+            "    raise TypeError('run_experiment must return a dict')\n"
+            "with open('results.json', 'w', encoding='utf-8') as handle:\n"
+            "    json.dump(payload, handle, ensure_ascii=False, sort_keys=True, allow_nan=False)\n",
+            encoding="utf-8",
         )
         completed = self.container.exec(
-            ["sh", "-lc", shell_command],
+            [
+                "sh",
+                "-lc",
+                f"ulimit -f 32768; exec timeout {timeout} python3 experiment.py "
+                "> execution.stdout 2> execution.stderr",
+            ],
             workdir=f"/workspace/runs/{run_id}",
-            timeout=effective_timeout + 30,
+            timeout=timeout + 30,
             env={
                 "TCS_EXPERIMENT_SEEDS": ",".join(str(seed) for seed in program.seeds),
                 "TCS_EXPERIMENT_MODE": mode,
@@ -137,410 +99,133 @@ class BoundedExperimentRunner:
             },
             check=False,
         )
-        stdout = _read_limited(portable_dir / "execution.stdout", self.settings.max_output_bytes)
-        stderr = _read_limited(portable_dir / "execution.stderr", self.settings.max_output_bytes)
+        stdout = _read_limited(portable / "execution.stdout", self.settings.max_output_bytes)
+        stderr = _read_limited(portable / "execution.stderr", self.settings.max_output_bytes)
         if completed.stderr:
-            stderr += "\nDocker exec stderr:\n" + _limit_text(
-                completed.stderr, self.settings.max_output_bytes
-            )
-        missing_outputs = [
-            path for path in ["results.json"] if not (portable_dir / path).is_file()
-        ]
-        output_contract: ExperimentOutput | None = None
-        contract_error = ""
-        results_path = portable_dir / "results.json"
-        if completed.returncode == 0 and not missing_outputs:
-            try:
-                raw_payload = json.loads(results_path.read_text(encoding="utf-8"))
-                output_contract = ExperimentOutput.model_validate(
-                    _normalize_output_payload(
-                        raw_payload, fallback_experiment=program.description
-                    )
-                )
-                _write_standard_artifacts(portable_dir, output_contract)
-                # A valid output is preserved even when a check is false. The evidence reviewer,
-                # which sees the protocol and measurements, decides whether this is a genuine
-                # implementation failure or a wrongly encoded hypothesis-direction check. Treating
-                # every false boolean as a contract failure can silently discard negative results.
-            except Exception as exc:  # noqa: BLE001 - this is an untrusted generated artifact
-                contract_error = f"invalid results.json contract: {type(exc).__name__}: {exc}"
+            stderr += "\nDocker exec stderr:\n" + completed.stderr[-self.settings.max_output_bytes :]
 
-        shutil.copytree(portable_dir, canonical_dir, dirs_exist_ok=True)
-        stdout_ref = self.store.write_text(Path(rel_dir) / "stdout.log", stdout)
-        stderr_ref = self.store.write_text(Path(rel_dir) / "stderr.log", stderr)
-        result_ref = self.store.write_json(
+        output: ExperimentOutput | None = None
+        contract_error = ""
+        results_path = portable / "results.json"
+        if completed.returncode == 0 and results_path.is_file():
+            try:
+                output = ExperimentOutput.model_validate_json(results_path.read_text(encoding="utf-8"))
+                _write_standard_artifacts(portable, output)
+            except Exception as exc:  # untrusted generated output
+                contract_error = f"invalid results.json: {type(exc).__name__}: {exc}"
+        elif completed.returncode == 0:
+            contract_error = "experiment did not create results.json"
+
+        shutil.copytree(portable, canonical, dirs_exist_ok=True)
+        self.store.write_text(Path(rel_dir) / "stdout.log", stdout)
+        self.store.write_text(Path(rel_dir) / "stderr.log", stderr)
+        success = completed.returncode == 0 and output is not None and not contract_error
+        failure_class: Literal["none", "infrastructure", "program", "contract"] = "none"
+        if success:
+            assert output is not None
+            summary = (
+                f"Experiment produced {len(output.observations)} raw observation(s) and "
+                f"{len(output.summaries)} summary value(s)."
+            )
+        elif completed.returncode in {125, 126, 127}:
+            failure_class = "infrastructure"
+            summary = f"Experiment infrastructure failed with exit code {completed.returncode}."
+        elif completed.returncode != 0:
+            failure_class = "program"
+            summary = f"Experiment program failed with exit code {completed.returncode}."
+        else:
+            failure_class = "contract"
+            summary = contract_error
+        if stderr.strip():
+            summary += " Stderr tail: " + stderr.strip()[-1200:]
+        self.store.write_json(
             Path(rel_dir) / "result.json",
             {
                 "run_id": run_id,
                 "exit_code": completed.returncode,
-                "success": completed.returncode == 0 and not missing_outputs and not contract_error,
-                "missing_expected_outputs": missing_outputs,
+                "success": success,
+                "failure_class": failure_class,
                 "contract_error": contract_error,
-                "validated_output": (
-                    output_contract.model_dump(mode="json") if output_contract else None
-                ),
-                "stdout_tail": stdout[-4000:],
-                "stderr_tail": stderr[-4000:],
+                "validated_output": output,
                 "finished_at": utc_now(),
             },
         )
-        refs = _artifact_refs_recursive(self.store, rel_dir)
-        for ref in [request_ref, stdout_ref, stderr_ref, result_ref]:
-            if ref.path not in {item.path for item in refs}:
-                refs.append(ref)
-        success = completed.returncode == 0 and not missing_outputs and not contract_error
-        failure_class = "none"
-        if success:
-            assert output_contract is not None
-            metrics = ", ".join(
-                f"{key}={_short_value(value)}"
-                for key, value in list(output_contract.aggregate_metrics.items())[:12]
-            )
-            passed = sum(check.passed for check in output_contract.checks)
-            summary = (
-                f"Experiment completed with {passed}/{len(output_contract.checks)} checks passing. "
-                f"Metrics: {metrics}"
-            )
-        elif completed.returncode in {125, 126, 127}:
-            failure_class = "infrastructure"
-            summary = (
-                f"Experiment infrastructure failed with exit code {completed.returncode}; "
-                "the generated program was not treated as the cause."
-            )
-        elif completed.returncode != 0:
-            failure_class = "program"
-            summary = f"Experiment program failed with exit code {completed.returncode}."
-        elif contract_error:
-            failure_class = "contract"
-            summary = contract_error
-        else:
-            failure_class = "contract"
-            summary = "Experiment program did not create expected output(s): " + ", ".join(
-                missing_outputs
-            )
-        output_tail = (stdout or stderr).strip()[-1500:]
-        if output_tail:
-            summary += " Output tail: " + output_tail
+        refs = _artifact_refs(self.store, rel_dir)
         return ExperimentResult(
             run_id=run_id,
             success=success,
             failure_class=failure_class,
             summary=summary,
-            validated_output=output_contract,
+            validated_output=output,
             artifact_refs=refs,
             seeds=program.seeds,
             caveats=[
-                "Experimental evidence is not a mathematical proof.",
-                *(
-                    [
-                        "Reported false check(s), requiring evidence-review classification: "
-                        + ", ".join(
-                            check.name for check in output_contract.checks if not check.passed
-                        )
-                    ]
-                    if output_contract is not None
-                    and any(not check.passed for check in output_contract.checks)
-                    else []
-                ),
-                *(output_contract.limitations if output_contract is not None else []),
+                "Execution validates reproducibility of this program, not scientific design or causality.",
+                *(output.limitations if output else []),
             ],
         )
 
 
-# Kept as an import alias for the thin ExperimentAgent adapter.
 PiExperimentRunner = BoundedExperimentRunner
 
 
-def _normalize_output_payload(
-    payload: Any, *, fallback_experiment: str = "generated experiment"
-) -> Any:
-    """Normalize harmless representation variation without changing scientific values.
-
-    Generated programs often include useful metadata or group aggregate metrics by condition.  The
-    canonical contract stays flat and bounded, while the original unmodified ``results.json`` is
-    retained as an artifact.  Unknown top-level metadata is ignored; measured leaves, checks,
-    conclusions, and observations are never fabricated or force-passed.
-    """
-    if not isinstance(payload, dict):
-        return payload
-    allowed = {
-        "schema_version",
-        "experiment",
-        "status",
-        "parameters",
-        "aggregate_metrics",
-        "observations",
-        "validations",
-        "checks",
-        "conclusion",
-        "limitations",
-    }
-    normalized = {key: value for key, value in payload.items() if key in allowed}
-    experiment = normalized.get("experiment")
-    if experiment is None:
-        normalized["experiment"] = fallback_experiment
-    elif not isinstance(experiment, str):
-        if isinstance(experiment, dict):
-            normalized["experiment"] = str(
-                experiment.get("title")
-                or experiment.get("name")
-                or experiment.get("description")
-                or json.dumps(experiment, ensure_ascii=False, sort_keys=True)
-            )
-        else:
-            normalized["experiment"] = str(experiment)
-    normalized["parameters"] = _flatten_mapping(
-        normalized.get("parameters"), preserve_scalar_lists=True
-    )
-    normalized["aggregate_metrics"] = _flatten_mapping(
-        normalized.get("aggregate_metrics"), preserve_scalar_lists=True
-    )
-    observations = normalized.get("observations")
-    if isinstance(observations, list):
-        normalized["observations"] = [
-            {
-                **{
-                    key: value
-                    for key, value in row.items()
-                    if key in {"condition", "unit_id", "result", "sample_size", "metrics"}
-                },
-                **(
-                    {"condition": row["condition_id"]}
-                    if "condition" not in row and "condition_id" in row
-                    else {}
-                ),
-                "metrics": _flatten_mapping(
-                    row.get("metrics"), preserve_scalar_lists=False
-                ),
-            }
-            if isinstance(row, dict)
-            else row
-            for row in observations
-        ]
-    validations = normalized.get("validations")
-    if isinstance(validations, list):
-        normalized["validations"] = [
-            {
-                key: value
-                for key, value in row.items()
-                if key in {
-                    "check_id", "condition", "unit_id", "reference", "observed", "detail"
-                }
-            }
-            if isinstance(row, dict)
-            else row
-            for row in validations
-        ]
-    checks = normalized.get("checks")
-    if isinstance(checks, list):
-        # A generated implementation may naturally record one check result per known case. Fold
-        # those records into the protocol's one aggregate decision without hiding any failure.
-        grouped: dict[str, list[dict[str, Any]]] = {}
-        ungrouped: list[Any] = []
-        for row in checks:
-            if isinstance(row, dict):
-                name = row.get("name") or row.get("check_id")
-                if isinstance(name, str):
-                    grouped.setdefault(name, []).append(row)
-                    continue
-            ungrouped.append(row)
-        normalized["checks"] = [
-            {
-                "name": name,
-                "passed": all(row.get("passed") is True for row in rows),
-                "detail": " | ".join(
-                    str(row.get("detail") or "").strip()
-                    for row in rows
-                    if str(row.get("detail") or "").strip()
-                )[:1000],
-            }
-            for name, rows in grouped.items()
-        ] + ungrouped
-    conclusion = normalized.get("conclusion")
-    if isinstance(conclusion, dict):
-        conclusion = {
-            key: value
-            for key, value in conclusion.items()
-            if key in {"hypothesis", "outcome", "basis_metrics", "statement"}
-        }
-        basis = conclusion.get("basis_metrics")
-        if isinstance(basis, dict):
-            conclusion["basis_metrics"] = list(
-                _flatten_mapping(basis, preserve_scalar_lists=False)
-            )[:12]
-        elif isinstance(basis, str):
-            conclusion["basis_metrics"] = [basis]
-        elif basis == [] and isinstance(normalized.get("aggregate_metrics"), dict):
-            # Metric names are provenance pointers, not new measurements. Recovering them from the
-            # already returned aggregate map preserves a negative/null outcome that would otherwise
-            # be discarded solely because generated code left this descriptive list empty.
-            conclusion["basis_metrics"] = list(normalized["aggregate_metrics"])[:12]
-        valid_outcomes = {"supports", "contradicts", "null", "inconclusive", "characterizes"}
-        if conclusion.get("outcome") not in valid_outcomes:
-            conclusion["outcome"] = "inconclusive"
-        normalized["conclusion"] = conclusion
-    limitations = normalized.get("limitations")
-    if isinstance(limitations, str):
-        normalized["limitations"] = [limitations]
-    elif isinstance(limitations, dict):
-        normalized["limitations"] = [
-            f"{key}: {value}" for key, value in limitations.items()
-        ][:20]
-    return normalized
-
-
-def _flatten_mapping(value: Any, *, preserve_scalar_lists: bool) -> Any:
-    if not isinstance(value, dict):
-        return value
-    flat: dict[str, Any] = {}
-
-    def visit(prefix: str, item: Any) -> None:
-        if isinstance(item, dict):
-            for key, child in item.items():
-                visit(f"{prefix}.{key}" if prefix else str(key), child)
-            return
-        if isinstance(item, list) and not (
-            preserve_scalar_lists
-            and all(child is None or isinstance(child, (str, int, float, bool)) for child in item)
-        ):
-            for index, child in enumerate(item):
-                visit(f"{prefix}.{index}", child)
-            return
-        flat[prefix] = item
-
-    for key, item in value.items():
-        visit(str(key), item)
-    return flat
-
-
 def _write_standard_artifacts(run_dir: Path, output: ExperimentOutput) -> None:
-    """Derive generic auditable tables and a scoped report from the validated raw payload."""
-    metric_names = sorted(
-        {name for observation in output.observations for name in observation.metrics}
-    )
+    keys = sorted({key for observation in output.observations for key in observation.values})
     with (run_dir / "observations.csv").open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(
-            handle,
-            fieldnames=["unit_id", "condition", "result", "sample_size", *metric_names],
-        )
+        writer = csv.DictWriter(handle, fieldnames=["unit_id", "condition", *keys])
         writer.writeheader()
         for observation in output.observations:
-            writer.writerow(
+            row: dict[str, Any] = {
+                "unit_id": observation.unit_id,
+                "condition": observation.condition,
+            }
+            row.update(
                 {
-                    "unit_id": observation.unit_id,
-                    "condition": observation.condition,
-                    "result": json.dumps(observation.result, ensure_ascii=False, sort_keys=True),
-                    "sample_size": observation.sample_size,
-                    **{name: observation.metrics.get(name) for name in metric_names},
+                    key: json.dumps(value, ensure_ascii=False, sort_keys=True)
+                    if isinstance(value, (dict, list))
+                    else value
+                    for key, value in observation.values.items()
                 }
             )
-    with (run_dir / "comparison.csv").open("w", encoding="utf-8", newline="") as handle:
-        comparison_writer = csv.writer(handle)
-        comparison_writer.writerow(["analysis_metric", "value"])
-        for name, value in output.aggregate_metrics.items():
-            comparison_writer.writerow(
-                [name, json.dumps(value, ensure_ascii=False, sort_keys=True)]
-            )
-    with (run_dir / "validations.csv").open("w", encoding="utf-8", newline="") as handle:
-        validation_writer = csv.DictWriter(
-            handle,
-            fieldnames=[
-                "check_id", "condition", "unit_id", "reference", "observed", "detail"
-            ],
-        )
-        validation_writer.writeheader()
-        for validation in output.validations:
-            validation_writer.writerow(validation.model_dump(mode="json"))
-    checks_passed = sum(check.passed for check in output.checks)
+            writer.writerow(row)
     report = [
         f"# {output.experiment}",
         "",
-        "## Empirical conclusion",
+        "## Protocol",
+        output.protocol,
         "",
-        output.conclusion.statement,
+        "## Execution",
+        f"- Status: `{output.status}`",
+        f"- Raw observations: {len(output.observations)}",
         "",
-        (
-            f"Outcome: **{output.conclusion.outcome}**. This is bounded empirical evidence, "
-            "not a mathematical proof or an asymptotic claim."
-        ),
+        "## Interpretation supplied by the experiment program",
+        output.interpretation,
         "",
-        "## Validation",
-        "",
-        f"- Implementation checks passed: {checks_passed}/{len(output.checks)}",
-        f"- Status: {output.status}",
-        f"- Raw condition/unit records: {len(output.observations)}",
-        f"- Preserved reference/observed validation rows: {len(output.validations)}",
-        "",
-        "## Aggregate comparison",
-        "",
-        "| Analysis metric | Value |",
-        "|---|---|",
-        *[
-            f"| `{name}` | `{json.dumps(value, ensure_ascii=False, sort_keys=True)}` |"
-            for name, value in output.aggregate_metrics.items()
-        ],
+        "This interpretation is not independently verified by the execution runner.",
         "",
         "## Limitations",
-        "",
-        *[f"- {limitation}" for limitation in output.limitations],
+        *[f"- {item}" for item in output.limitations],
         "",
     ]
     (run_dir / "report.md").write_text("\n".join(report), encoding="utf-8")
 
 
-def _short_value(value: Any, *, limit: int = 240) -> str:
-    text = json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
-    return text if len(text) <= limit else text[:limit] + "..."
+def _artifact_refs(store: ArtifactStore, rel_dir: str) -> list:
+    return [store.artifact_ref(path) for path in sorted(store.resolve(rel_dir).rglob("*")) if path.is_file()]
 
 
-def _read_limited(path: Path, max_bytes: int) -> str:
+def _read_limited(path: Path, limit: int) -> str:
     if not path.exists():
         return ""
-    with path.open("rb") as handle:
-        data = handle.read(max(0, max_bytes) + 1 if max_bytes > 0 else -1)
-    truncated = max_bytes > 0 and len(data) > max_bytes
-    if truncated:
-        data = data[:max_bytes]
-    text = data.decode("utf-8", errors="replace")
-    return text + ("\n...[output file truncated by host importer]\n" if truncated else "")
+    data = path.read_bytes()
+    if len(data) > limit:
+        data = data[-limit:]
+        prefix = f"[truncated to last {limit} bytes]\n".encode()
+    else:
+        prefix = b""
+    return (prefix + data).decode("utf-8", errors="replace")
 
 
-def _limit_text(text: str, max_bytes: int) -> str:
-    encoded = text.encode("utf-8")
-    if max_bytes <= 0 or len(encoded) <= max_bytes:
-        return text
-    kept = encoded[:max_bytes].decode("utf-8", errors="ignore")
-    return kept + f"\n...[truncated {len(encoded) - max_bytes} bytes]\n"
-
-
-def _safe_name(name: str) -> str:
-    safe = re.sub(r"[^a-zA-Z0-9_.-]+", "_", name).strip("_.-")
-    return (safe or "experiment")[:80]
-
-
-def _artifact_refs_recursive(
-    store: ArtifactStore, rel_dir: str, *, limit: int = 250
-) -> list[ArtifactRef]:
-    root = store.resolve(rel_dir)
-    refs: list[ArtifactRef] = [store.artifact_ref(root, summary="Experiment run directory")]
-    files = sorted(path for path in root.rglob("*") if path.is_file())
-    for path in files[:limit]:
-        refs.append(store.artifact_ref(path))
-    if len(files) > limit:
-        manifest = root / "artifact_manifest_truncated.json"
-        manifest.write_text(
-            json.dumps(
-                {
-                    "included_file_refs": limit,
-                    "omitted_file_count": len(files) - limit,
-                    "all_files": [str(path.relative_to(root)) for path in files],
-                },
-                indent=2,
-                sort_keys=True,
-            )
-            + "\n",
-            encoding="utf-8",
-        )
-        refs.append(store.artifact_ref(manifest))
-    unique: dict[str, ArtifactRef] = {ref.path: ref for ref in refs}
-    return list(unique.values())
+def _safe_name(value: str) -> str:
+    safe = "".join(ch if ch.isalnum() or ch in "_-" else "_" for ch in value)[:80]
+    return safe or "experiment"

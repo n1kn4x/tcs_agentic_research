@@ -1,9 +1,9 @@
 """Modular literature agent with fetching, extraction, indexing, and retrieval.
 
-The agent is deliberately usable outside the LangGraph loop: network/PDF/retrieval pieces
-live in ``tcs_agentic_research.literature`` services, while this class coordinates durable
-artifacts and optional LLM extraction. Other agents should call ``answer_query`` rather than
-reading raw literature records so they receive stable statement/support IDs and quote provenance.
+Network/PDF/retrieval pieces live in ``tcs_agentic_research.literature`` services, while this
+class coordinates durable artifacts and optional LLM extraction. Autonomous subsystems should call
+``answer_query`` rather than reading raw literature records so they receive stable support IDs and
+quote provenance.
 """
 
 from __future__ import annotations
@@ -54,8 +54,8 @@ class PaperMetadataMismatchError(ValueError):
 class LiteratureResearcher:
     """Independent literature pipeline.
 
-    Public methods are intentionally tool-like so they can later be exposed through LangGraph tool
-    calling: ``search_papers``, ``discover_related``, ``import_candidate``, ``import_url``,
+    Public methods are intentionally small service operations: ``search_papers``,
+    ``discover_related``, ``import_candidate``, ``import_url``,
     ``import_arxiv``, ``extract_pdf_text``, ``extract_paper``, and ``answer_query``.
     """
 
@@ -373,8 +373,8 @@ class LiteratureResearcher:
     ) -> dict[str, Any]:
         """Deterministically extract statements from imported papers with available text/PDF.
 
-        This is the non-agentic extraction loop used by literature obligations: imported full-text
-        sources should not remain unindexed just because the model forgot to call ``extract_paper``.
+        This deterministic batch operation keeps imported full-text sources from remaining
+        unindexed when an autonomous literature action omits a separate extraction step.
         The method is conservative, idempotent by citation key when ``only_missing`` is true, and
         returns a compact audit payload suitable for a tool observation or prompt context.
         """
@@ -521,8 +521,8 @@ class LiteratureResearcher:
                     mock_output=heuristic if self.router.dry_run else None,
                 )
             except Exception:
-                # Literature obligations depend on extraction being robust.  If the LLM backend is
-                # unavailable or over context, keep the deterministic statement scan rather than
+                # If the LLM backend is unavailable or over context, keep the deterministic
+                # statement scan rather than
                 # failing the whole research run.
                 extract = heuristic
         else:

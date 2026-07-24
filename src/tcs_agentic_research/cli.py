@@ -1,10 +1,12 @@
-"""Command line interface for the bounded research engine."""
+"""Command line interface for the modular research kernel and low-level services."""
 
 from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -12,13 +14,14 @@ from .agents.experiment import ExperimentAgent
 from .agents.literature import LiteratureResearcher
 from .agents.theorem_prover import TheoremProverAgent
 from .artifact_store import ArtifactStore
-from .engine import ResearchEngine
+from .engine import LEGACY_CORE_FILES, ResearchEngine
+from .experimenter.validation import validate_experiment_program
 from .llm import LLMRouter
 from .schemas import ExperimentProgram, LeanStatement
-from .workflow import _validate_experiment_program
 
 
 LEGACY_FILES = (
+    *LEGACY_CORE_FILES,
     "Nomenclature.yml",
     "ResearchState.json",
     "ObligationBoard.json",
@@ -27,27 +30,46 @@ LEGACY_FILES = (
     "ModelCallLedger.jsonl",
     "GraphCheckpoints.sqlite",
 )
+LEGACY_DIRECTORIES = (
+    "Runs",
+    "Reports",
+    "ExperimentStates",
+    "ExperimentRuns",
+    "LiteratureDB",
+    "LeanProject",
+    ".experimenter",
+)
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="tcs-research")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    run_parser = sub.add_parser("run", help="Plan and execute bounded work steps")
+    run_parser = sub.add_parser("run", help="Give autonomous subsystems bounded action opportunities")
     _add_common(run_parser)
     run_parser.add_argument("--max-steps", type=int, default=1)
+    run_parser.add_argument(
+        "--subsystem",
+        dest="subsystems",
+        action="append",
+        choices=["literature", "theory", "proof", "experiment"],
+        help="Enable only the named subsystem(s); repeat for more than one",
+    )
 
-    status_parser = sub.add_parser("status", help="Show compact machine-readable progress")
+    status_parser = sub.add_parser("status", help="Show journal and runtime status")
     status_parser.add_argument("--workspace", default=".")
+    status_parser.add_argument("--config")
 
-    replan_parser = sub.add_parser("replan", help="Request another bounded planning round")
-    _add_common(replan_parser)
+    records_parser = sub.add_parser("records", help="Print immutable research records")
+    records_parser.add_argument("--workspace", default=".")
+    records_parser.add_argument("--config")
+    records_parser.add_argument("--limit", type=int, default=50)
 
-    doctor_parser = sub.add_parser("doctor", help="Inspect stale legacy artifacts")
+    doctor_parser = sub.add_parser("doctor", help="Inspect or archive incompatible v0.3 state")
     doctor_parser.add_argument("--workspace", default=".")
-    doctor_parser.add_argument("--clean-legacy", action="store_true")
+    doctor_parser.add_argument("--archive-legacy", action="store_true")
 
-    prove_parser = sub.add_parser("prove", help="Run or resume a persistent LEAP proof search")
+    prove_parser = sub.add_parser("prove", help="Run or resume one explicit LEAP proof search")
     _add_common(prove_parser)
     prove_parser.add_argument("--name", required=True)
     prove_parser.add_argument("--statement", required=True)
@@ -56,7 +78,7 @@ def main(argv: list[str] | None = None) -> int:
     prove_parser.add_argument("--max-model-calls", type=int)
     prove_parser.add_argument("--max-wall-seconds", type=int)
 
-    literature_parser = sub.add_parser("literature", help="Operate the local literature store")
+    literature_parser = sub.add_parser("literature", help="Operate the local literature service")
     literature_sub = literature_parser.add_subparsers(dest="literature_command", required=True)
     _literature_commands(literature_sub)
 
@@ -72,22 +94,21 @@ def main(argv: list[str] | None = None) -> int:
                 config_path=args.config,
                 dry_run=args.dry_run,
                 prompt_dir=args.prompt_dir,
+                subsystem_names=args.subsystems,
             )
             print(json.dumps(engine.run(max_steps=args.max_steps), indent=2, ensure_ascii=False))
             return 0
         if args.command == "status":
-            engine = ResearchEngine(workspace=args.workspace, dry_run=True)
+            engine = ResearchEngine(
+                workspace=args.workspace, config_path=args.config, dry_run=True
+            )
             print(json.dumps(engine.status(), indent=2, ensure_ascii=False))
             return 0
-        if args.command == "replan":
+        if args.command == "records":
             engine = ResearchEngine(
-                workspace=args.workspace,
-                config_path=args.config,
-                dry_run=args.dry_run,
-                prompt_dir=args.prompt_dir,
+                workspace=args.workspace, config_path=args.config, dry_run=True
             )
-            engine.replan()
-            print(json.dumps(engine.status(), indent=2, ensure_ascii=False))
+            print(json.dumps(engine.records(limit=args.limit), indent=2, ensure_ascii=False))
             return 0
         if args.command == "doctor":
             return _doctor(args)
@@ -97,7 +118,7 @@ def main(argv: list[str] | None = None) -> int:
             return _literature(args)
         if args.command == "experiment":
             return _experiment(args)
-    except Exception as exc:  # noqa: BLE001 - CLI boundary prints the actionable failure
+    except Exception as exc:  # CLI boundary
         print(f"error: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 2
     return 1
@@ -111,46 +132,39 @@ def _add_common(parser: argparse.ArgumentParser) -> None:
 
 
 def _literature_commands(sub: Any) -> None:
-    search = sub.add_parser("search", help="Queue OpenAlex candidates")
+    search = sub.add_parser("search", help="Queue literature candidates")
     _add_common(search)
     search.add_argument("--query", required=True)
     search.add_argument("--limit", type=int, default=10)
-
     arxiv = sub.add_parser("import-arxiv", help="Import arXiv metadata/PDF")
     _add_common(arxiv)
     arxiv.add_argument("--arxiv-id", required=True)
     arxiv.add_argument("--citation-key")
     arxiv.add_argument("--extract-text", action="store_true")
-
     doi = sub.add_parser("import-doi", help="Import DOI metadata and available PDF")
     _add_common(doi)
     doi.add_argument("--doi", required=True)
     doi.add_argument("--citation-key")
     doi.add_argument("--extract-text", action="store_true")
-
     url = sub.add_parser("import-url", help="Import a URL/PDF")
     _add_common(url)
     url.add_argument("--url", required=True)
     url.add_argument("--citation-key")
     url.add_argument("--title")
     url.add_argument("--extract-text", action="store_true")
-
     candidate = sub.add_parser("import-candidate", help="Import a queued candidate")
     _add_common(candidate)
     candidate.add_argument("--candidate-id", required=True)
     candidate.add_argument("--extract-text", action="store_true")
-
     extract = sub.add_parser("extract", help="Deterministically extract exact statements")
     _add_common(extract)
     extract.add_argument("--citation-key")
     extract.add_argument("--paper-id")
-
-    query = sub.add_parser("query", help="Query local statements/passages")
+    query = sub.add_parser("query", help="Query local exact statements/passages")
     _add_common(query)
     query.add_argument("--query", required=True)
     query.add_argument("--limit", type=int, default=10)
-
-    rebuild = sub.add_parser("rebuild-index", help="Rebuild the materialized SQLite index")
+    rebuild = sub.add_parser("rebuild-index", help="Rebuild the SQLite literature index")
     _add_common(rebuild)
 
 
@@ -161,12 +175,12 @@ def _experiment_commands(sub: Any) -> None:
     stop = sub.add_parser("stop")
     _add_common(stop)
     stop.add_argument("--remove", action="store_true")
-    run = sub.add_parser("run", help="Run an explicit Python script once")
+    run = sub.add_parser("run", help="Run an explicit ExperimentOutput-v1 Python script")
     _add_common(run)
     run.add_argument("--script", required=True)
     run.add_argument("--description", required=True)
     run.add_argument("--name", default="experiment")
-    run.add_argument("--seed", type=int, default=0)
+    run.add_argument("--seed", type=int, action="append", default=[])
 
 
 def _router_and_store(args: argparse.Namespace) -> tuple[ArtifactStore, LLMRouter]:
@@ -178,7 +192,6 @@ def _router_and_store(args: argparse.Namespace) -> tuple[ArtifactStore, LLMRoute
 
 def _prove(args: argparse.Namespace) -> int:
     store, router = _router_and_store(args)
-    imports = args.imports or ["TCSResearch.Basic"]
     updates = {}
     if args.max_model_calls is not None:
         updates["max_model_calls_per_run"] = args.max_model_calls
@@ -194,7 +207,7 @@ def _prove(args: argparse.Namespace) -> int:
             LeanStatement(
                 name=args.name,
                 statement=args.statement,
-                imports=imports,
+                imports=args.imports or ["TCSResearch.Basic"],
                 namespace=args.namespace,
             ),
             context="Manual CLI proof request.",
@@ -207,46 +220,27 @@ def _literature(args: argparse.Namespace) -> int:
     store, router = _router_and_store(args)
     agent = LiteratureResearcher(store, router, prompt_dir=args.prompt_dir)
     command = args.literature_command
+    value: Any
     if command == "search":
-        candidates = agent.search_papers(args.query, limit=args.limit)
-        print(json.dumps([item.model_dump(mode="json") for item in candidates], indent=2))
+        value = [item.model_dump(mode="json") for item in agent.search_papers(args.query, limit=args.limit)]
     elif command == "import-arxiv":
-        paper = agent.import_arxiv(
-            args.arxiv_id,
-            citation_key=args.citation_key,
-            extract_text=args.extract_text,
-        )
-        print(paper.model_dump_json(indent=2))
+        value = agent.import_arxiv(args.arxiv_id, citation_key=args.citation_key, extract_text=args.extract_text)
     elif command == "import-doi":
-        paper = agent.import_doi(
-            args.doi,
-            citation_key=args.citation_key,
-            extract_text=args.extract_text,
-        )
-        print(paper.model_dump_json(indent=2))
+        value = agent.import_doi(args.doi, citation_key=args.citation_key, extract_text=args.extract_text)
     elif command == "import-url":
-        paper = agent.import_url(
-            args.url,
-            citation_key=args.citation_key,
-            title=args.title,
-            extract_text=args.extract_text,
-        )
-        print(paper.model_dump_json(indent=2))
+        value = agent.import_url(args.url, citation_key=args.citation_key, title=args.title, extract_text=args.extract_text)
     elif command == "import-candidate":
-        paper = agent.import_candidate(args.candidate_id, extract_text=args.extract_text)
-        print(paper.model_dump_json(indent=2))
+        value = agent.import_candidate(args.candidate_id, extract_text=args.extract_text)
     elif command == "extract":
-        extract = agent.extract_paper(
-            citation_key=args.citation_key,
-            paper_id=args.paper_id,
-            use_llm=False,
-        )
-        print(extract.model_dump_json(indent=2))
+        value = agent.extract_paper(citation_key=args.citation_key, paper_id=args.paper_id, use_llm=False)
     elif command == "query":
-        print(agent.answer_query(args.query, limit=args.limit).model_dump_json(indent=2))
-    elif command == "rebuild-index":
+        value = agent.answer_query(args.query, limit=args.limit)
+    else:
         agent.index.rebuild()
-        print(json.dumps({"status": "rebuilt", "path": agent.index.INDEX_PATH}, indent=2))
+        value = {"status": "rebuilt", "path": agent.index.INDEX_PATH}
+    if hasattr(value, "model_dump"):
+        value = value.model_dump(mode="json")
+    print(json.dumps(value, indent=2, ensure_ascii=False))
     return 0
 
 
@@ -254,52 +248,58 @@ def _experiment(args: argparse.Namespace) -> int:
     store, router = _router_and_store(args)
     agent = ExperimentAgent(store, router.experimenter)
     command = args.experiment_command
+    value: Any
     if command == "start":
-        payload = agent.ensure_container()
+        value = agent.ensure_container()
     elif command == "status":
-        payload = agent.status()
+        value = agent.status()
     elif command == "stop":
         agent.stop_container(remove=args.remove)
-        payload = {"status": "stopped", "removed": args.remove}
+        value = {"status": "stopped", "removed": args.remove}
     elif command == "reset":
         agent.reset_container()
-        payload = {"status": "reset"}
+        value = {"status": "reset"}
     else:
-        code = Path(args.script).read_text(encoding="utf-8")
         program = ExperimentProgram(
             description=args.description,
-            source=code,
-            seeds=[args.seed],
+            source=Path(args.script).read_text(encoding="utf-8"),
+            seeds=args.seed or [0],
         )
-        _validate_experiment_program(program)
-        result = agent.run_program(program=program, name=args.name)
-        payload = result.model_dump(mode="json")
-    print(json.dumps(payload, indent=2, ensure_ascii=False))
+        validate_experiment_program(program)
+        value = agent.run_program(program=program, name=args.name)
+    if hasattr(value, "model_dump"):
+        value = value.model_dump(mode="json")
+    print(json.dumps(value, indent=2, ensure_ascii=False))
     return 0
 
 
 def _doctor(args: argparse.Namespace) -> int:
     store = ArtifactStore(args.workspace)
-    stale = [path for path in LEGACY_FILES if store.exists(path)]
-    removed: list[str] = []
-    if args.clean_legacy:
-        for path in stale:
-            store.resolve(path).unlink(missing_ok=True)
-            removed.append(path)
-        stale = [path for path in LEGACY_FILES if store.exists(path)]
+    present_files = [path for path in LEGACY_FILES if store.exists(path)]
+    present_dirs = [path for path in LEGACY_DIRECTORIES if store.exists(path)]
+    archive_path = ""
+    if args.archive_legacy and (present_files or present_dirs):
+        stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+        archive = store.resolve(f"Archive/v03-{stamp}")
+        archive.mkdir(parents=True, exist_ok=True)
+        for rel in [*present_files, *present_dirs]:
+            source = store.resolve(rel)
+            if source.exists():
+                target = archive / rel
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(source), str(target))
+        archive_path = store.relpath(archive)
+        present_files = [path for path in LEGACY_FILES if store.exists(path)]
+        present_dirs = [path for path in LEGACY_DIRECTORIES if store.exists(path)]
     print(
         json.dumps(
             {
                 "workspace": str(store.root),
-                "legacy_files_present": stale,
-                "removed": removed,
-                "note": "The new engine never creates these files, including Nomenclature.yml.",
+                "legacy_files": present_files,
+                "legacy_directories": present_dirs,
+                "archived_to": archive_path,
             },
             indent=2,
         )
     )
     return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

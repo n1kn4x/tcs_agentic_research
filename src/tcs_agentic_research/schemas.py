@@ -1,15 +1,17 @@
-"""Small, strict data contracts for the research engine and its subsystems.
+"""Strict contracts shared by independent low-level services.
 
-The language model is never trusted with IDs, timestamps, evidence status, or artifact paths.
-Those fields are assigned by deterministic application code after validation.
+Research-kernel contracts live in :mod:`tcs_agentic_research.core.models`.  This module contains
+only artifact, literature, Lean, experiment-execution, configuration, and telemetry types.
 """
 
 from __future__ import annotations
 
 import ast
+import json
+import math
+import re
 from datetime import UTC, datetime
 from enum import Enum
-import re
 from typing import Any, Literal
 from uuid import uuid4
 
@@ -26,11 +28,6 @@ def new_id(prefix: str) -> str:
 
 class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid", validate_assignment=True)
-
-
-# ---------------------------------------------------------------------------
-# Artifacts and core research state
-# ---------------------------------------------------------------------------
 
 
 class ArtifactKind(str, Enum):
@@ -54,997 +51,64 @@ class ArtifactRef(StrictModel):
     created_at: str = Field(default_factory=utc_now)
 
 
-class WorkKind(str, Enum):
-    literature = "literature"
-    proof = "proof"
-    experiment = "experiment"
-    derivation = "derivation"
-    synthesis = "synthesis"
-
-
-class WorkStatus(str, Enum):
-    open = "open"
-    running = "running"
-    done = "done"
-    partial = "partial"
-    blocked = "blocked"
-    failed = "failed"
-    superseded = "superseded"
-
-
-class RequirementStatus(str, Enum):
-    open = "open"
-    in_progress = "in_progress"
-    satisfied = "satisfied"
-    blocked = "blocked"
-
-
-class EvidenceRequirement(StrictModel):
-    """One independently auditable gap. Progress is measured against these records."""
-
-    requirement_id: str
-    description: str
-    acceptance_criteria: list[str] = Field(min_length=1, max_length=5)
-    acceptable_methods: list[WorkKind] = Field(min_length=1, max_length=4)
-    mandatory: bool = True
-    status: RequirementStatus = RequirementStatus.open
-    finding_ids: list[str] = Field(default_factory=list)
-    attempted_strategy_fingerprints: list[str] = Field(default_factory=list)
-    attempt_count: int = 0
-    blocker: str = ""
-    updated_at: str = Field(default_factory=utc_now)
-
-
-class WorkItemDraft(StrictModel):
-    """A falsifiable strategy for one evidence requirement."""
-
-    question_id: str = Field(min_length=2, max_length=40)
-    requirement_id: str = Field(min_length=4, max_length=60)
-    kind: WorkKind
-    title: str = Field(min_length=3, max_length=160)
-    instruction: str = Field(min_length=10, max_length=4000)
-    strategy: str = Field(min_length=5, max_length=1200)
-    hypothesis: str = Field(min_length=5, max_length=1200)
-    falsification_criterion: str = Field(min_length=5, max_length=1200)
-    expected_information_gain: str = Field(min_length=5, max_length=1200)
-    success_criteria: list[str] = Field(min_length=1, max_length=6)
-
-
-class PlanSubmission(StrictModel):
-    """The next small batch of non-duplicate strategies for explicit evidence gaps."""
-
-    decision: Literal["continue", "review"] = "continue"
-    objective: str = Field(min_length=3, max_length=1000)
-    work_items: list[WorkItemDraft] = Field(default_factory=list, max_length=6)
-    reason: str = Field(default="", max_length=1200)
-
-
-class ResearchQuestionDraft(StrictModel):
-    question: str = Field(min_length=10, max_length=1200)
-    hypotheses: list[str] = Field(min_length=1, max_length=4)
-    evidence_needed: list[str] = Field(min_length=1, max_length=8)
-    preferred_methods: list[WorkKind] = Field(min_length=1, max_length=4)
-
-
-class ResearchAgendaDraft(StrictModel):
-    """A conservative decomposition of an uncertain user request."""
-
-    objective: str = Field(min_length=10, max_length=2000)
-    constraints: list[str] = Field(default_factory=list, max_length=20)
-    questions: list[ResearchQuestionDraft] = Field(min_length=1, max_length=24)
-    deliverables: list[str] = Field(min_length=1, max_length=30)
-
-
-class ResearchQuestion(StrictModel):
-    question_id: str
-    question: str
-    hypotheses: list[str]
-    preferred_methods: list[WorkKind]
-    requirements: list[EvidenceRequirement]
-    finding_ids: list[str] = Field(default_factory=list)
-
-
-class ResearchAgenda(StrictModel):
-    task_sha256: str
-    objective: str
-    constraints: list[str] = Field(default_factory=list)
-    questions: list[ResearchQuestion]
-    deliverables: list[str]
-    created_at: str = Field(default_factory=utc_now)
-    updated_at: str = Field(default_factory=utc_now)
-
-
-class WorkItem(StrictModel):
-    work_id: str = Field(default_factory=lambda: new_id("work"))
-    question_id: str
-    requirement_id: str
-    kind: WorkKind
-    title: str
-    instruction: str
-    strategy: str
-    hypothesis: str
-    falsification_criterion: str
-    expected_information_gain: str
-    success_criteria: list[str]
-    strategy_fingerprint: str
-    parent_work_id: str | None = None
-    revision: int = 0
-    prior_result_ids: list[str] = Field(default_factory=list)
-    status: WorkStatus = WorkStatus.open
-    attempts: int = 0
-    operational_failures: int = 0
-    last_result_id: str | None = None
-    blocked_reason: str = ""
-    created_at: str = Field(default_factory=utc_now)
-    updated_at: str = Field(default_factory=utc_now)
-
-
-class WorkQueue(StrictModel):
-    items: list[WorkItem] = Field(default_factory=list)
-    updated_at: str = Field(default_factory=utc_now)
-
-
-class ResearchPhase(str, Enum):
-    planning = "planning"
-    working = "working"
-    needs_input = "needs_input"
-    system_error = "system_error"
-    complete = "complete"
-
-
-class WorkspaceState(StrictModel):
-    task_id: str = Field(default_factory=lambda: new_id("task"))
-    task_sha256: str
-    task_summary: str
-    phase: ResearchPhase = ResearchPhase.planning
-    cycle: int = 0
-    plan_round: int = 0
-    active_work_id: str | None = None
-    last_result_id: str | None = None
-    no_progress_steps: int = 0
-    last_progress_cycle: int = 0
-    contribution_count: int = 0
-    diversification_count: int = 0
-    human_replan_count: int = 0
-    notes: list[str] = Field(default_factory=list)
-    created_at: str = Field(default_factory=utc_now)
-    updated_at: str = Field(default_factory=utc_now)
-
-
-class FindingStatus(str, Enum):
-    hypothesis = "hypothesis"
-    observed = "observed"
-    supported = "supported"
-    derived = "derived"
-    verified = "verified"
-    refuted = "refuted"
-
-
-class FindingPolarity(str, Enum):
-    supports = "supports"
-    contradicts = "contradicts"
-    null = "null"
-    characterizes = "characterizes"
-    inconclusive = "inconclusive"
-
-
-class EvidenceStrength(str, Enum):
-    preliminary = "preliminary"
-    substantive = "substantive"
-    strong = "strong"
-    conclusive = "conclusive"
-
-
-class Finding(StrictModel):
-    finding_id: str = Field(default_factory=lambda: new_id("finding"))
-    work_id: str
-    question_id: str
-    requirement_id: str
-    kind: WorkKind
-    statement: str
-    status: FindingStatus
-    polarity: FindingPolarity = FindingPolarity.characterizes
-    strength: EvidenceStrength = EvidenceStrength.preliminary
-    scope: str = ""
-    evidence_refs: list[ArtifactRef] = Field(default_factory=list)
-    source_ids: list[str] = Field(default_factory=list)
-    caveats: list[str] = Field(default_factory=list)
-    created_at: str = Field(default_factory=utc_now)
-
-
-class CriterionResult(StrictModel):
-    criterion: str = Field(min_length=3, max_length=1200)
-    satisfied: bool
-    detail: str = Field(min_length=3, max_length=1600)
-
-
-class WorkResult(StrictModel):
-    result_id: str = Field(default_factory=lambda: new_id("result"))
-    work_id: str
-    outcome: Literal["done", "partial", "blocked", "failed"]
-    progress: Literal["meaningful", "none"] = "none"
-    failure_class: Literal[
-        "none", "operational", "engineering", "method", "evidence_gap", "invalid"
-    ] = "none"
-    attempt_class: Literal["engineering", "scientific"] = "scientific"
-    continue_work: bool = False
-    recovery_scope: Literal["strategy", "design", "implementation"] = "strategy"
-    evidence_level: Literal["none", "preliminary", "substantive", "conclusive"] = "none"
-    requirement_satisfied: bool = False
-    criteria: list[CriterionResult] = Field(default_factory=list)
-    summary: str
-    findings: list[Finding] = Field(default_factory=list)
-    contribution_ids: list[str] = Field(default_factory=list)
-    artifact_refs: list[ArtifactRef] = Field(default_factory=list)
-    errors: list[str] = Field(default_factory=list)
-    next_steps: list[str] = Field(default_factory=list)
-    created_at: str = Field(default_factory=utc_now)
-
-    @model_validator(mode="after")
-    def validate_evidence_claim(self) -> "WorkResult":
-        if self.requirement_satisfied:
-            if not self.findings:
-                raise ValueError("a satisfied requirement needs at least one finding")
-            if self.criteria and any(not item.satisfied for item in self.criteria):
-                raise ValueError("a satisfied requirement cannot have a failed criterion")
-            if self.evidence_level not in {"substantive", "conclusive"}:
-                raise ValueError("a satisfied requirement needs substantive evidence")
-        return self
-
-
-class Contribution(StrictModel):
-    contribution_id: str = Field(default_factory=lambda: new_id("contribution"))
-    fingerprint: str
-    work_id: str
-    result_id: str
-    question_id: str
-    requirement_id: str
-    kind: Literal[
-        "positive_result", "negative_result", "null_result", "characterization",
-        "verified_subgoal", "source_evidence", "derived_result",
-    ]
-    summary: str
-    finding_ids: list[str] = Field(default_factory=list)
-    created_at: str = Field(default_factory=utc_now)
-
-
-class AnalysisClaim(StrictModel):
-    statement: str = Field(min_length=3, max_length=1200)
-    basis_finding_ids: list[str] = Field(default_factory=list, max_length=8)
-    caveat: str = Field(default="", max_length=800)
-
-
-class AnalysisSubmission(StrictModel):
-    summary: str = Field(min_length=10, max_length=5000)
-    candidate_claims: list[AnalysisClaim] = Field(default_factory=list, max_length=6)
-    unresolved_questions: list[str] = Field(default_factory=list, max_length=8)
-    suggested_next_steps: list[str] = Field(default_factory=list, max_length=6)
-
-
-class DerivationStep(StrictModel):
-    label: str = Field(min_length=1, max_length=80)
-    statement: str = Field(min_length=5, max_length=1600)
-    justification: str = Field(min_length=5, max_length=2000)
-    depends_on: list[str] = Field(default_factory=list, max_length=8)
-
-
-class DerivationSubmission(StrictModel):
-    title: str = Field(min_length=5, max_length=200)
-    result_kind: Literal[
-        "theorem", "bound", "counterexample", "equivalence", "obstruction", "characterization"
-    ]
-    target_claim: str = Field(min_length=10, max_length=1600)
-    assumptions: list[str] = Field(min_length=1, max_length=12)
-    definitions: list[str] = Field(default_factory=list, max_length=12)
-    steps: list[DerivationStep] = Field(min_length=2, max_length=20)
-    conclusion: str = Field(min_length=10, max_length=2000)
-    falsification_attempt: str = Field(min_length=10, max_length=2000)
-    limitations: list[str] = Field(min_length=1, max_length=10)
-
-
-class DerivationReview(StrictModel):
-    accepted: bool
-    confidence: float = Field(ge=0.0, le=1.0)
-    summary: str = Field(min_length=10, max_length=2000)
-    criteria: list[CriterionResult] = Field(min_length=1, max_length=12)
-    fatal_issues: list[str] = Field(default_factory=list, max_length=10)
-    attempted_counterexample: str = Field(min_length=5, max_length=2000)
-    required_revisions: list[str] = Field(default_factory=list, max_length=8)
-
-    @model_validator(mode="after")
-    def consistent_verdict(self) -> "DerivationReview":
-        if self.accepted and (self.fatal_issues or any(not item.satisfied for item in self.criteria)):
-            raise ValueError("accepted derivation review has a fatal issue or failed criterion")
-        if not self.accepted and not (self.fatal_issues or self.required_revisions):
-            raise ValueError("rejected derivation review must explain what failed")
-        return self
-
-
-class LiteraturePlan(StrictModel):
-    search_queries: list[str] = Field(min_length=1, max_length=4)
-    known_source_titles: list[str] = Field(default_factory=list, max_length=4)
-    focus_questions: list[str] = Field(min_length=1, max_length=4)
-
-
-class LiteratureSelection(StrictModel):
-    support_id: str
-    relevant: bool
-    relation: Literal["supports", "contradicts", "characterizes", "unrelated"]
-    rationale: str = Field(min_length=5, max_length=800)
-
-
-class LiteratureEvidenceReview(StrictModel):
-    selections: list[LiteratureSelection] = Field(default_factory=list, max_length=20)
-    search_assessment: str = Field(min_length=10, max_length=1600)
-    next_queries: list[str] = Field(default_factory=list, max_length=5)
-
-    @model_validator(mode="before")
-    @classmethod
-    def wrap_selection_only_response(cls, value: Any) -> Any:
-        """Recover the common bare-list response without changing any relevance verdict."""
-        if isinstance(value, list):
-            return {
-                "selections": value,
-                "search_assessment": "The model returned selection rows without a search assessment.",
-                "next_queries": [],
-            }
-        return value
-
-
-class ProofGoalReview(StrictModel):
-    accepted: bool
-    relevance: str = Field(min_length=5, max_length=1200)
-    route_to_requirement: str = Field(min_length=5, max_length=1200)
-    closes_requirement: bool
-    issues: list[str] = Field(default_factory=list, max_length=8)
-
-    @model_validator(mode="after")
-    def rejected_goal_has_issues(self) -> "ProofGoalReview":
-        if not self.accepted and not self.issues:
-            raise ValueError("rejected proof goal must name a relevance or formulation issue")
-        return self
-
-
-class LeanGoalDraft(StrictModel):
-    name: str = Field(
-        min_length=1,
-        max_length=80,
-        description="One unqualified Lean identifier, without `theorem` or binders.",
-    )
-    statement: str = Field(
-        min_length=1,
-        max_length=2000,
-        description=(
-            "Only the theorem type with every variable explicitly bound; never a theorem/lemma "
-            "declaration and never a proof. Example: `∀ (a b : Bool), (a && b) = (b && a)`."
-        ),
-    )
-    namespace: str | None = "TCSResearch"
-
-    @model_validator(mode="before")
-    @classmethod
-    def unwrap_common_declaration_form(cls, value: Any) -> Any:
-        """Conservatively recover a type when a model wraps it in one Lean declaration."""
-        if not isinstance(value, dict) or not isinstance(value.get("statement"), str):
-            return value
-        data = dict(value)
-        parsed = _parse_lean_declaration(data["statement"])
-        if parsed is not None:
-            name, statement = parsed
-            data["name"] = name
-            data["statement"] = statement
-        return data
-
-    @field_validator("name", mode="before")
-    @classmethod
-    def validate_declaration_name(cls, value: Any) -> str:
-        if not isinstance(value, str):
-            raise ValueError("name must be one unqualified Lean identifier")
-        name = value.strip()
-        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_']*(?:\.[A-Za-z_][A-Za-z0-9_']*)+", name):
-            name = name.rsplit(".", 1)[-1]
-        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_']*", name):
-            raise ValueError("name must be one unqualified Lean identifier")
-        return name
-
-    @field_validator("statement")
-    @classmethod
-    def validate_type_only_statement(cls, value: str) -> str:
-        statement = value.strip()
-        if re.match(
-            r"^(?:```|theorem\b|lemma\b|example\b|def\b|axiom\b|import\b|"
-            r"variables?\b|section\b|namespace\b|open\b)",
-            statement,
-            flags=re.IGNORECASE,
-        ):
-            raise ValueError(
-                "statement must contain only the theorem type, not a Lean declaration or code fence"
-            )
-        if ":=" in statement or re.search(r"\b(?:sorry|admit)\b", statement):
-            raise ValueError("statement must not contain a proof body or placeholder")
-        return _parenthesize_bool_equality(statement)
-
-
-def _parenthesize_bool_equality(statement: str) -> str:
-    """Disambiguate a common Lean precedence trap without otherwise rewriting the goal."""
-    prefix = ""
-    body = statement
-    if statement.startswith("∀") or statement.startswith("forall "):
-        split = _first_top_level_character(statement, ",")
-        if split < 0:
-            return statement
-        prefix, body = statement[: split + 1], statement[split + 1 :].strip()
-    equality = _first_top_level_character(body, "=")
-    if equality < 0 or _first_top_level_character(body[equality + 1 :], "=") >= 0:
-        return statement
-    left = body[:equality].strip()
-    right = body[equality + 1 :].strip()
-    if not left or not right or not any(token in left + right for token in ("&&", "||", "!")):
-        return statement
-    if any(token in right for token in ("→", "↔", "<->")):
-        return statement
-    separator = " " if prefix else ""
-    return f"{prefix}{separator}({left}) = ({right})"
-
-
-def _first_top_level_character(text: str, wanted: str) -> int:
-    depth = 0
-    for index, character in enumerate(text):
-        if character in "([{":
-            depth += 1
-        elif character in ")]}":
-            depth = max(0, depth - 1)
-        elif character == wanted and depth == 0:
-            if wanted != "=" or (index == 0 or text[index - 1] not in ("!", ":", "<", ">")):
-                return index
-    return -1
-
-
-def _parse_lean_declaration(value: str) -> tuple[str, str] | None:
-    """Parse only a simple, single `theorem`/`lemma` wrapper; leave all other text untouched."""
-    text = value.strip()
-    match = re.match(r"^(?:theorem|lemma)\s+([A-Za-z_][A-Za-z0-9_']*)\s*(.*)$", text)
-    if match is None:
-        return None
-    name, remainder = match.groups()
-    depth = 0
-    separator = -1
-    pairs = {"(": ")", "[": "]", "{": "}"}
-    closing = set(pairs.values())
-    for index, character in enumerate(remainder):
-        if character in pairs:
-            depth += 1
-        elif character in closing:
-            depth = max(0, depth - 1)
-        elif character == ":" and depth == 0:
-            separator = index
-            break
-    if separator < 0:
-        return None
-    binders = remainder[:separator].strip()
-    statement = remainder[separator + 1 :].strip()
-    if ":=" in statement:
-        statement = statement.split(":=", 1)[0].strip()
-    if not statement:
-        return None
-    if binders:
-        statement = f"∀ {binders}, {statement}"
-    return name, statement
-
-
-class NamedDescription(StrictModel):
-    """A stable identifier plus human-readable scientific meaning."""
-
-    id: str = Field(pattern=r"^[A-Za-z][A-Za-z0-9_.-]{0,63}$")
-    description: str = Field(min_length=3, max_length=1200)
-
-
-class ExperimentConditionSpec(StrictModel):
-    """One implementation under comparison, with an explicit scientific role."""
-
-    id: str = Field(pattern=r"^[A-Za-z][A-Za-z0-9_.-]{0,63}$")
-    role: Literal["treatment", "baseline"]
-    description: str = Field(min_length=10, max_length=1200)
-    implementation_requirements: list[str] = Field(min_length=1, max_length=8)
-
-
-class ExperimentMetricSpec(StrictModel):
-    """A deterministic raw per-unit measurement produced by the study implementation.
-
-    Wall time is always owned by the trusted harness (reserved ID ``harness_wall_seconds`` or an
-    explicitly registered ``source=harness_wall_seconds`` alias). Generated code owns only metrics
-    whose source is ``implementation``.
-    """
-
-    id: str = Field(pattern=r"^[A-Za-z][A-Za-z0-9_.-]{0,63}$")
-    description: str = Field(min_length=5, max_length=800)
-    value_type: Literal["integer", "real", "boolean"]
-    role: Literal["performance", "mechanism", "quality"]
-    source: Literal["implementation", "harness_wall_seconds"] = "implementation"
-    deterministic: bool = True
-
-
-class ExperimentAnalysisSpec(StrictModel):
-    """A machine-executable aggregate; prose is never parsed to select an operation."""
-
-    id: str = Field(pattern=r"^[A-Za-z][A-Za-z0-9_.-]{0,63}$")
-    description: str = Field(min_length=5, max_length=800)
-    operation: Literal[
-        "mean",
-        "median",
-        "minimum",
-        "maximum",
-        "sum",
-        "true_rate",
-        "paired_mean_difference",
-        "paired_median_difference",
-        "ratio_of_means",
-    ]
-    metric_id: str = Field(min_length=1, max_length=64)
-    condition_id: str = Field(min_length=1, max_length=64)
-    baseline_condition_id: str | None = Field(default=None, max_length=64)
-
-    @model_validator(mode="after")
-    def normalize_unused_baseline(self) -> "ExperimentAnalysisSpec":
-        paired = self.operation in {
-            "paired_mean_difference", "paired_median_difference", "ratio_of_means"
-        }
-        # Constrained-output providers do not see cross-field validators in JSON Schema and often
-        # populate every optional field. For unary operations this field has no semantics, so
-        # discard it deterministically instead of wasting a model repair.
-        if not paired and self.baseline_condition_id is not None:
-            object.__setattr__(self, "baseline_condition_id", None)
-        return self
-
-
-class ExperimentReferenceSpec(StrictModel):
-    """The trusted harness owns validation coverage; generated code supplies the oracle logic."""
-
-    id: str = Field(pattern=r"^[A-Za-z][A-Za-z0-9_.-]{0,63}$")
-    kind: Literal["exact_reference", "result_validator"]
-    scope: Literal["every_sample_and_fixture"] = "every_sample_and_fixture"
-    description: str = Field(min_length=10, max_length=1200)
-
-
-class ExperimentMechanismCheckSpec(StrictModel):
-    """Executable assertion over a fixture run by the trusted harness."""
-
-    id: str = Field(pattern=r"^[A-Za-z][A-Za-z0-9_.-]{0,63}$")
-    description: str = Field(min_length=10, max_length=1000)
-    condition_id: str = Field(min_length=1, max_length=64)
-    metric_id: str = Field(min_length=1, max_length=64)
-    comparison: Literal[
-        "equal", "greater_than", "less_than", "greater_than_baseline", "less_than_baseline"
-    ]
-    threshold: float
-    baseline_condition_id: str | None = Field(default=None, max_length=64)
-    fixture_description: str = Field(min_length=10, max_length=1200)
-
-
-class ExperimentDecisionClause(StrictModel):
-    analysis_id: str = Field(min_length=1, max_length=64)
-    comparison: Literal[
-        "less_than", "greater_than", "absolute_greater_than", "absolute_at_most"
-    ]
-    threshold: float
-
-
-class ExperimentDecisionSpec(StrictModel):
-    """Machine-executable interpretation; unsupported prose statistics cannot enter the design."""
-
-    clauses: list[ExperimentDecisionClause] = Field(min_length=1, max_length=12)
-    combine: Literal["all", "any"]
-    outcome_when_met: Literal["supports", "contradicts", "characterizes"]
-    outcome_otherwise: Literal["contradicts", "null", "inconclusive", "characterizes"]
-    interpretation: str = Field(min_length=10, max_length=1200)
-
-
-class ExperimentBlueprint(StrictModel):
-    """Typed executable design used by the new experiment campaign.
-
-    IDs and enums carry control semantics. Human-language descriptions are reviewed by a model but
-    are never regex-parsed by the orchestrator.
-    """
-
-    schema_version: Literal[3] = 3
-    title: str = Field(min_length=5, max_length=200)
-    hypothesis: str = Field(min_length=10, max_length=1200)
-    null_outcome: str = Field(min_length=10, max_length=1200)
-    experimental_unit: str = Field(min_length=5, max_length=600)
-    result_type: Literal["boolean", "integer", "real", "string", "json"]
-    result_description: str = Field(min_length=10, max_length=800)
-    conditions: list[ExperimentConditionSpec] = Field(min_length=2, max_length=8)
-    metrics: list[ExperimentMetricSpec] = Field(min_length=1, max_length=12)
-    analyses: list[ExperimentAnalysisSpec] = Field(min_length=1, max_length=16)
-    reference: ExperimentReferenceSpec
-    mechanism_checks: list[ExperimentMechanismCheckSpec] = Field(min_length=1, max_length=16)
-    sample_size: int = Field(ge=2, le=500)
-    seeds: list[int] = Field(min_length=1, max_length=20)
-    generation_plan: str = Field(min_length=10, max_length=1000)
-    decision_rule: ExperimentDecisionSpec
-    mechanism_checks_required: bool = True
-    wall_seconds: int = Field(ge=1, le=604800)
-    memory_mb: int = Field(ge=64, le=262144)
-    cpus: float = Field(gt=0, le=256)
-    limitations: list[str] = Field(min_length=1, max_length=12)
-
-    @model_validator(mode="after")
-    def references_are_explicit_and_valid(self) -> "ExperimentBlueprint":
-        condition_ids = [row.id for row in self.conditions]
-        # Wall timing is a reserved harness measurement. Constrained models sometimes repeat it in
-        # the implementation-metric list despite the schema description; remove that redundant row
-        # deterministically so generated code can never own or forge timing.
-        implementation_metrics = [
-            row for row in self.metrics if row.id != "harness_wall_seconds"
-        ]
-        if len(implementation_metrics) != len(self.metrics):
-            object.__setattr__(self, "metrics", implementation_metrics)
-        metric_ids = [row.id for row in self.metrics]
-        analysis_ids = [row.id for row in self.analyses]
-        for label, ids in [
-            ("condition", condition_ids), ("metric", metric_ids), ("analysis", analysis_ids)
-        ]:
-            if len(ids) != len(set(ids)):
-                raise ValueError(f"{label} IDs must be unique")
-        if not any(row.role == "baseline" for row in self.conditions):
-            raise ValueError("at least one condition must have role=baseline")
-        if not any(row.role == "treatment" for row in self.conditions):
-            raise ValueError("at least one condition must have role=treatment")
-        known_conditions = set(condition_ids)
-        known_metrics = {*metric_ids, "harness_wall_seconds"}
-        default_baseline = next(row.id for row in self.conditions if row.role == "baseline")
-        for metric in self.metrics:
-            if metric.source == "harness_wall_seconds":
-                object.__setattr__(metric, "deterministic", False)
-        for analysis in self.analyses:
-            if analysis.operation in {
-                "paired_mean_difference", "paired_median_difference", "ratio_of_means"
-            } and analysis.baseline_condition_id is None:
-                # The baseline role is explicit typed data, so this recovery is unambiguous and
-                # does not parse descriptions.
-                object.__setattr__(analysis, "baseline_condition_id", default_baseline)
-            if analysis.condition_id not in known_conditions:
-                raise ValueError(f"analysis references unknown condition {analysis.condition_id!r}")
-            if (
-                analysis.baseline_condition_id is not None
-                and analysis.baseline_condition_id not in known_conditions
-            ):
-                raise ValueError(
-                    f"analysis references unknown baseline {analysis.baseline_condition_id!r}"
-                )
-            if analysis.metric_id not in known_metrics:
-                raise ValueError(f"analysis references unknown metric {analysis.metric_id!r}")
-        mechanism_ids = [row.id for row in self.mechanism_checks]
-        if len(mechanism_ids) != len(set(mechanism_ids)):
-            raise ValueError("mechanism check IDs must be unique")
-        for check in self.mechanism_checks:
-            if check.condition_id not in known_conditions:
-                raise ValueError(
-                    f"mechanism check references unknown condition {check.condition_id!r}"
-                )
-            if check.metric_id not in known_metrics:
-                raise ValueError(
-                    f"mechanism check references unknown metric {check.metric_id!r}"
-                )
-            if check.baseline_condition_id is not None and check.comparison in {
-                "greater_than", "less_than"
-            }:
-                # Providers often fill the optional comparator but choose the unary spelling. The
-                # explicit comparator makes the intended registered operation unambiguous.
-                object.__setattr__(
-                    check,
-                    "comparison",
-                    f"{check.comparison}_baseline",
-                )
-            paired = check.comparison in {"greater_than_baseline", "less_than_baseline"}
-            if paired and check.baseline_condition_id is None:
-                object.__setattr__(check, "baseline_condition_id", default_baseline)
-            if check.baseline_condition_id not in {None, *known_conditions}:
-                raise ValueError(
-                    f"mechanism check references unknown baseline {check.baseline_condition_id!r}"
-                )
-        known_analyses = set(analysis_ids)
-        for clause in self.decision_rule.clauses:
-            if clause.analysis_id not in known_analyses:
-                raise ValueError(
-                    f"decision clause references unknown analysis {clause.analysis_id!r}"
-                )
-        return self
-
-
-class ExperimentDefect(StrictModel):
-    """Stable repair input; retry control uses IDs, never regexes over prose."""
-
-    defect_id: Literal[
-        "alignment", "comparators", "sampling", "reference", "conditions", "metrics",
-        "analysis", "feasibility", "source_contract", "implementation", "runtime",
-        "reproducibility", "evidence",
-    ]
-    summary: str = Field(min_length=5, max_length=1200)
-    repair: str = Field(min_length=5, max_length=1200)
-
-
-class ExperimentDesignAssessment(StrictModel):
-    criterion_id: Literal[
-        "alignment", "comparators", "sampling", "reference", "analysis", "feasibility"
-    ]
-    satisfied: bool
-    detail: str = Field(min_length=5, max_length=1000)
-
-
-class ExperimentDesignReview(StrictModel):
-    assessments: list[ExperimentDesignAssessment] = Field(min_length=6, max_length=6)
-    defects: list[ExperimentDefect] = Field(default_factory=list, max_length=12)
-
-    @model_validator(mode="before")
-    @classmethod
-    def wrap_bare_assessments(cls, value: Any) -> Any:
-        return {"assessments": value, "defects": []} if isinstance(value, list) else value
-
-
-class ExperimentCodeAudit(StrictModel):
-    accepted: bool
-    condition_implementation: dict[str, bool] = Field(min_length=2, max_length=8)
-    generator_valid: bool
-    reference_independent: bool
-    metrics_valid: bool
-    defects: list[ExperimentDefect] = Field(default_factory=list, max_length=12)
-    summary: str = Field(min_length=10, max_length=2000)
-
-    @model_validator(mode="after")
-    def verdict_matches_defects(self) -> "ExperimentCodeAudit":
-        gates = [
-            *self.condition_implementation.values(), self.generator_valid,
-            self.reference_independent, self.metrics_valid,
-        ]
-        if self.accepted and (not all(gates) or self.defects):
-            raise ValueError("an accepted source audit must pass every gate and have no defects")
-        if not self.accepted and not self.defects:
-            raise ValueError("a rejected source audit requires a concrete structured defect")
-        return self
-
-
-class ExperimentProtocol(StrictModel):
-    """Legacy v2 protocol retained only for loading old artifacts and API callers."""
-
-    title: str = Field(min_length=5, max_length=200)
-    hypothesis: str = Field(min_length=10, max_length=1200)
-    null_outcome: str = Field(min_length=10, max_length=1200)
-    experimental_unit: str = Field(min_length=3, max_length=600)
-    result_semantics: str = Field(
-        min_length=10,
-        max_length=800,
-        description=(
-            "Meaning and representation of the actual primary result returned by each condition "
-            "for one unit, distinct from completion/success metadata and performance metrics."
-        ),
-    )
-    unit_generation: str = Field(
-        min_length=10,
-        max_length=800,
-        description=(
-            "Exact deterministic mapping from seed anchors and unit index to each unique "
-            "experimental input and stable unit ID."
-        ),
-    )
-    conditions: list[NamedDescription] = Field(min_length=2, max_length=12)
-    baselines: list[NamedDescription] = Field(min_length=1, max_length=8)
-    metrics: list[NamedDescription] = Field(min_length=1, max_length=12)
-    analysis_metrics: list[NamedDescription] = Field(min_length=1, max_length=8)
-    correctness_checks: list[NamedDescription] = Field(min_length=1, max_length=10)
-    sample_size: int = Field(ge=1, le=200)
-    seeds: list[int] = Field(min_length=1, max_length=20)
-    analysis_plan: str = Field(min_length=10, max_length=2000)
-    decision_rule: str = Field(min_length=10, max_length=1200)
-    wall_seconds: int = Field(ge=1, le=604800)
-    memory_mb: int = Field(ge=64, le=262144)
-    cpus: float = Field(gt=0, le=256)
-    known_limitations: list[str] = Field(min_length=1, max_length=10)
-
-    @model_validator(mode="after")
-    def unique_component_ids(self) -> "ExperimentProtocol":
-        for label, values in [
-            ("conditions", self.conditions),
-            ("baselines", self.baselines),
-            ("metrics", self.metrics),
-            ("analysis_metrics", self.analysis_metrics),
-            ("correctness_checks", self.correctness_checks),
-        ]:
-            ids = [value.id for value in values]
-            if len(ids) != len(set(ids)):
-                raise ValueError(f"{label} must use unique ids")
-        condition_ids = {value.id for value in self.conditions}
-        baseline_ids = {value.id for value in self.baselines}
-        missing = sorted(baseline_ids - condition_ids)
-        if missing:
-            raise ValueError("every baseline id must also name a condition: " + ", ".join(missing))
-        if baseline_ids == condition_ids:
-            raise ValueError(
-                "baseline conditions must be a proper subset of conditions; include at least one "
-                "distinct treatment condition"
-            )
-        return self
-
-
-class ExperimentCriterionAssessment(StrictModel):
-    criterion_id: str = Field(pattern=r"^[A-Z][A-Z0-9_]{1,63}$")
-    satisfied: bool
-    detail: str = Field(min_length=3, max_length=800)
-
-
-class ExperimentProtocolReview(StrictModel):
-    """One concise assessment for each of the eight fixed protocol gates."""
-
-    criteria: list[ExperimentCriterionAssessment] = Field(min_length=8, max_length=8)
-
-    @model_validator(mode="before")
-    @classmethod
-    def wrap_bare_criteria(cls, value: Any) -> Any:
-        # Some constrained providers return the sole list field without its object wrapper. This
-        # recovery changes no verdict and prevents a formatting fault from consuming a strategy.
-        return {"criteria": value} if isinstance(value, list) else value
-
-
-class ExperimentProgramReview(StrictModel):
-    accepted: bool
-    objective_alignment: str = Field(min_length=3, max_length=1000)
-    issues: list[str] = Field(default_factory=list, max_length=10)
-
-    @model_validator(mode="after")
-    def rejected_program_has_issues(self) -> "ExperimentProgramReview":
-        if not self.accepted and not self.issues:
-            self.issues = [self.objective_alignment]
-        return self
-
-
-class ExperimentConditionAudit(StrictModel):
-    condition_id: str = Field(min_length=1, max_length=200)
-    implemented: bool
-    discriminating_check: bool
-    detail: str = Field(min_length=10, max_length=1200)
-
-
-class ExperimentImplementationAudit(StrictModel):
-    """Independent source audit of conditions, validation wiring, and analysis."""
-
-    conditions: list[ExperimentConditionAudit] = Field(min_length=2, max_length=12)
-    validation_provenance_sound: bool
-    analysis_implementation_sound: bool
-    issues: list[str] = Field(default_factory=list, max_length=12)
-
-
-class ExperimentProvenanceAudit(StrictModel):
-    validation_provenance_sound: bool
-    validation_detail: str = Field(min_length=20, max_length=2000)
-    analysis_implementation_sound: bool
-    analysis_detail: str = Field(min_length=20, max_length=2000)
-    fatal_issues: list[str] = Field(default_factory=list, max_length=12)
-
-
-class ExperimentEvidenceReview(StrictModel):
-    usable: Literal["full", "preliminary", "unusable"]
-    outcome: Literal["supports", "contradicts", "null", "inconclusive", "characterizes"]
-    scientific_summary: str = Field(min_length=10, max_length=2400)
-    criteria: list[ExperimentCriterionAssessment] = Field(min_length=1, max_length=20)
-    issues: list[str] = Field(default_factory=list, max_length=10)
-    caveats: list[str] = Field(default_factory=list, max_length=10)
-    follow_up: list[str] = Field(default_factory=list, max_length=8)
-
-    @model_validator(mode="after")
-    def consistent_usability(self) -> "ExperimentEvidenceReview":
-        failed = any(not item.satisfied for item in self.criteria)
-        if self.usable == "full" and (failed or self.issues):
-            raise ValueError("fully usable evidence cannot have failed criteria or fatal issues")
-        if self.usable == "unusable" and not self.issues:
-            self.issues = [
-                (self.caveats or self.follow_up or [self.scientific_summary])[0]
-            ]
-        if self.usable == "preliminary" and not self.follow_up:
-            self.follow_up = [
-                "Extend the sound pilot to every acceptance criterion and requested regime."
-            ]
-        return self
-
-
-class ExperimentCheck(StrictModel):
-    name: str = Field(min_length=2, max_length=200)
-    passed: bool
-    detail: str = Field(default="", max_length=1000)
+# ---------------------------------------------------------------------------
+# Generic experiment execution.  There is intentionally no global study blueprint.
+# ---------------------------------------------------------------------------
 
 
 JSONScalar = str | int | float | bool | None
-JSONParameter = JSONScalar | list[JSONScalar]
-JSONResult = JSONParameter | dict[str, JSONParameter]
-JSONAggregate = JSONScalar | list[JSONScalar]
+JSONValue = JSONScalar | list[JSONScalar] | dict[str, JSONScalar | list[JSONScalar]]
 
 
 class ExperimentObservation(StrictModel):
-    condition: str = Field(min_length=1, max_length=200)
     unit_id: str | int
-    result: JSONResult
-    sample_size: int = Field(ge=1)
-    metrics: dict[str, JSONScalar] = Field(min_length=1, max_length=40)
-
-
-class ExperimentValidation(StrictModel):
-    """One independently inspectable comparison for a condition/unit correctness gate."""
-
-    check_id: str = Field(min_length=2, max_length=200)
-    condition: str = Field(min_length=1, max_length=200)
-    unit_id: str | int
-    reference: JSONResult
-    observed: JSONResult
-    detail: str = Field(default="", max_length=500)
-
-
-class ExperimentConclusion(StrictModel):
-    hypothesis: str = Field(min_length=5, max_length=1200)
-    outcome: Literal["supports", "contradicts", "null", "inconclusive", "characterizes"]
-    basis_metrics: list[str] = Field(min_length=1, max_length=12)
-    statement: str = Field(min_length=10, max_length=1600)
+    condition: str = Field(default="default", min_length=1, max_length=200)
+    values: dict[str, JSONValue] = Field(min_length=1, max_length=100)
 
 
 class ExperimentOutput(StrictModel):
-    """Required output: raw condition-level observations are never discarded."""
+    """Raw measurements emitted by a self-contained experiment.
 
-    schema_version: Literal[2] = 2
+    The contract deliberately has no pass bit, expected direction, or model-owned validity field.
+    Execution proves only that this exact program produced these exact measurements.
+    """
+
+    schema_version: Literal[1] = 1
     experiment: str = Field(min_length=3, max_length=500)
     status: Literal["completed", "capped"] = "completed"
-    parameters: dict[str, JSONParameter] = Field(min_length=1, max_length=50)
-    aggregate_metrics: dict[str, JSONAggregate] = Field(min_length=1, max_length=200)
-    observations: list[ExperimentObservation] = Field(default_factory=list, max_length=3000)
-    validations: list[ExperimentValidation] = Field(default_factory=list, max_length=10000)
-    checks: list[ExperimentCheck] = Field(min_length=1, max_length=200)
-    conclusion: ExperimentConclusion
-    limitations: list[str] = Field(min_length=1, max_length=20)
+    protocol: str = Field(min_length=10, max_length=5000)
+    parameters: dict[str, JSONValue] = Field(default_factory=dict, max_length=100)
+    observations: list[ExperimentObservation] = Field(min_length=1, max_length=20_000)
+    summaries: dict[str, JSONValue] = Field(default_factory=dict, max_length=200)
+    interpretation: str = Field(min_length=10, max_length=5000)
+    limitations: list[str] = Field(min_length=1, max_length=30)
 
     @model_validator(mode="after")
-    def finite_metrics_and_distinct_conditions(self) -> "ExperimentOutput":
-        import math
-
-        values: list[JSONScalar] = []
-        for value in self.aggregate_metrics.values():
-            if isinstance(value, list):
-                if not 1 <= len(value) <= 4:
-                    raise ValueError(
-                        "aggregate metric vectors must contain one to four scalar bounds/components"
-                    )
-                values.extend(value)
-            else:
-                values.append(value)
-        for value in self.parameters.values():
-            values.extend(value if isinstance(value, list) else [value])
+    def finite_json_measurements(self) -> "ExperimentOutput":
+        try:
+            encoded = json.dumps(self.model_dump(mode="json"), ensure_ascii=False, allow_nan=False)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("experiment output must be finite JSON") from exc
+        if len(encoded) > 10_000_000:
+            raise ValueError("experiment output exceeds the 10 MB structured-data limit")
         for observation in self.observations:
-            values.extend(observation.metrics.values())
-        if any(isinstance(value, float) and not math.isfinite(value) for value in values):
-            raise ValueError("experiment metrics must be finite")
+            for value in _walk_values(observation.values):
+                if isinstance(value, float) and not math.isfinite(value):
+                    raise ValueError("experiment measurements must be finite")
         return self
 
 
-class ExperimentImplementationPlan(StrictModel):
-    """A bounded reasoning pass before emitting a complete experiment source file."""
-
-    approach: str = Field(min_length=10, max_length=2000)
-    components: list[str] = Field(min_length=1, max_length=12)
-    correctness_strategy: str = Field(min_length=10, max_length=2000)
-    output_strategy: str = Field(min_length=10, max_length=1600)
-    defect_repairs: list[str] = Field(default_factory=list, max_length=12)
-
-
 class ExperimentProgram(StrictModel):
-    """Model-generated implementation executed only through a trusted harness."""
-
-    description: str = Field(min_length=10, max_length=1500)
-    interface: Literal["legacy_v2", "study_v1"] = "legacy_v2"
+    description: str = Field(min_length=10, max_length=2000)
     source: str = Field(
         min_length=20,
         max_length=30_000,
         description=(
-            "Python source defining run_experiment(mode: str) -> dict. The function returns the "
-            "ExperimentOutput v2 payload; a trusted wrapper writes results.json."
+            "Python source defining run_experiment(mode: str) -> dict. The dict must match "
+            "ExperimentOutput schema version 1; the trusted wrapper writes results.json."
         ),
     )
-    seeds: list[int] = Field(default_factory=lambda: [0], min_length=1, max_length=20)
+    seeds: list[int] = Field(default_factory=lambda: [0], min_length=1, max_length=100)
 
     @field_validator("source", mode="before")
     @classmethod
@@ -1054,18 +118,35 @@ class ExperimentProgram(StrictModel):
         normalized = value.strip()
         normalized = re.sub(r"^```(?:python|py)?\s*\n", "", normalized)
         normalized = re.sub(r"\n```$", "", normalized).strip()
-        # Large generated programs leave too little request budget for focused repairs. Python's
-        # own parser/unparser removes comments and formatting while preserving executable semantics.
-        if len(normalized) > 12_000:
+        if len(normalized) > 14_000:
             try:
                 normalized = ast.unparse(ast.parse(normalized))
             except SyntaxError:
                 pass
-        return normalized.strip()
+        return normalized
 
     @property
     def python_code(self) -> str:
         return self.source
+
+
+class ExperimentResult(StrictModel):
+    run_id: str = Field(default_factory=lambda: new_id("experiment"))
+    success: bool = False
+    failure_class: Literal["none", "infrastructure", "program", "contract"] = "none"
+    summary: str
+    validated_output: ExperimentOutput | None = None
+    artifact_refs: list[ArtifactRef] = Field(default_factory=list)
+    seeds: list[int] = Field(default_factory=list)
+    caveats: list[str] = Field(default_factory=list)
+
+
+def _walk_values(value: Any) -> list[Any]:
+    if isinstance(value, dict):
+        return [leaf for child in value.values() for leaf in _walk_values(child)]
+    if isinstance(value, list):
+        return [leaf for child in value for leaf in _walk_values(child)]
+    return [value]
 
 
 # ---------------------------------------------------------------------------
@@ -1203,7 +284,7 @@ class LiteratureQueryAnswer(StrictModel):
 
 
 # ---------------------------------------------------------------------------
-# Lean and experiments
+# Lean proof records
 # ---------------------------------------------------------------------------
 
 
@@ -1286,84 +367,8 @@ class TheoremProverResult(StrictModel):
     created_at: str = Field(default_factory=utc_now)
 
 
-class ExperimentResult(StrictModel):
-    run_id: str = Field(default_factory=lambda: new_id("experiment"))
-    success: bool = False
-    failure_class: Literal["none", "infrastructure", "program", "contract"] = "none"
-    summary: str
-    validated_output: ExperimentOutput | None = None
-    artifact_refs: list[ArtifactRef] = Field(default_factory=list)
-    seeds: list[int] = Field(default_factory=list)
-    caveats: list[str] = Field(default_factory=list)
-
-
-class ExperimentState(StrictModel):
-    """Durable state machine for one cumulative experimental research campaign."""
-
-    work_id: str
-    stage: Literal[
-        "design",
-        "design_review",
-        "implementation",
-        "source_audit",
-        "smoke",
-        "full",
-        "replication",
-        "evidence_audit",
-        "repair_design",
-        "repair_implementation",
-        "protocol_design",
-        "protocol_review",
-        "protocol_revision",
-        "program_design",
-        "program_review",
-        "program_revision",
-        "smoke_execution",
-        "full_execution",
-        "evidence_review",
-        "complete",
-    ] = "design"
-    blueprint: ExperimentBlueprint | None = None
-    design_review: ExperimentDesignReview | None = None
-    code_audit: ExperimentCodeAudit | None = None
-    replication_result: ExperimentResult | None = None
-    active_defects: list[ExperimentDefect] = Field(default_factory=list, max_length=12)
-    candidate_hashes: list[str] = Field(default_factory=list, max_length=40)
-    infrastructure_failures: int = 0
-    source_audit_failures: int = 0
-    protocol: ExperimentProtocol | None = None
-    protocol_sha256: str = ""
-    protocol_review: ExperimentProtocolReview | None = None
-    program: ExperimentProgram | None = None
-    # Repairs always restart from the deepest candidate that passed deterministic execution gates;
-    # a broken replacement must not erase a known-runnable implementation over a week-long run.
-    repair_base_program: ExperimentProgram | None = None
-    repair_base_error: str = ""
-    repair_base_score: int = 0
-    program_review: ExperimentProgramReview | None = None
-    implementation_audit: ExperimentImplementationAudit | None = None
-    provenance_audit: ExperimentProvenanceAudit | None = None
-    smoke_result: ExperimentResult | None = None
-    execution_result: ExperimentResult | None = None
-    final_result: WorkResult | None = None
-    last_error: str = ""
-    engineering_failures: int = 0
-    engineering_blocked: bool = False
-    scientific_attempts: int = 0
-    protocol_revision: int = 0
-    program_revision: int = 0
-    last_protocol_candidate_sha256: str = ""
-    repeated_protocol_candidates: int = 0
-    last_program_candidate_sha256: str = ""
-    repeated_program_candidates: int = 0
-    repeated_defect_failures: int = 0
-    last_defect_signature: str = ""
-    created_at: str = Field(default_factory=utc_now)
-    updated_at: str = Field(default_factory=utc_now)
-
-
 # ---------------------------------------------------------------------------
-# Configuration and model-call telemetry
+# Configuration and telemetry
 # ---------------------------------------------------------------------------
 
 
@@ -1388,27 +393,12 @@ class RouterSettings(StrictModel):
 
 
 class CoreSettings(StrictModel):
-    # Protocol/review/implementation and two independent derivation gates need a real bounded step.
-    max_model_calls_per_step: int = Field(default=12, ge=6, le=32)
-    max_plan_items: int = Field(default=4, ge=1, le=6)
-    # This threshold triggers diversification; it never halts while untried requirements remain.
-    max_no_progress_steps: int = Field(default=4, ge=2, le=100)
-    max_operational_retries: int = Field(default=2, ge=0, le=5)
-    max_experiment_engineering_retries: int = Field(default=12, ge=1, le=20)
-    max_strategy_revisions: int = Field(default=2, ge=0, le=5)
-    max_method_attempts_per_requirement: int = Field(default=4, ge=1, le=12)
-    literature_max_imports: int = Field(default=3, ge=0, le=10)
-    literature_import_attempts: int = Field(default=8, ge=1, le=20)
-    literature_results_per_query: int = Field(default=5, ge=1, le=10)
+    max_model_calls_per_action: int = Field(default=128, ge=1, le=100_000)
+    record_context_limit: int = Field(default=80, ge=10, le=1000)
+    literature_max_imports: int = Field(default=2, ge=0, le=10)
 
 
 class LeapSettings(StrictModel):
-    """Budgets for one resumable LEAP search invocation.
-
-    These are safety limits, not claims that a theorem should finish within one invocation.  The
-    SQLite graph preserves all verified progress for later invocations.
-    """
-
     max_model_calls_per_run: int = Field(default=64, ge=1, le=100_000)
     direct_attempts_per_node: int = Field(default=2, ge=0, le=20)
     direct_revisions: int = Field(default=5, ge=0, le=30)
